@@ -233,6 +233,7 @@ function setup({
       mounted.map(({ id, y }) => ({
         dataset: { messageId: id },
         getBoundingClientRect: () => ({ top: y, bottom: y + 100 }),
+        closest: () => null,
         querySelector: () => ({
           getBoundingClientRect: () => ({ top: y + 32, bottom: y + 80 }),
         }),

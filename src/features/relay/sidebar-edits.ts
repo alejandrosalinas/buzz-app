@@ -3,6 +3,11 @@ import {
   projectSidebarPreferences,
   validActiveWindow,
   DEFAULT_ACTIVE_WINDOW_SECONDS,
+  HOME_SIDEBAR_SECTIONS,
+  MAX_WORKSPACES,
+  MAX_WORKSPACE_ASSIGNMENTS,
+  validWorkspaceSectionOrder,
+  workspaceSectionOrder,
   type SidebarAssignmentIntent,
   type SidebarSectionEdit,
   type SidebarGroups,
@@ -15,6 +20,14 @@ import {
   nextSidebarSectionOrder,
   projectSidebarRecord,
 } from "./sidebar-registers.ts";
+
+export class WorkspaceNameConflict extends Error {
+  constructor() {
+    super(
+      "The saved workspace name needs review. Your draft is kept; copy it before reloading saved settings.",
+    );
+  }
+}
 
 /** Tombstone the section and reset its live placements in the same record. */
 export function editSidebarSectionRemoval(
@@ -39,7 +52,7 @@ export function editSidebarSectionRename(
   current: Record<string, unknown>,
   createdAt: number,
   sectionId: string,
-  edit: string | SidebarSectionEdit,
+  edit: string | (SidebarSectionEdit & { expectedName?: string }),
   now = Date.now(),
 ): Record<string, unknown> {
   const sections = projectSidebarRecord("channel-sections", current)
@@ -50,7 +63,15 @@ export function editSidebarSectionRename(
   const writes: [string[], unknown][] = [];
   if (changes.name !== undefined) {
     const next = changes.name.trim();
-    if (section.name !== next) writes.push([["s", sectionId, "name"], next]);
+    if (section.name !== next) {
+      if (
+        "expectedName" in changes &&
+        changes.expectedName !== undefined &&
+        changes.expectedName !== section.name
+      )
+        throw new WorkspaceNameConflict();
+      writes.push([["s", sectionId, "name"], next]);
+    }
   }
   if (
     changes.icon !== undefined &&
@@ -70,6 +91,25 @@ export function editSidebarSectionOrder(
   sectionIds: readonly string[],
   now = Date.now(),
 ): Record<string, unknown> {
+  if (current.sectionOrder !== undefined) {
+    if (!validWorkspaceSectionOrder(sectionIds))
+      throw new Error("Invalid workspace section order");
+    const groups = projectSidebarPreferences(
+      current,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const live = workspaceSectionOrder(groups);
+    const wanted = new Set(sectionIds.filter((id) => live.includes(id)));
+    const order = [...wanted, ...live.filter((id) => !wanted.has(id))];
+    return order.every((key, index) => key === live[index])
+      ? current
+      : { ...current, sectionOrder: order };
+  }
   const live = projectSidebarPreferences(current, undefined).sections.map(
     ({ id }) => id,
   );
@@ -93,15 +133,25 @@ export function validSidebarChannelId(channelId: string): boolean {
 export function validSidebarAssignment(
   intent: SidebarAssignmentIntent,
 ): boolean {
-  const { channelId, sectionId, createSection } = intent;
+  const { channelId, sectionId, createSection, reclaim } = intent;
   return (
     (channelId === undefined
       ? !!createSection
       : validSidebarChannelId(channelId)) &&
     (sectionId === undefined || validSidebarChannelId(sectionId)) &&
+    (reclaim === undefined ||
+      (reclaim !== null &&
+        !!channelId &&
+        !!(sectionId || createSection) &&
+        reclaim.channelId !== channelId &&
+        typeof reclaim.channelId === "string" &&
+        validSidebarChannelId(reclaim.channelId) &&
+        typeof reclaim.sectionId === "string" &&
+        validSidebarChannelId(reclaim.sectionId))) &&
     (!createSection ||
       (sectionId === undefined &&
-        /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(createSection.id) &&
+        validSidebarChannelId(createSection.id) &&
+        createSection.id !== "__proto__" &&
         validSidebarChannelId(createSection.name) &&
         (createSection.icon === undefined ||
           validSidebarSectionIcon(createSection.icon)) &&
@@ -136,9 +186,10 @@ export function validSidebarSectionOrder(
   sectionIds: readonly string[],
 ): boolean {
   return (
-    sectionIds.length <= 100 &&
-    sectionIds.every(validSidebarChannelId) &&
-    new Set(sectionIds).size === sectionIds.length
+    validWorkspaceSectionOrder(sectionIds) ||
+    (sectionIds.length <= MAX_WORKSPACES &&
+      sectionIds.every(validSidebarChannelId) &&
+      new Set(sectionIds).size === sectionIds.length)
   );
 }
 
@@ -150,9 +201,9 @@ export function validSidebarSort(
   return (
     group.length <= 264 &&
     isSidebarSortMode(mode) &&
-    sectionIds.length <= 100 &&
+    sectionIds.length <= MAX_WORKSPACES &&
     sectionIds.every(validSidebarChannelId) &&
-    (["starred", "channels", "forums", "dms"].includes(group) ||
+    (HOME_SIDEBAR_SECTIONS.some((home) => home === group) ||
       (group.startsWith("section:") && sectionIds.includes(group.slice(8))))
   );
 }
@@ -181,7 +232,7 @@ export function editSidebarAssignment(
   intent: SidebarAssignmentIntent,
   now = Date.now(),
 ): Record<string, unknown> {
-  const { channelId, sectionId, createSection } = intent;
+  const { channelId, sectionId, createSection, reclaim } = intent;
   const section = createSection?.id ?? sectionId;
   const existing = current.sections as SidebarGroups["sections"];
   const sections = [...existing];
@@ -210,6 +261,17 @@ export function editSidebarAssignment(
     throw new Error("Sidebar group no longer exists");
   const writes: [string[], unknown][] =
     channelId === undefined ? [] : [[["a", channelId], section ?? null]];
+  const assignments = current.assignments as SidebarGroups["assignments"];
+  if (
+    current.sectionOrder !== undefined &&
+    channelId !== undefined &&
+    section !== undefined &&
+    reclaim &&
+    !Object.hasOwn(assignments, channelId) &&
+    Object.keys(assignments).length >= MAX_WORKSPACE_ASSIGNMENTS &&
+    assignments[reclaim.channelId] === reclaim.sectionId
+  )
+    writes.push([["a", reclaim.channelId], null]);
   if (createSection && !existing.some(({ id }) => id === section)) {
     const added = sections.find(({ id }) => id === section);
     if (!added) throw new Error("Sidebar group no longer exists");
@@ -220,7 +282,35 @@ export function editSidebarAssignment(
       [["s", added.id, "live"], true],
     );
   }
-  return editSidebarRecord("channel-sections", current, createdAt, writes, now);
+  const next = editSidebarRecord(
+    "channel-sections",
+    current,
+    createdAt,
+    writes,
+    now,
+  );
+  if (
+    current.sectionOrder === undefined ||
+    createSection?.position !== "first" ||
+    existing.some(({ id }) => id === createSection.id)
+  )
+    return next;
+  const key = `group:${createSection.id}`;
+  const previous = workspaceSectionOrder(
+    projectSidebarPreferences(
+      current,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    ),
+  );
+  const first = previous.findIndex((entry) => entry.startsWith("group:"));
+  const order = [...previous];
+  order.splice(first < 0 ? order.indexOf("starred") + 1 : first, 0, key);
+  return { ...next, sectionOrder: order };
 }
 
 export function editSidebarSort(

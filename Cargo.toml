@@ -1,4 +1,9 @@
 [workspace]
-members = ["crates/agent-command", "crates/pairing", "crates/plugin-manager", "crates/agent-controller", "crates/credential-store", "crates/dev-credential-helper", "src/bundled/mesh-compute/compute", "crates/ifc-core", "crates/buzz-ifc", "crates/nsec-backup", "src-tauri"]
+members = ["crates/agent-command", "crates/pairing", "crates/plugin-manager", "crates/agent-controller", "crates/credential-store", "crates/dev-credential-helper", "src/bundled/mesh-compute/compute", "crates/ifc-core", "crates/buzz-ifc", "crates/nsec-backup", "src-tauri", "src-tauri/tests/webkit-reaper"]
 default-members = ["crates/plugin-manager"]
 resolver = "2"
+
+# Debug builds verify every saved and received event signature. Unoptimized,
+# libsecp256k1 is about 20x slower, which delays restored names and avatars.
+[profile.dev.package.secp256k1-sys]
+opt-level = 3

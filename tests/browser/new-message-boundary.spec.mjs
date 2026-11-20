@@ -614,8 +614,7 @@ appTest.describe("history longer than one page", () => {
       await composer(page).focus();
       await expect
         .poll(
-          async () =>
-            (await readJournal(page))?.state.frontiers["activity:alpha"] ?? 0,
+          async () => (await readJournal(page))?.state.frontiers["alpha"] ?? 0,
         )
         .toBeGreaterThanOrEqual(seeded.at(-1).created_at);
 
@@ -665,8 +664,7 @@ appTest.describe("history longer than one page", () => {
       await composer(page).focus();
       await expect
         .poll(
-          async () =>
-            (await readJournal(page))?.state.frontiers["activity:alpha"] ?? 0,
+          async () => (await readJournal(page))?.state.frontiers["alpha"] ?? 0,
         )
         .toBeGreaterThanOrEqual(seeded.at(-1).created_at);
       await expect(separator(page)).toHaveCount(0);
@@ -728,10 +726,7 @@ const read = async (page, app, name) => {
     .getByRole("textbox", { name: `Message #${name}`, exact: true })
     .focus();
   await expect
-    .poll(
-      async () =>
-        (await readJournal(page))?.state.frontiers[`activity:${channel}`] ?? 0,
-    )
+    .poll(async () => (await readJournal(page))?.state.frontiers[channel] ?? 0)
     .toBeGreaterThanOrEqual(
       app.histories.get(`primary/${channel}`).at(-1).created_at,
     );
@@ -889,10 +884,7 @@ appTest.describe("a head read that outlasts the reading dwell", () => {
   // The hold ends with the read: the channel then reads itself as usual.
   const expectRead = async (page, arrivals) => {
     await expect
-      .poll(
-        async () =>
-          (await readJournal(page))?.state.frontiers["activity:beta"] ?? 0,
-      )
+      .poll(async () => (await readJournal(page))?.state.frontiers["beta"] ?? 0)
       .toBeGreaterThanOrEqual(arrivals.at(-1).created_at);
     await expect(separator(page)).toHaveCount(1);
   };

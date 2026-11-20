@@ -1,6 +1,13 @@
 import { openPage } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
-import { wheel, open, settle, anchor, expectAnchor } from "./timeline.mjs";
+import {
+  activate,
+  wheel,
+  open,
+  settle,
+  anchor,
+  expectAnchor,
+} from "./timeline.mjs";
 
 test.use({
   enabledPlugins: ["buzz.workflows"],
@@ -84,6 +91,90 @@ short(
     await select(page, "Alpha");
     await select(page, "Beta");
     await bottom(page, app, "warm tall Beta");
+  },
+);
+
+// Browser-only: a transitioning split gives the entering timeline a passing
+// width, so it misses saved geometry and paints unmeasured rows mid-history.
+const threaded = test.extend({
+  readState: true,
+  threadUnread: true,
+  historyCounts: { alpha: 60, beta: 20 },
+});
+threaded(
+  "entering a channel with or without its thread dock paints only the bottom",
+  async ({ page, app }) => {
+    await page.addInitScript(() =>
+      localStorage.setItem("buzz-thread-placement.v1", "side"),
+    );
+    await open(page, app);
+    const root = app.histories
+      .get("primary/alpha")
+      .filter((row) => row.content.startsWith("Thread root"))
+      .at(-1);
+    await activate(
+      history(page)
+        .locator(`[data-message-id="${root.id}"]`)
+        .getByRole("button", { name: /^View thread:/ }),
+    );
+    await expect(
+      page.getByRole("textbox", { name: "Reply to thread", exact: true }),
+    ).toBeVisible();
+    await history(page).evaluate((e) => {
+      e.scrollTop = e.scrollHeight;
+    });
+    await bottom(page, app, "threaded Alpha");
+    // Read state adds unread counts to the sidebar entries' names.
+    const enter = async (name) => {
+      await page
+        .getByRole("button", { name: new RegExp(`^${name}\\b`) })
+        .first()
+        .click();
+      await expect(
+        page.getByRole("textbox", { name: `Message #${name}`, exact: true }),
+      ).toBeVisible();
+      await bottom(page, app, `entered ${name}`);
+    };
+    // Warm both channels' saved geometry before observing entries.
+    await enter("Beta");
+    await enter("Alpha");
+    for (const name of ["Beta", "Alpha"]) {
+      await page.evaluate((name) => {
+        const frames = [];
+        window.entryFrames = frames;
+        const next = new MessageChannel();
+        // Sample after each rendering update, what that frame presented.
+        next.port1.onmessage = () => {
+          const feed = document.querySelector(
+            '[aria-label="Channel message history"]',
+          );
+          const entered = document.querySelector(
+            `[aria-label="Message #${name}"]`,
+          );
+          if (feed && entered && feed.querySelector("[data-message-id]"))
+            frames.push({
+              gap: feed.scrollHeight - feed.clientHeight - feed.scrollTop,
+              splitMotion: !!document
+                .querySelector("[data-channel-workspace]")
+                ?.getAnimations()
+                .some(
+                  (animation) =>
+                    animation.transitionProperty === "grid-template-columns",
+                ),
+            });
+          if (frames.length < 10)
+            requestAnimationFrame(() => next.port2.postMessage(0));
+        };
+        requestAnimationFrame(() => next.port2.postMessage(0));
+      }, name);
+      await enter(name);
+      const frames = await page.evaluate(() => window.entryFrames);
+      expect(frames.length, `${name} entry frames`).toBe(10);
+      for (const [index, frame] of frames.entries()) {
+        expect(frame.splitMotion, `${name} frame ${index} split`).toBe(false);
+        expect(frame.gap, `${name} frame ${index} gap`).toBeLessThan(4);
+      }
+    }
   },
 );
 

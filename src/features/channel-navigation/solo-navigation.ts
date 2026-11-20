@@ -23,6 +23,7 @@ import {
   projectSoloRegions,
   type RegisteredSoloSource,
   type SoloPlacement,
+  type SoloRegion,
 } from "./solo-navigation-model";
 import type {
   SoloNavigation,
@@ -60,6 +61,25 @@ const sameBinding = (a: SoloRegionBinding | undefined, b: SoloRegionBinding) =>
   a.viewer === b.viewer &&
   a.incarnation === b.incarnation;
 
+// Excluded, managed and live follow from each region's chats and reason.
+const sameRegion = (a: SoloRegion, b: SoloRegion) =>
+  a.key === b.key &&
+  a.label === b.label &&
+  a.title === b.title &&
+  a.source === b.source &&
+  a.snapshot === b.snapshot &&
+  a.reason === b.reason &&
+  a.hidden === b.hidden &&
+  a.channels.length === b.channels.length &&
+  a.channels.every((channel, index) => channel === b.channels[index]);
+const samePlacement = (a: SoloNavigationSnapshot, b: SoloNavigationSnapshot) =>
+  a.binding === b.binding &&
+  a.regions.length === b.regions.length &&
+  a.regions.every((region, index) => {
+    const other = b.regions[index];
+    return other !== undefined && sameRegion(region, other);
+  });
+
 /** The connection owns source binding even while the sidebar is unmounted. */
 export class SoloNavigationService extends Service implements SoloNavigation {
   readonly version = 2 as const;
@@ -95,7 +115,7 @@ export class SoloNavigationService extends Service implements SoloNavigation {
     this.workspaces = createSoloWorkspaces(
       (binding) =>
         sameBinding(this.binding, binding)
-          ? this.session?.soloPreferences
+          ? this.session?.sidebarPreferences
           : undefined,
       relay.subscribe,
     );
@@ -407,6 +427,7 @@ export class SoloNavigationService extends Service implements SoloNavigation {
           binding
             ? [...this.runtimes.values()]
             : entries.map((source) => ({ source, failed: false })),
+          this.value.binding === binding ? this.value.regions : [],
           (label, title) => {
             const key = `solo-region-title:${label}`;
             const scope = connection.scope;
@@ -449,7 +470,10 @@ export class SoloNavigationService extends Service implements SoloNavigation {
           }),
           ...(binding ? { binding } : {}),
         };
-        this.value = next;
+        // The roster changes on every message; keep the snapshot when the
+        // placement did not, so the sidebar does not re-render for it.
+        const previous = this.value;
+        this.value = samePlacement(previous, next) ? previous : next;
         const isDisabledChat = (id: string | undefined) =>
           id !== undefined &&
           next.regions.some(

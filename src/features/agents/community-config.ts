@@ -1,5 +1,6 @@
 // Wires config channels into one bound community: the relay's support check,
 // then for each agent its config channel, live sync, and online saves.
+import { notesOf } from "./plugin-notes";
 import { onRecommended, PRESET } from "./recommended";
 import type { RelayEvent } from "../relay/events";
 import type { RelaySession } from "../relay/session";
@@ -75,6 +76,7 @@ export function fields(
     return { version: 1, text: typeof text === "string" ? text : "" };
   }
   const schema = agent.schema ?? {};
+  const pluginNotes = notesOf(config);
   const { settings, agentType } = headFields(head);
   // Another type's settings are not this one's to keep; a head naming no
   // type is this one's (NIP-AP).
@@ -92,6 +94,13 @@ export function fields(
     settings: { ...kept, ...pickSettings(schema, config) },
     // Undefined drops a mark the head had: the agent is off Recommended.
     preset: onRecommended(config) ? PRESET : undefined,
+    // Left out, the head's notes stay, so a settings form that drops them
+    // never loses a plugin's note.
+    // An empty map is published as none (undefined drops the head's), so
+    // clearing the last note leaves no empty field behind.
+    ...(pluginNotes && {
+      pluginNotes: Object.keys(pluginNotes).length ? pluginNotes : undefined,
+    }),
   };
 }
 

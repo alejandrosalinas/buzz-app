@@ -1,3 +1,4 @@
+import { sessionScope } from "../../features/agent-harness/session-scope";
 import type { AgentExecutionBinding } from "../../features/agents/execution";
 import {
   readModelSettings,
@@ -15,7 +16,10 @@ import {
 } from "../../shared/design-system/icons";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { ProviderDialogActions } from "../../features/agents/ProviderDialogActions";
-import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
+import {
+  AgentSaveButton,
+  ClearModelOverrides,
+} from "../../features/agents/AgentSaveButton";
 // The type's tabs: Codex's setup on this computer, and the agent's settings;
 // and its part of the New agent dialog.
 import {
@@ -30,12 +34,16 @@ import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { CreateModelChoices } from "../../features/agents/CreateModelChoices";
 import { ModelPicker } from "../../features/agents/ModelPicker";
 import { AISettings, runsOnDetails } from "../../features/agents/AISettings";
+import { CompactionField } from "../../features/agents/Compaction";
+import { withCompactAt } from "../../features/agents/compact-at";
 import {
   candidatesFor,
   followRecommended,
   offRecommended,
   onRecommended,
   type RecommendedCandidate,
+  recommendationFinal,
+  recommendationReady,
   withRecommended,
 } from "../../features/agents/recommended";
 import {
@@ -68,45 +76,104 @@ import {
   type Config,
   type Model,
 } from "./config";
-import { AppServer, listModels, needsSignIn, type Spawn } from "./rpc";
+import {
+  AppServer,
+  listModels,
+  voiceCatalog,
+  needsSignIn,
+  type Spawn,
+} from "./rpc";
 import type { CodexRuntime, SavedConversation } from "./runtime";
 import type { CodexSetup } from "./setup";
 import { readTranscript, TURN_LIMIT } from "./transcript";
+import { VoicePreview } from "./VoicePreview";
+import {
+  discoverPreviews,
+  type PreviewAuth,
+  type PreviewHost,
+} from "./voice-preview";
 
-const label = ({ channelId, name, root }: SavedConversation) =>
-  `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
+const label = ({ channelId, name, root, community }: SavedConversation) =>
+  community
+    ? "Community session"
+    : `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
 
 type Catalog = {
+  previews?: Record<string, string> | undefined;
+  accents?: Record<string, string> | undefined;
+  voices?: string[] | undefined;
+  defaultVoice?: string | undefined;
   models: Model[];
 };
 type ProviderDefaults = Readonly<{ model: string; effort: string }>;
 type ProviderState = AgentProviderSnapshot &
   Readonly<{
     checking: boolean;
+    previewChecking?: boolean;
+    voiceChecking?: boolean;
     data: Catalog | undefined;
     error: string;
     defaults: ProviderDefaults;
   }>;
+function voiceConfig(current: Config, voice: Config["voice"]): Config {
+  const next = readConfig({ ...current, voice });
+  return onRecommended(next) ? next : offRecommended(next);
+}
 const STORAGE_KEY = "buzz.codex.provider-defaults.v1";
 const SIGN_IN_ERROR = "Codex needs you to sign in.";
 const NOT_INSTALLED = "The Codex integration isn't installed yet.";
 const CONVERSATION_LIMIT = 30;
 /** Read-only setup/catalog discovery uses the same declared native transport. */
-async function catalog(spawn: Spawn, signal: AbortSignal) {
+async function catalog(spawn: Spawn, signal: AbortSignal, host?: PreviewHost) {
   const rpc = new AppServer();
   const abort = () => {
     void rpc.close();
   };
   signal.addEventListener("abort", abort, { once: true });
+  const close = async () => {
+    signal.removeEventListener("abort", abort);
+    await rpc.close();
+  };
+  let detached = false;
   try {
     signal.throwIfAborted();
     await rpc.open(spawn, defaults.workspace);
     signal.throwIfAborted();
     if (await needsSignIn(rpc)) throw new Error(SIGN_IN_ERROR);
-    return { models: await listModels(rpc) };
+    const models = await listModels(rpc);
+    // Optional voice RPCs must not hold text-model readiness.
+    const voices = Promise.all([
+      voiceCatalog(rpc).catch(() => undefined),
+      rpc
+        .request<{ config: { realtime?: { voice?: string } } }>("config/read", {
+          includeLayers: false,
+        })
+        .catch(() => undefined),
+    ]).then(([voices, config]) => ({
+      voices: voices?.v3,
+      defaultVoice: config
+        ? (config.config?.realtime?.voice ?? voices?.defaultV1)
+        : undefined,
+    }));
+    const auth = host
+      ? rpc
+          .request<PreviewAuth>("getAuthStatus", {
+            includeToken: true,
+            refreshToken: false,
+          })
+          .catch(() => undefined)
+      : Promise.resolve(undefined);
+    const previews = Promise.all([voices, auth])
+      .finally(close)
+      .then(([, auth]) => {
+        signal.throwIfAborted();
+        return host ? discoverPreviews(auth, host) : undefined;
+      })
+      .catch(() => undefined);
+    detached = true;
+    return { models, voices, previews };
   } finally {
-    signal.removeEventListener("abort", abort);
-    await rpc.close();
+    if (!detached) await close();
   }
 }
 
@@ -122,6 +189,7 @@ export class CodexProvider {
     private readonly spawn: Spawn,
     private readonly storage: AgentStore = localStore(),
     private readonly setup?: CodexSetup,
+    readonly previewHost?: PreviewHost,
   ) {
     this.state = Object.freeze({
       readiness: "checking",
@@ -160,11 +228,14 @@ export class CodexProvider {
     return pending;
   }
   private async runCheck() {
+    this.abort?.abort();
     const abort = new AbortController();
     this.abort = abort;
     this.set({
       ...(this.state.data ? {} : { readiness: "checking" as const }),
       checking: true,
+      previewChecking: false,
+      voiceChecking: false,
       error: "",
     });
     try {
@@ -177,13 +248,33 @@ export class CodexProvider {
               ? SIGN_IN_ERROR
               : status.message,
         );
-      const data = await catalog(this.spawn, abort.signal);
+      const { previews, voices, ...data } = await catalog(
+        this.spawn,
+        abort.signal,
+        this.previewHost,
+      );
       if (this.abort === abort) {
         this.set({
           readiness: "ready",
           checking: false,
+          previewChecking: !!previews,
+          voiceChecking: true,
           data,
           error: "",
+        });
+        void voices.then((voices) => {
+          if (this.abort === abort && !abort.signal.aborted)
+            this.set({
+              data: { ...data, ...this.state.data, ...voices },
+              voiceChecking: false,
+            });
+        });
+        void previews?.then((previews) => {
+          if (this.abort === abort && !abort.signal.aborted)
+            this.set({
+              data: { ...data, ...this.state.data, ...previews },
+              previewChecking: false,
+            });
         });
       }
     } catch (error) {
@@ -201,8 +292,6 @@ export class CodexProvider {
           data: undefined,
           error: reason,
         });
-    } finally {
-      if (this.abort === abort) this.abort = undefined;
     }
   }
   /** Settles once the defaults are saved, and only then uses them; rejects,
@@ -224,14 +313,16 @@ export class CodexProvider {
     this.set({ defaults });
   }
   /** Whether Codex is installed, signed in and offers the candidate's model
-   * on its thinking level. */
+   * on its thinking level. Rejects when its check failed some other way, so
+   * that answer is unsure rather than no. */
   async recommends(candidate: RecommendedCandidate) {
-    if (this.state.readiness !== "ready") await this.check();
-    return (
-      this.state.readiness === "ready" &&
-      !!this.state.data &&
-      offers(this.state.data, candidate)
-    );
+    // A refresh under way keeps the last readiness meanwhile: wait for it.
+    if (this.state.checking || this.state.readiness !== "ready")
+      await this.check();
+    const { readiness, data, error } = this.state;
+    if (readiness === "ready" && data) return offers(data, candidate);
+    if (error === NOT_INSTALLED || error === SIGN_IN_ERROR) return false;
+    throw new Error("Codex couldn't say whether it is ready");
   }
   /** What its agents on Recommended run on: the first Codex candidate its
    * catalog offers. Undefined until the catalog is read; `null`, for Codex's
@@ -246,10 +337,21 @@ export class CodexProvider {
     const found =
       candidatesFor("codex").find((candidate) => offers(data, candidate)) ??
       null;
-    if (found) this.found = found;
+    // Kept only once the setup is final: before that, a bundled plugin may
+    // still replace the build's, so readers are told to look again then.
+    if (recommendationFinal()) {
+      if (found) this.found = found;
+    } else if (!this.waiting) {
+      this.waiting = true;
+      void recommendationReady().then(() => {
+        this.waiting = false;
+        this.set({});
+      });
+    }
     return found;
   }
   private found: RecommendedCandidate | undefined;
+  private waiting = false;
   resolve(raw: unknown, remote = false): Config {
     // A remote target's catalog isn't this computer's: an agent on
     // Recommended there runs on its Codex default. Apps follow this
@@ -307,7 +409,9 @@ export class CodexProvider {
         ? "execution-unavailable"
         : execution === "remote"
           ? "remote"
-          : recommended && candidate === undefined
+          : // Before the setup is final, a bundled plugin may still
+            // replace the build's pick, so it isn't reported yet.
+            recommended && (candidate === undefined || !recommendationFinal())
             ? "not-loaded"
             : undefined;
     const data = this.state.data;
@@ -389,6 +493,7 @@ const SCOPES = [
     options: [
       { value: "thread", label: "One session per thread" },
       { value: "channel", label: "One session per channel" },
+      { value: "community", label: "One session per community" },
     ],
   },
 ];
@@ -1190,8 +1295,14 @@ export function createTabs(
       conversations,
       conversation,
       (place, signal) =>
-        runtime.find({ key: agent.key, name: agent.name }, place, signal),
+        runtime.find(
+          { key: agent.key, name: agent.name },
+          place,
+          signal,
+          readConfig(agent.config).scope === "community",
+        ),
       (channelId) => runtime.channelLabel(agent.key, channelId),
+      readConfig(agent.config).scope,
     );
     const recent = conversations
       .filter((item) => item.key !== here?.key)
@@ -1339,9 +1450,23 @@ export function createTabs(
       defaults: providerDefaults,
       check,
       bound,
+      local,
     } = useProvider(agent);
     useEffect(() => {
-      setDraft(readConfig(agent.config));
+      if (local && agent.key) void provider.check();
+    }, [local, agent.key]);
+    const voiceSave = useRef<Config | undefined>(undefined);
+    const configRevision = useRef(0);
+    useEffect(() => {
+      const next = readConfig(agent.config);
+      configRevision.current++;
+      if (
+        voiceSave.current &&
+        JSON.stringify(next) === JSON.stringify(voiceSave.current)
+      ) {
+        setDraft((current) => voiceConfig(current, next.voice));
+        voiceSave.current = undefined;
+      } else setDraft(next);
     }, [agent.config]);
     // Inert in a build that recommends nothing for Codex.
     const following = onRecommended(draft) && candidatesFor("codex").length > 0;
@@ -1368,6 +1493,40 @@ export function createTabs(
         });
         if (!validWorkspace(settings.workspace))
           throw new Error("Enter an absolute or ~/… workspace path.");
+        // A verified execution target accepts custom model IDs. Its runtime
+        // checks the overrides against its own catalog when it starts a turn.
+        if (
+          !bound &&
+          settingsHost?.proposedModelOrEffort &&
+          (settings.model || settings.effort)
+        ) {
+          if (!data)
+            throw new Error(
+              "Check Codex models or clear the model and thinking overrides before saving.",
+            );
+          const model = catalogModel(provider.resolve(settings).model, data);
+          if (!model)
+            throw new Error(
+              "Choose an available Codex model or Codex default before saving.",
+            );
+          if (
+            settings.effort &&
+            !model.supportedReasoningEfforts.some(
+              (choice) => choice.reasoningEffort === settings.effort,
+            )
+          )
+            throw new Error(
+              "Choose a thinking level this Codex model supports or use Default.",
+            );
+        }
+        if (settingsHost?.proposedVoice && settings.voice) {
+          if (!data?.voices)
+            throw new Error(
+              "Check Huddle voices or choose Codex default before saving.",
+            );
+          if (!data.voices.includes(settings.voice))
+            throw new Error("Choose an available Huddle voice.");
+        }
         // A Custom agent's save drops a mark left from before, which a later
         // blank synced model would otherwise turn back on.
         await save(
@@ -1489,6 +1648,11 @@ export function createTabs(
                   {customization}
                 </>
               )}
+              <CompactionField
+                value={draft.compactAt}
+                disabled={saving}
+                onChange={(value) => setDraft(withCompactAt(draft, value))}
+              />
             </SettingsGroup>
             <AgentInstructions
               value={draft.instructions}
@@ -1518,7 +1682,8 @@ export function createTabs(
               />
             </Field>
             <Select
-              label="Sessions"
+              label="Session scope"
+              description="Choose how your agent uses sessions to keep context."
               variant="preference"
               value={draft.scope}
               groups={SCOPES}
@@ -1526,10 +1691,69 @@ export function createTabs(
               onValueChange={(value) =>
                 setDraft({
                   ...draft,
-                  scope: value === "channel" ? "channel" : "thread",
+                  scope: sessionScope(value),
                 })
               }
             />
+            <VoicePreview
+              key={agent.key}
+              host={provider.previewHost}
+              previews={data?.previews}
+              accents={data?.accents}
+              voice={draft.voice ?? ""}
+              voices={
+                provider.snapshot().previewChecking
+                  ? undefined
+                  : data?.voices?.filter((voice) => !!data.previews?.[voice])
+              }
+              defaultVoice={data?.defaultVoice}
+              disabled={
+                saving || checking || !!provider.snapshot().voiceChecking
+              }
+              previewDisabled={!!bound}
+              previewLoading={provider.snapshot().previewChecking ?? false}
+              onCommit={async (voice) => {
+                if (settingsHost?.pendingSave) {
+                  setDraft(readConfig({ ...draft, voice }));
+                  return;
+                }
+                if (voice === (saved.voice ?? "")) return;
+                const next = voiceConfig(saved, voice);
+                voiceSave.current = next;
+                const revision = configRevision.current;
+                setError("");
+                setSaving(true);
+                try {
+                  await (agent.configBase
+                    ? save(next, { base: agent.configBase })
+                    : save(next));
+                  if (configRevision.current === revision)
+                    setDraft((current) => voiceConfig(current, voice));
+                } catch (reason) {
+                  // An unconfirmed write can still arrive through sync.
+                  setError(message(reason));
+                } finally {
+                  setSaving(false);
+                }
+              }}
+              onShown={() => {
+                if (local) provider.check();
+              }}
+            />
+            {data &&
+              !data.voices &&
+              !checking &&
+              !provider.snapshot().voiceChecking && (
+                <div className="grid justify-items-start gap-2">
+                  <p role="status" className="m-0 text-body-sm text-subtle">
+                    Voice choices could not be checked. Try again, update Codex,
+                    or choose Codex default.
+                  </p>
+                  <Button variant="ghost" onClick={check}>
+                    Check voices again
+                  </Button>
+                </div>
+              )}
             {!bound && (
               <SwitchPreferenceRow
                 label="Codex apps and plugins"
@@ -1548,6 +1772,15 @@ export function createTabs(
             )}
           </>
         )}
+        {settingsHost?.proposedModelOrEffort &&
+          (draft.model || draft.effort) && (
+            <ClearModelOverrides
+              disabled={saving}
+              onClick={() =>
+                setDraft(offRecommended({ ...draft, model: "", effort: "" }))
+              }
+            />
+          )}
         <AgentSaveButton form={form} saving={saving} disabled={!changed} />
         {settingsSection !== "identity" && settingsContent}
       </form>

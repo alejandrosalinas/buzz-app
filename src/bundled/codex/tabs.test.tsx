@@ -28,6 +28,10 @@ import {
   localStore,
   type AgentStore,
 } from "../../features/agents/state";
+import {
+  awaitRecommendation,
+  setRuntimeRecommendation,
+} from "../../features/agents/recommended";
 import type { AgentViewProps } from "../../features/agents/service";
 import { AgentCreateDialog } from "../agents/AgentCreateDialog";
 import type { HostProcessOptions } from "../../features/host/service";
@@ -39,6 +43,7 @@ import { sessionTag } from "./prompt";
 import { CodexProvider, createTabs } from "./tabs";
 import { CodexRuntime } from "./runtime";
 import type { Wire } from "./rpc";
+import type { PreviewHost } from "./voice-preview";
 import { CodexSetup } from "./setup";
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -64,6 +69,18 @@ afterEach(() => {
   localStorage.clear();
 });
 function fixture({
+  previewHost = {
+    request: async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        voices: ["cove", "maple"].map((voice) => ({
+          voice,
+          preview_url: `https://persistent.oaistatic.com/voice/previews/${voice}.m4a`,
+        })),
+      }),
+    }),
+  },
   signedIn = true,
   requiresOpenaiAuth = true,
   installed = true,
@@ -71,6 +88,11 @@ function fixture({
   turns = () => ({ result: { data: [] } }),
   threads = [],
   configured = {},
+  voices = ["cove", "maple"],
+  voicesGate,
+  configGate,
+  authGate,
+  voicesError = () => false,
   modelAReasoningEfforts = ["low", "high"],
   modelBReasoningEfforts = ["medium"],
   storage = localStore(),
@@ -79,6 +101,7 @@ function fixture({
   inspection,
   sessionStorage,
 }: {
+  previewHost?: PreviewHost;
   binding?: AgentExecutionBinding;
   inspection?: Promise<AgentExecutionBinding | undefined>;
   sessionStorage?: AgentStore;
@@ -93,7 +116,16 @@ function fixture({
   saved?: Record<string, unknown>;
   turns?: (threadId: string) => Wire;
   threads?: { id: string; name: string; updatedAt: number }[] | string;
-  configured?: { model?: string; model_reasoning_effort?: string };
+  configured?: {
+    model?: string;
+    model_reasoning_effort?: string;
+    realtime?: { voice?: string };
+  };
+  voices?: string[] | null;
+  voicesGate?: Promise<void>;
+  configGate?: Promise<void>;
+  authGate?: Promise<void>;
+  voicesError?: () => boolean;
   modelAReasoningEfforts?: string[];
   modelBReasoningEfforts?: string[];
 } = {}) {
@@ -145,7 +177,10 @@ function fixture({
             nextCursor: null,
           };
         }
-        if (wire.method === "config/read") result = { config: configured };
+        if (wire.method === "config/read") {
+          await configGate;
+          result = { config: configured };
+        }
         if (wire.method === "thread/list") {
           if (typeof threads === "string") {
             options?.onStdout?.(
@@ -162,6 +197,10 @@ function fixture({
             nextCursor: null,
           };
         }
+        if (wire.method === "getAuthStatus") {
+          await authGate;
+          result = { authMethod: "chatgpt", authToken: "test-token" };
+        }
         if (wire.method === "account/read")
           result = {
             account: disk.signedIn
@@ -169,6 +208,22 @@ function fixture({
               : null,
             requiresOpenaiAuth,
           };
+        if (wire.method === "thread/realtime/listVoices") {
+          await voicesGate;
+          if (voicesError()) {
+            options?.onStdout?.(
+              `${JSON.stringify({ id: wire.id, error: { code: -32603, message: "Voice discovery failed" } })}\n`,
+            );
+            return;
+          }
+          result = {
+            voices: {
+              defaultV1: "cove",
+              v2: ["alloy"],
+              ...(voices ? { v3: voices } : {}),
+            },
+          };
+        }
         if (wire.method === "model/list")
           result = {
             data: [
@@ -210,7 +265,7 @@ function fixture({
     return process;
   });
   const setup = new CodexSetup(spawn);
-  const provider = new CodexProvider(spawn, storage, setup);
+  const provider = new CodexProvider(spawn, storage, setup, previewHost);
   const relay = {
     snapshot: () => ({
       status: "ready",
@@ -2182,12 +2237,20 @@ it("separates identity fields from runtime settings without changing the stored 
     model.compareDocumentPosition(instructions) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Huddle voice" }),
+  ).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Workspace")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Sessions")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Session scope")).not.toBeInTheDocument();
   expect(screen.queryByText("Runtime diagnostics")).not.toBeInTheDocument();
   view.rerender(<Settings {...props} settingsSection="runtime" />);
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveAccessibleDescription(
+    "Determines which voice your agent speaks with in Huddles (Codex only). Codex default",
+  );
   expect(screen.getByLabelText("Workspace")).toBeInTheDocument();
-  expect(screen.getByLabelText("Sessions")).toBeInTheDocument();
+  expect(screen.getByLabelText("Session scope")).toBeInTheDocument();
   expect(screen.queryByText("Runtime diagnostics")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Instructions")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
@@ -2603,7 +2666,7 @@ it.each([true, false])(
     const agent = "a".repeat(64);
     const root = "e".repeat(64);
     const place = JSON.stringify(["channel", root]);
-    const prefix = `buzz.codex.sessions.v17:test:${agent}`;
+    const prefix = `buzz.codex.sessions.v18:test:${agent}`;
     const items = new Map([
       [
         prefix,
@@ -2691,7 +2754,7 @@ it.each([false, true])(
       JSON.stringify({ key: "old-session", intent: "existing" }),
     );
     await storage.set(
-      `buzz.codex.sessions.v17:test:${agent}:session:old-session`,
+      `buzz.codex.sessions.v18:test:${agent}:session:old-session`,
       JSON.stringify({
         [place]: { threadId: "old-thread", workspace: "/guest" },
       }),
@@ -2848,6 +2911,110 @@ describe("Recommended", () => {
     ).resolves.toBe(false);
   });
 
+  it("keeps and reports no pick before a bundled plugin's setup is final, and tells readers when it is", async () => {
+    const pluginPick = {
+      harness: "codex",
+      model: "model-a",
+      effort: "low",
+      label: "Model A",
+    };
+    let answer = (_setup: unknown) => {};
+    const final = awaitRecommendation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    try {
+      const f = fixture();
+      const heard = vi.fn();
+      f.provider.subscribe(heard);
+      // The catalog loads first: the build's candidate, not kept.
+      await f.provider.check();
+      expect(f.provider.recommended()).toEqual(candidate);
+      // Nor reported: a read says it isn't loaded yet.
+      const saved = { ...defaults, preset: "recommended" as const };
+      expect(f.provider.readModelSettings(saved).model).toEqual({
+        source: "recommended",
+        resolved: { unavailable: "not-loaded" },
+      });
+      heard.mockClear();
+      answer({ recommendedBy: "Example Org", candidates: [pluginPick] });
+      await final;
+      await Promise.resolve();
+      // Readers hear, and then see the plugin's.
+      expect(heard).toHaveBeenCalled();
+      expect(f.provider.recommended()).toEqual(pluginPick);
+      expect(f.provider.readModelSettings(saved).model).toEqual({
+        source: "recommended",
+        resolved: { value: "model-a", source: "recommended" },
+      });
+    } finally {
+      // Never leave the wait open for later tests.
+      answer(undefined);
+      await final;
+      setRuntimeRecommendation(undefined);
+    }
+  });
+
+  it("waits for a refresh under way instead of answering from the last check", async () => {
+    const { provider } = fixture();
+    let finish = () => {};
+    // As a refresh that finds Codex signed out, while the last check said ready.
+    vi.spyOn(provider, "check").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            Object.assign(provider, {
+              state: {
+                ...provider.snapshot(),
+                readiness: "attention",
+                checking: false,
+                data: undefined,
+                error: "Codex needs you to sign in.",
+              },
+            });
+            resolve();
+          };
+        }),
+    );
+    Object.assign(provider, {
+      state: {
+        ...provider.snapshot(),
+        readiness: "ready",
+        checking: true,
+        data: { models: [] },
+      },
+    });
+    let answered: boolean | undefined;
+    const asked = provider.recommends(candidate).then((value) => {
+      answered = value;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(answered).toBeUndefined();
+    finish();
+    await asked;
+    expect(answered).toBe(false);
+  });
+
+  it("is unsure, rejecting, when its check failed some other way", async () => {
+    const { provider } = fixture();
+    // As after a check whose catalog read failed.
+    vi.spyOn(provider, "check").mockResolvedValue(undefined);
+    Object.assign(provider, {
+      state: {
+        ...provider.snapshot(),
+        readiness: "attention",
+        data: undefined,
+        error: "app-server exited",
+      },
+    });
+    await expect(provider.recommends(candidate)).rejects.toThrow(
+      "Codex couldn't say whether it is ready",
+    );
+  });
+
   it("runs an agent on Recommended on the first candidate its catalog offers", async () => {
     vi.stubEnv(
       "VITE_BUZZ_RECOMMENDED_AGENT",
@@ -2981,4 +3148,603 @@ describe("Recommended", () => {
       effort: "medium",
     });
   });
+});
+
+it("saves an agent's Voice and restores it without changing another agent", async () => {
+  const f = fixture();
+  const save = vi.fn(async () => {});
+  const user = userEvent.setup();
+  const view = render(<f.tabs.SettingsTab {...f.props(defaults, save)} />);
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ voice: "maple" }),
+    ),
+  );
+  const saved = vi.mocked(save as (config: Config) => Promise<void>).mock
+    .calls[0]?.[0] as Config;
+  view.unmount();
+  const reopened = render(<f.tabs.SettingsTab {...f.props(saved)} />);
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveTextContent("Maple");
+  reopened.unmount();
+  render(<f.tabs.SettingsTab {...f.props({ ...defaults, voice: "cove" })} />);
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveTextContent("Cove");
+});
+
+it("only offers voices with recordings even when Codex lists more voices", async () => {
+  const f = fixture({
+    voices: ["cove", "maple", "porto", "selva", "other-voice"],
+  });
+  const user = userEvent.setup();
+  render(<f.tabs.SettingsTab {...f.props()} />);
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await screen.findByRole("radio", { name: "Cove" });
+  expect(
+    screen.queryByRole("radio", { name: /Porto|Selva|Other-voice/ }),
+  ).toBeNull();
+});
+
+it("offers only v3 voices and lets an unavailable assignment return to default", async () => {
+  const f = fixture();
+  const save = vi.fn(async () => {});
+  render(
+    <f.tabs.SettingsTab
+      {...f.props({ ...defaults, voice: "future-voice" }, save)}
+    />,
+  );
+  const voice = screen.getByRole("button", { name: "Huddle voice" });
+  await waitFor(() => expect(screen.getByLabelText("Model")).toBeEnabled());
+  expect(voice).toHaveTextContent("Future-voice (unavailable)");
+  const user = userEvent.setup();
+  await user.click(voice);
+  expect(await screen.findByRole("radio", { name: "Maple" })).toBeEnabled();
+  expect(
+    screen.queryByRole("radio", { name: "Alloy" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("radio", { name: "Codex default" }));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith(
+      expect.not.objectContaining({ voice: expect.anything() }),
+    ),
+  );
+});
+it("keeps model settings usable when an older Codex has no v3 voice catalog", async () => {
+  const f = fixture({ voices: null });
+  render(<f.tabs.SettingsTab {...f.props({ ...defaults, voice: "cove" })} />);
+  await waitFor(() => expect(screen.getByLabelText("Model")).toBeEnabled());
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveTextContent("Cove");
+  expect(
+    screen.getByRole("button", { name: "Check voices again" }),
+  ).toBeEnabled();
+});
+
+it("retains the saved voice label while discovery is pending", async () => {
+  const gate = deferred<void>();
+  const f = fixture({ voicesGate: gate.promise });
+  render(<f.tabs.SettingsTab {...f.props({ ...defaults, voice: "cove" })} />);
+  const voice = screen.getByRole("button", { name: "Huddle voice" });
+  try {
+    await waitFor(() => expect(f.provider.snapshot().checking).toBe(true));
+    expect(voice).toHaveAttribute("aria-disabled", "true");
+    expect(voice).toHaveTextContent("Cove");
+    expect(voice).not.toHaveTextContent("unavailable");
+  } finally {
+    gate.resolve();
+  }
+  await waitFor(() => expect(voice).toBeEnabled());
+  expect(voice).toHaveTextContent("Cove");
+});
+
+it("explains failed voice discovery and retries without losing the saved choice", async () => {
+  let failed = true;
+  const f = fixture({ voicesError: () => failed });
+  render(<f.tabs.SettingsTab {...f.props({ ...defaults, voice: "cove" })} />);
+  const retry = await screen.findByRole("button", {
+    name: "Check voices again",
+  });
+  expect(screen.getByText(/Voice choices could not be checked/)).toBeVisible();
+  expect(screen.getByLabelText("Model")).toBeEnabled();
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveTextContent("Cove");
+  failed = false;
+  await userEvent.setup().click(retry);
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: "Check voices again" }),
+    ).not.toBeInTheDocument(),
+  );
+  const voice = screen.getByRole("button", { name: "Huddle voice" });
+  await waitFor(() => expect(voice).toBeEnabled());
+  await userEvent.setup().click(voice);
+  expect(await screen.findByRole("radio", { name: "Maple" })).toBeVisible();
+});
+
+it("shows the configured realtime voice as the Codex default", async () => {
+  const f = fixture({ configured: { realtime: { voice: "maple" } } });
+  render(<f.tabs.SettingsTab {...f.props(defaults)} />);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Huddle voice" }),
+    ).toHaveTextContent("Maple · Default"),
+  );
+  expect(
+    screen.queryByText("Applies when this agent next joins a Huddle."),
+  ).not.toBeInTheDocument();
+});
+
+it("rediscovers supported voices and preview URLs whenever settings is reopened", async () => {
+  let revision = 0;
+  const host: PreviewHost = {
+    request: vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        voices: [
+          {
+            voice: "cove",
+            name: "Cove",
+            preview_url: `https://persistent.oaistatic.com/voice/previews/cove.${++revision}.m4a`,
+          },
+        ],
+      }),
+    })),
+    requestBytes: vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      body: new Uint8Array([1]),
+    })),
+  };
+  const voices = ["cove"];
+  const f = fixture({ previewHost: host, voices });
+  const first = render(<f.tabs.SettingsTab {...f.props()} />);
+  await waitFor(() =>
+    expect(f.provider.snapshot().data?.previews?.cove).toContain("cove.1.m4a"),
+  );
+  first.unmount();
+  voices.push("maple");
+  const next = render(<f.tabs.SettingsTab {...f.props()} />);
+  await waitFor(() =>
+    expect(f.provider.snapshot().data?.previews?.cove).toContain("cove.2.m4a"),
+  );
+  expect(host.request).toHaveBeenCalledTimes(2);
+  expect(f.provider.snapshot().data?.voices).toEqual(["cove", "maple"]);
+  next.unmount();
+});
+
+it("publishes Codex readiness while optional recording discovery is held", async () => {
+  const gate = deferred<{
+    status: number;
+    headers: Record<string, string>;
+    body: string;
+  }>();
+  const host: PreviewHost = { request: vi.fn(() => gate.promise) };
+  const f = fixture({ previewHost: host });
+  render(<f.tabs.SettingsTab {...f.props()} />);
+  const checking = f.provider.check();
+  try {
+    await waitFor(() => expect(host.request).toHaveBeenCalledOnce());
+    await waitFor(() => expect(f.provider.snapshot().readiness).toBe("ready"));
+    await checking;
+    expect(f.provider.snapshot().data?.models.length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Huddle voice" })).toBeEnabled();
+  } finally {
+    gate.resolve({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({ voices: [] }),
+    });
+    await checking;
+    f.provider.dispose();
+  }
+});
+
+it("does not hold model readiness for optional preview authentication", async () => {
+  const gate = deferred<void>();
+  const host: PreviewHost = {
+    request: vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      body: '{"voices":[]}',
+    })),
+  };
+  const f = fixture({ previewHost: host, authGate: gate.promise });
+  const checking = f.provider.check();
+  try {
+    await waitFor(() => expect(f.provider.snapshot().readiness).toBe("ready"));
+    expect(host.request).not.toHaveBeenCalled();
+    gate.resolve();
+    await waitFor(() => expect(host.request).toHaveBeenCalledOnce());
+  } finally {
+    gate.resolve();
+    await checking;
+    f.provider.dispose();
+  }
+});
+
+it("retires pending preview authentication before another provider check", async () => {
+  const gate = deferred<void>();
+  const host: PreviewHost = {
+    request: vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      body: '{"voices":[]}',
+    })),
+  };
+  const f = fixture({ previewHost: host, authGate: gate.promise });
+  try {
+    await f.provider.check();
+    const previous = f.processes.at(-1);
+    expect(previous?.end).not.toHaveBeenCalled();
+    await f.provider.check();
+    await waitFor(() => expect(previous?.end).toHaveBeenCalledOnce());
+    expect(f.provider.snapshot().readiness).toBe("ready");
+    expect(host.request).not.toHaveBeenCalled();
+    f.provider.dispose();
+    await waitFor(() => expect(f.processes.at(-1)?.end).toHaveBeenCalledOnce());
+  } finally {
+    gate.resolve();
+    f.provider.dispose();
+  }
+});
+
+it("rediscovers both catalogs when retained settings return and discards an uncommitted voice", async () => {
+  let revision = 0;
+  const host: PreviewHost = {
+    request: vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      body: JSON.stringify({
+        voices: [
+          {
+            voice: "maple",
+            preview_url:
+              "https://persistent.oaistatic.com/voice/previews/maple.m4a",
+          },
+          {
+            voice: "cove",
+            preview_url: `https://persistent.oaistatic.com/voice/previews/cove.${++revision}.m4a`,
+          },
+        ],
+      }),
+    })),
+    requestBytes: vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      body: new Uint8Array([1]),
+    })),
+  };
+  const voices = ["cove", "maple"];
+  const f = fixture({ previewHost: host, voices });
+  const view = render(
+    <div data-testid="retained">
+      <f.tabs.SettingsTab {...f.props()} />
+    </div>,
+  );
+  const user = userEvent.setup();
+  await waitFor(() =>
+    expect(f.provider.snapshot().data?.previews?.cove).toContain("cove.1.m4a"),
+  );
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  view.getByTestId("retained").hidden = true;
+  await act(async () => {});
+  voices.push("gleam");
+  view.getByTestId("retained").hidden = false;
+  await waitFor(() =>
+    expect(f.provider.snapshot().data?.previews?.cove).toContain("cove.2.m4a"),
+  );
+  expect(f.provider.snapshot().data?.voices).toEqual(voices);
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveTextContent("Cove · Default");
+});
+it("saves only on Close without a separate Save button", async () => {
+  const f = fixture();
+  const save = vi.fn(async () => {});
+  const user = userEvent.setup();
+  render(<f.tabs.SettingsTab {...f.props(defaults, save)} />);
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  expect(screen.getByRole("dialog", { name: "Choose voice" })).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ voice: "maple" }),
+    ),
+  );
+});
+
+it.each([false, true])(
+  "saves only voice and retains other drafts (legacy recommendation: %s)",
+  async (legacy) => {
+    const f = fixture();
+    const save = vi.fn(async (_config?: Config) => {});
+    const user = userEvent.setup();
+    const props = f.props(
+      legacy
+        ? { ...defaults, model: "model-a", preset: "recommended" }
+        : defaults,
+      save,
+    );
+    const view = render(<f.tabs.SettingsTab {...props} />);
+    const instructions = screen.getByRole("textbox", { name: "Instructions" });
+    await user.type(instructions, "Keep this draft");
+    await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+    await user.click(await screen.findByRole("radio", { name: "Maple" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          voice: "maple",
+          instructions: defaults.instructions,
+        }),
+      ),
+    );
+    const config = { ...save.mock.calls[0]?.[0] } as Config;
+    delete config.preset;
+    view.rerender(
+      <f.tabs.SettingsTab {...props} agent={{ ...props.agent, config }} />,
+    );
+    expect(instructions).toHaveValue("Keep this draft");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  },
+);
+
+it("clears retired recording discovery when its replacement check fails", async () => {
+  const gate = deferred<void>();
+  const host: PreviewHost = { request: vi.fn() };
+  const f = fixture({ previewHost: host, authGate: gate.promise });
+  try {
+    await f.provider.check();
+    expect(f.provider.snapshot().previewChecking).toBe(true);
+    f.disk.signedIn = false;
+    await f.provider.check();
+    expect(f.provider.snapshot().readiness).toBe("attention");
+    expect(f.provider.snapshot().previewChecking).toBe(false);
+    expect(host.request).not.toHaveBeenCalled();
+  } finally {
+    gate.resolve();
+    f.provider.dispose();
+  }
+});
+
+it.each(["voices", "config"])(
+  "publishes model readiness while optional %s discovery is pending",
+  async (kind) => {
+    const gate = deferred<void>();
+    const f = fixture(
+      kind === "voices"
+        ? { voicesGate: gate.promise }
+        : { configGate: gate.promise },
+    );
+    const checking = f.provider.check();
+    try {
+      await waitFor(() =>
+        expect(f.provider.snapshot().readiness).toBe("ready"),
+      );
+      expect(f.provider.snapshot().data?.models.length).toBeGreaterThan(0);
+    } finally {
+      gate.resolve();
+      await checking;
+      f.provider.dispose();
+    }
+  },
+);
+
+it("reports a failed voice save after the picker has closed", async () => {
+  vi.stubGlobal(
+    "AudioContext",
+    class {
+      createBufferSource() {
+        return { disconnect() {} };
+      }
+      createGain() {
+        return { gain: { value: 1 }, disconnect() {} };
+      }
+      resume() {
+        return new Promise<void>(() => {});
+      }
+      close() {
+        return Promise.resolve();
+      }
+    },
+  );
+  const f = fixture();
+  let reject!: (reason: Error) => void;
+  const save = vi.fn(
+    () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  const user = userEvent.setup();
+  render(<f.tabs.SettingsTab {...f.props(defaults, save)} />);
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await act(async () => reject(new Error("Voice save failed")));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Voice save failed",
+  );
+});
+
+it("preserves other drafts when a rejected voice save is confirmed later", async () => {
+  const f = fixture();
+  const save = vi.fn(async (_config?: Config) => {
+    throw new Error("Confirmation unavailable");
+  });
+  const props = f.props(defaults, save);
+  const user = userEvent.setup();
+  const view = render(<f.tabs.SettingsTab {...props} />);
+  const instructions = screen.getByRole("textbox", { name: "Instructions" });
+  await user.type(instructions, "Keep this draft");
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(
+    await screen.findAllByText("Confirmation unavailable"),
+  ).not.toHaveLength(0);
+  const config = save.mock.calls[0]?.[0] as Config;
+  view.rerender(
+    <f.tabs.SettingsTab {...props} agent={{ ...props.agent, config }} />,
+  );
+  expect(instructions).toHaveValue("Keep this draft");
+  expect(
+    screen.getByRole("button", { name: "Huddle voice" }),
+  ).toHaveTextContent("Maple");
+});
+
+it("keeps a legacy configuration clean after a voice-only save", async () => {
+  const f = fixture();
+  const save = vi.fn(async (_config?: Config) => {});
+  const props = f.props(
+    { ...defaults, model: "model-a", preset: "recommended" },
+    save,
+  );
+  const user = userEvent.setup();
+  const view = render(<f.tabs.SettingsTab {...props} />);
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  const config = save.mock.calls[0]?.[0] as Config;
+  view.rerender(
+    <f.tabs.SettingsTab {...props} agent={{ ...props.agent, config }} />,
+  );
+  expect(
+    screen.queryByRole("button", { name: "Save" }),
+  ).not.toBeInTheDocument();
+});
+
+it("keeps a newer synced voice when an earlier save finishes", async () => {
+  const f = fixture();
+  const gate = deferred<void>();
+  const save = vi.fn(async (_config?: Config) => gate.promise);
+  const props = f.props(defaults, save);
+  const user = userEvent.setup();
+  const view = render(<f.tabs.SettingsTab {...props} />);
+  try {
+    await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+    await user.click(await screen.findByRole("radio", { name: "Maple" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const config = save.mock.calls[0]?.[0] as Config;
+    view.rerender(
+      <f.tabs.SettingsTab {...props} agent={{ ...props.agent, config }} />,
+    );
+    view.rerender(
+      <f.tabs.SettingsTab
+        {...props}
+        agent={{ ...props.agent, config: { ...config, voice: "cove" } }}
+      />,
+    );
+    await act(async () => gate.resolve());
+    expect(
+      screen.getByRole("button", { name: "Huddle voice" }),
+    ).toHaveTextContent("Cove");
+    expect(
+      screen.queryByRole("button", { name: "Save" }),
+    ).not.toBeInTheDocument();
+  } finally {
+    gate.resolve();
+  }
+});
+
+it("saves the voice against the latest synced revision", async () => {
+  const f = fixture();
+  const save = vi.fn(
+    async (
+      _config?: Config,
+      _options?: { base: { settings?: string | null } },
+    ) => {},
+  );
+  const props = f.props(defaults, save);
+  const view = render(
+    <f.tabs.SettingsTab
+      {...props}
+      agent={{ ...props.agent, configBase: { settings: "opened" } }}
+    />,
+  );
+  view.rerender(
+    <f.tabs.SettingsTab
+      {...props}
+      agent={{
+        ...props.agent,
+        config: { ...defaults, instructions: "Synced instructions" },
+        configBase: { settings: "synced" },
+      }}
+    />,
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Huddle voice" }));
+  await user.click(await screen.findByRole("radio", { name: "Maple" }));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voice: "maple",
+        instructions: "Synced instructions",
+      }),
+      { base: { settings: "synced" } },
+    ),
+  );
+});
+
+it("blocks an unsupported proposal effort and lets the owner clear it", async () => {
+  const f = fixture();
+  const user = userEvent.setup();
+  const save = vi.fn(async () => {});
+  render(
+    <f.tabs.SettingsTab
+      {...f.props({ ...defaults, model: "model-b", effort: "xhigh" }, save)}
+      settingsHost={{ proposedModelOrEffort: true, pendingSave: save }}
+    />,
+  );
+  await screen.findByRole("combobox", { name: "Model" });
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByText(/Choose a thinking level/)).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+  await user.click(
+    screen.getByRole("button", { name: "Clear model and thinking overrides" }),
+  );
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ model: "", effort: "" }),
+  );
+});
+
+it("saves proposed model and effort overrides for a verified execution target", async () => {
+  const binding = { provider: "test/guest" };
+  const f = fixture({ binding });
+  const save = vi.fn(async () => {});
+  const props = f.props(
+    { ...defaults, model: "target-custom-model", effort: "high" },
+    save,
+  );
+  render(
+    <f.tabs.SettingsTab
+      {...props}
+      agent={{ ...props.agent, executionBinding: binding }}
+      settingsHost={{ proposedModelOrEffort: true, pendingSave: save }}
+    />,
+  );
+  await screen.findByDisplayValue("Selected when the session starts");
+  await userEvent.setup().click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "target-custom-model", effort: "high" }),
+    ),
+  );
 });

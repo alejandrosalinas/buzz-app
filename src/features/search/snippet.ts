@@ -68,13 +68,15 @@ function codePoints(text: string, ranges: readonly [number, number][]) {
 
 /**
  * A window of `text` about `width` characters long, starting a little before
- * the first matched word, with the code points of every match in it.
+ * the first matched word, with the code points of every match in it, and
+ * where the window starts in `text` with whitespace runs collapsed and
+ * trimmed.
  */
 export function snippet(
   text: string,
   terms: readonly string[],
   width = 180,
-): { text: string; matches: number[] } {
+): { text: string; matches: number[]; start: number } {
   const flat = text.replace(/\s+/g, " ").trim();
   const ranges = termRanges(flat, terms);
   const first = ranges[0]?.[0] ?? 0;
@@ -99,7 +101,7 @@ export function snippet(
       e - start + lead.length,
     ]);
   const shown = `${lead}${body}${tail}`;
-  return { text: shown, matches: codePoints(shown, shifted) };
+  return { text: shown, matches: codePoints(shown, shifted), start };
 }
 
 /** Code points of `text` that match `terms`, for highlighting it whole. */

@@ -98,6 +98,10 @@ export type PullState = Readonly<{
   /** The head commit's combined checks, when read with `gh`. */
   checks?: "success" | "failure" | "pending" | undefined;
   conflicts?: boolean | undefined;
+  /** Its reviews, when read with `gh`: approved as the repository requires,
+   * a code owner's approval too where one is required, or changes
+   * requested. */
+  review?: "approved" | "changes requested" | undefined;
   /** The head commit, when read with `gh`, as are `settled`, `running` and
    * `failed`. */
   head?: string | undefined;
@@ -252,6 +256,11 @@ type StateData = {
   isDraft: boolean;
   mergeStateStatus?: string;
   headRefOid?: string;
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  latestOpinionatedReviews?: {
+    nodes?: ({ state?: string } | null)[];
+    pageInfo?: { hasNextPage?: boolean };
+  };
   commits?: {
     nodes?: ({
       commit?: {
@@ -264,7 +273,6 @@ type StateData = {
   };
   reviews?: { nodes?: ({ id?: string; comments?: Ids } | null)[] };
   comments?: Ids;
-  reviewDecision?: string | null;
   isInMergeQueue?: boolean;
   autoMergeRequest?: object | null;
   reviewThreads?: {
@@ -304,7 +312,10 @@ const FAILED = new Set([
   "STALE",
 ]);
 
+// The panel reads the same reviews with its details, and GraphQL refuses one
+// field asked for twice with different arguments.
 const STATE = `state title isDraft mergeStateStatus headRefOid
+reviewDecision latestOpinionatedReviews(first:50){nodes{state} pageInfo{hasNextPage}}
 commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){totalCount nodes{
 __typename
 ... on CheckRun{name status conclusion}
@@ -360,8 +371,33 @@ function unresolvedOf(threads: StateData["reviewThreads"]) {
   return unresolved > 0 || complete ? { unresolved } : {};
 }
 
+/** What `pull`'s reviews come to. GitHub decides only where the repository
+ * requires reviews; elsewhere each reviewer's latest verdict does, as
+ * GitHub's own page shows it. */
+function reviewOf(pull: StateData): PullState["review"] {
+  const verdicts = (pull.latestOpinionatedReviews?.nodes ?? []).map(
+    (review) => review?.state,
+  );
+  switch (pull.reviewDecision) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes requested";
+    case "REVIEW_REQUIRED":
+      return undefined;
+  }
+  if (verdicts.includes("CHANGES_REQUESTED")) return "changes requested";
+  /* A later page could hold a "changes requested" this one lacks. */
+  const everyVerdictRead =
+    !pull.latestOpinionatedReviews?.pageInfo?.hasNextPage;
+  return everyVerdictRead && verdicts.includes("APPROVED")
+    ? "approved"
+    : undefined;
+}
+
 /** The state in `pull`, an alias's answer, without its feedback or details. */
 function stateOf(pull: StateData): PullState {
+  const review = reviewOf(pull);
   const rollup = pull.commits?.nodes?.[0]?.commit?.statusCheckRollup;
   const contexts = (rollup?.contexts?.nodes ?? []).filter(
     (node): node is Node => !!node && typeof node === "object",
@@ -391,6 +427,7 @@ function stateOf(pull: StateData): PullState {
     title: pull.title,
     checks: checksOf(rollup?.state),
     conflicts: pull.mergeStateStatus === "DIRTY",
+    ...(review && { review }),
     ...(pull.headRefOid && {
       head: pull.headRefOid,
       settled:
@@ -711,6 +748,7 @@ const same = (a: PullState | "failed" | undefined, b: PullState | "failed") =>
     a.title === b.title &&
     a.checks === b.checks &&
     a.conflicts === b.conflicts &&
+    a.review === b.review &&
     a.head === b.head &&
     a.settled === b.settled &&
     a.running === b.running &&

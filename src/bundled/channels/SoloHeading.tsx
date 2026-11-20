@@ -37,7 +37,8 @@ import {
   ChannelMembersButton,
   ChannelMembersDialog,
 } from "./ChannelMembersDialog";
-import { NewWorkspaceDialog, SoloChatMenuItems } from "./SoloChatMenu";
+import { SoloChatMenuItems } from "./SoloChatMenu";
+import { NewWorkspace } from "../../features/solo/NewWorkspace";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import { useSoloOwner } from "./ChatSharedMark";
 
@@ -125,7 +126,7 @@ export function SoloToolbar({
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const owner = useSoloOwner(session, channel);
   const [readError, setReadError] = useState<string>();
-  const preferences = session.soloPreferences;
+  const preferences = session.sidebarPreferences;
   const canOpenActions =
     !channel.cached && (!channel.readOnly || channel.viewerRole === "guest");
   return (
@@ -232,22 +233,19 @@ export function SoloToolbar({
         />
       )}
       {creatingWorkspace && (
-        <NewWorkspaceDialog
-          name={channel.name}
+        <NewWorkspace
+          session={session}
+          moveConversation
           finalFocus={actionsTrigger}
           close={() => setCreatingWorkspace(false)}
-          create={(name) => {
+          create={(section) => {
             if (!preferences.writable || prepareSoloMove(session, channel.id))
-              return false;
-            onMove(
-              preferences.createAndAssign(channel.id, {
-                id: crypto.randomUUID(),
-                name,
-              }),
-            );
-            setCreatingWorkspace(false);
-            return true;
+              throw new Error("Workspaces are unavailable. Try again.");
+            const moving = preferences.createAndAssign(channel.id, section);
+            onMove(moving);
+            return moving;
           }}
+          onCreated={() => {}}
         />
       )}
       {readError && (
@@ -278,7 +276,7 @@ export function SoloToolbar({
  * the store keeps a move record for it, pending or failed, and until its
  * failure is dismissed. */
 export function useSoloMoveRecovery(session: RelaySession) {
-  const preferences = session.soloPreferences;
+  const preferences = session.sidebarPreferences;
   const placement = useSyncExternalStore(
     preferences.subscribe,
     preferences.snapshot,

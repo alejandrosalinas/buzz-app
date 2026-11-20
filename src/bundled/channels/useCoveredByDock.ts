@@ -3,6 +3,17 @@ import { useLayoutEffect, useState, type RefObject } from "react";
 const live = (element: HTMLElement) =>
   !element.closest("[hidden], [inert]") && element.getClientRects().length > 0;
 
+const panelDock = (board: HTMLElement | null) =>
+  board?.querySelector<HTMLElement>(":scope > [data-panel-dock]");
+
+const isOverlay = (dock: HTMLElement | null | undefined) =>
+  !!dock && getComputedStyle(dock).position === "absolute";
+
+export function coveringDock(board: HTMLElement | null) {
+  const dock = panelDock(board);
+  return isOverlay(dock) ? dock : undefined;
+}
+
 /**
  * Focus the board's dock where Space and Enter do nothing: the first live, in
  * document order, of a panel's own landing (as PanelCard's when it opened) or
@@ -34,11 +45,9 @@ export function useCoveredByDock(
   useLayoutEffect(() => {
     const element = board.current;
     if (!open || !element) return;
-    const dock = element.querySelector<HTMLElement>(
-      ":scope > [data-panel-dock]",
-    );
+    const dock = panelDock(element);
     const measure = () => {
-      const covering = !!dock && getComputedStyle(dock).position === "absolute";
+      const covering = isOverlay(dock);
       // Inert content would drop focus to the page, so hand it to the dock
       // first, as narrow Settings hands it to its details.
       if (covering && content.current?.contains(document.activeElement))

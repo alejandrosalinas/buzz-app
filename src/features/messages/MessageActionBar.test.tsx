@@ -130,6 +130,38 @@ it("leaves portalled message content outside its context-menu target", () => {
   expect(screen.queryByRole("menu")).toBeNull();
 });
 
+it("keeps coordination long presses owned by the app menu", () => {
+  vi.useFakeTimers();
+  try {
+    render(
+      <MessageActionBar copyText={() => "Coordination"}>
+        <div>
+          <button type="button">Expand coordination</button>
+        </div>
+      </MessageActionBar>,
+    );
+    const row = screen.getByRole("button", { name: "Expand coordination" });
+    const touch = new MouseEvent("pointerdown", {
+      bubbles: true,
+      clientX: 5,
+      clientY: 5,
+    });
+    Object.defineProperty(touch, "pointerType", { value: "touch" });
+    fireEvent(row, touch);
+    fireEvent.touchStart(row, { touches: [{ clientX: 5, clientY: 5 }] });
+    act(() => vi.advanceTimersByTime(600));
+    expect(
+      screen.getByRole("menuitem", { name: "Copy message" }),
+    ).toBeDefined();
+    expect(fireEvent.contextMenu(row, { clientX: 5, clientY: 5 })).toBe(false);
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    fireEvent.touchEnd(row);
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
+});
+
 it("leaves a message's links, media, fields, selection and touch native", () => {
   vi.useFakeTimers();
   try {
@@ -164,6 +196,16 @@ it("leaves a message's links, media, fields, selection and touch native", () => 
     document.getSelection()?.addRange(range);
     fireEvent.pointerDown(text, { button: 2, clientX: 5, clientY: 5 });
     expect(fireEvent.contextMenu(text, { button: 2 })).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    const touch = new MouseEvent("pointerdown", {
+      bubbles: true,
+      clientX: 5,
+      clientY: 5,
+    });
+    Object.defineProperty(touch, "pointerType", { value: "touch" });
+    fireEvent(text, touch);
+    expect(fireEvent.contextMenu(text, { clientX: 5, clientY: 5 })).toBe(true);
     expect(screen.queryByRole("menu")).toBeNull();
 
     // A press beside the selection opens the message's menu.

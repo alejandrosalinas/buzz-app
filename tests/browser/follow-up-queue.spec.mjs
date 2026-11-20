@@ -205,8 +205,8 @@ async function startWorkingAgent(page, app) {
   ).toBeHidden();
   await openPage(page, "Messages");
   await page
-    .getByRole("navigation", { name: "Solo conversations" })
-    .locator(`[data-solo-channel-id="${chat}"]`)
+    .getByRole("navigation", { name: "Subscribed channels" })
+    .locator(`[data-solo-destination-id="${chat}"]`)
     .click();
   await expect
     .poll(() => page.evaluate(() => !!window.localAgentFixture))
@@ -365,8 +365,8 @@ test("Solo queued rows survive reload and Send or Remove stays durable", async (
     }
     await openPage(page, "Messages");
     await page
-      .getByRole("navigation", { name: "Solo conversations" })
-      .locator(`[data-solo-channel-id="${chat}"]`)
+      .getByRole("navigation", { name: "Subscribed channels" })
+      .locator(`[data-solo-destination-id="${chat}"]`)
       .click();
     await expect(
       page.getByRole("textbox", { name: "Message your agents", exact: true }),
@@ -473,8 +473,8 @@ test.describe("resuming saved Solo work", () => {
         await expect(notice).toBeHidden();
         await openPage(page, "Messages");
         await page
-          .getByRole("navigation", { name: "Solo conversations" })
-          .locator(`[data-solo-channel-id="${chat}"]`)
+          .getByRole("navigation", { name: "Subscribed channels" })
+          .locator(`[data-solo-destination-id="${chat}"]`)
           .click();
         await expect(queue.getByRole("listitem")).toHaveCount(2);
         if (!resume) {

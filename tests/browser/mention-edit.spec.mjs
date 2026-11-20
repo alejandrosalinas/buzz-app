@@ -214,3 +214,23 @@ test("focus during the first edit after send preserves the advanced native caret
   expect(sent.tags.filter(([tag]) => tag === "p")).toEqual([["p", agent]]);
   await expect(input).toHaveJSProperty("value", "@Honey ");
 });
+
+// A retained editor keeps its native caret when focused again, so the seed
+// must leave it after the mention, not where reset() put it.
+test("a seed that lands while the composer is unfocused leaves the caret after the mention", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/mentions.html?test-controls");
+  const input = page.getByRole("textbox", { name: "Message #General" });
+  // Focused once, the composer keeps its caret when focused again.
+  await input.click();
+  await expect(input).toBeFocused();
+  await page.getByRole("button", { name: "Load history" }).click();
+  await expect(input).toHaveJSProperty("value", "@Honey ");
+  await expect(input).not.toBeFocused();
+  await page.getByRole("button", { name: "Focus composer" }).click();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveJSProperty("selectionStart", 7);
+  await page.keyboard.type("hi");
+  await expect(input).toHaveJSProperty("value", "@Honey hi");
+});

@@ -11,8 +11,8 @@ Work with your agents without the rest of Buzz competing for attention.
 3. The sidebar now shows only your Solo chats, and only Solo chats in the
    selected community can show banners, play sounds or light the Dock dot. Search (⌘K) and links still open any
    channel or DM. Your status becomes 🔭 Focusing.
-4. Focus ends by itself, or choose **End** in the sidebar. Your tabs and
-   earlier status come back.
+4. Focus ends by itself, or choose **End** in the sidebar. The rest of your
+   sidebar and your earlier status come back.
 
 ---
 

@@ -16,10 +16,9 @@ import {
   useGifDraftPreview,
 } from "../../bundled/emoji/GifDraftPreview";
 import { accentButtonStyle } from "../../shared/theme/accent";
-import { stageChatCards } from "./composer-chat-cards";
+import { restoreChatLinks } from "./composer-chat-cards";
 import { pastedFiles } from "./composer-clipboard";
-import { chatCardIds } from "./chat-cards";
-import { ComposerChatCards } from "./ComposerChatCards";
+import { chatLinkIds } from "./chat-cards";
 import { useConversationPresentation } from "../conversation/ConversationPresentation";
 import { TypingPresentation } from "../conversation/typing-presentation";
 import { useTypingBroadcast } from "./useTypingBroadcast";
@@ -61,7 +60,6 @@ import { useListedChannel } from "../relay/listed-channel";
 import { FileDropOverlay } from "./FileDropOverlay";
 import { useFileDrop } from "./use-file-drop";
 import { Button } from "../../shared/design-system/ui/Button";
-import { useToastClearance } from "../../shared/design-system/ui/Toast";
 import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
@@ -207,6 +205,7 @@ const noChannels: ReturnType<ComposerSession["channels"]["list"]> = {
 };
 const noSubscription = () => () => {};
 const noAgents: readonly string[] = [];
+const cannotOpen = () => false;
 
 type AcceptedDraft = {
   next: MentionDraft;
@@ -703,9 +702,8 @@ function Composer({
     );
     // A follow-up an earlier release saved is this composer's prefill, not
     // the user's draft: history seeds it now, and the first save replaces it.
-    const saved = stageChatCards(
+    const saved = restoreChatLinks(
       legacyFollowupDraft(stored) ? mentionDraft("") : stored,
-      channels(),
     );
     // An own Solo chat alone with agents seeds its toolbar, not the text.
     const source =
@@ -1124,30 +1122,27 @@ function Composer({
   const sendWithModEnter = useSendWithModEnterPreference();
   const editWithUpArrow = useEditWithUpArrowPreference();
   const saveDraft = (next: MentionDraft, save = true) => {
-    next = stageChatCards(
-      {
-        ...next,
-        ...((next.chatCards ?? valueRef.current.chatCards)
-          ? {
-              chatCards: next.chatCards ?? valueRef.current.chatCards ?? [],
-            }
-          : {}),
-        ...((next.forward !== undefined
-          ? next.forward
-          : valueRef.current.forward) !== undefined
-          ? {
-              forward:
-                next.forward !== undefined
-                  ? next.forward
-                  : valueRef.current.forward,
-            }
-          : {}),
-        ...((next.gifs ?? valueRef.current.gifs)
-          ? { gifs: next.gifs ?? valueRef.current.gifs ?? [] }
-          : {}),
-      },
-      channels(),
-    );
+    next = restoreChatLinks({
+      ...next,
+      ...((next.chatCards ?? valueRef.current.chatCards)
+        ? {
+            chatCards: next.chatCards ?? valueRef.current.chatCards ?? [],
+          }
+        : {}),
+      ...((next.forward !== undefined
+        ? next.forward
+        : valueRef.current.forward) !== undefined
+        ? {
+            forward:
+              next.forward !== undefined
+                ? next.forward
+                : valueRef.current.forward,
+          }
+        : {}),
+      ...((next.gifs ?? valueRef.current.gifs)
+        ? { gifs: next.gifs ?? valueRef.current.gifs ?? [] }
+        : {}),
+    });
     if (JSON.stringify(next) === JSON.stringify(valueRef.current)) return false;
     valueRef.current = next;
     updateDraft(next);
@@ -1379,6 +1374,7 @@ function Composer({
     `${scope}:${draftKey}`,
     channelId,
     !!submission?.attachments,
+    host ? [scope, `${draftKey}:files`] : undefined,
   );
   const picker = useRef<HTMLInputElement>(null);
   const pickerFocus = useRef<
@@ -1396,8 +1392,6 @@ function Composer({
           node.ownerDocument.body,
       );
   }, []);
-  // Notices float above the composer, not over Send.
-  useToastClearance(form);
   const notify = useToastNotification();
   const handOffFocus = useEffectEvent(() => {
     if (!form.current?.contains(document.activeElement)) return;
@@ -1540,10 +1534,7 @@ function Composer({
     diagnose("load", revision.current, raw);
     let next: MentionDraft;
     try {
-      next = stageChatCards(
-        mentionDraft(JSON.parse(raw ?? "null")),
-        channels(),
-      );
+      next = restoreChatLinks(mentionDraft(JSON.parse(raw ?? "null")));
     } catch {
       next = mentionDraft("");
     }
@@ -1731,13 +1722,8 @@ function Composer({
       value: valueRef.current,
       restore: input.current.checkpoint(),
     };
-    const next = stageChatCards(
-      mentionDraft(
-        editing.start(current, (body) =>
-          composerMarkdown(stageChatCards(mentionDraft(body), channels())),
-        ),
-      ),
-      channels(),
+    const next = mentionDraft(
+      editing.start(current, (body) => composerMarkdown(mentionDraft(body))),
     );
     valueRef.current = next;
     updateDraft(next);
@@ -1779,7 +1765,7 @@ function Composer({
         saveDraft: lease.save,
         cancelDraft: lease.cancel,
       });
-      const next = stageChatCards(mentionDraft(body), channels());
+      const next = mentionDraft(body);
       valueRef.current = next;
       updateDraft(next);
       input.current.reset(next);
@@ -1857,7 +1843,13 @@ function Composer({
     terminator?: string,
   ) {
     const separated = /^[ \t]/.test(valueRef.current.text.slice(at));
-    if (!insert(separated ? text : `${text} `, undefined, range, terminator))
+    const start = range?.start ?? input.current?.selectionStart ?? at;
+    const value =
+      /^:\d{1,64}:/.test(text) &&
+      /\d/.test(valueRef.current.text[start - 1] ?? "")
+        ? ` ${text}`
+        : text;
+    if (!insert(separated ? value : `${value} `, undefined, range, terminator))
       return false;
     const field = input.current;
     const end = field?.selectionEnd ?? 0;
@@ -2497,7 +2489,8 @@ function Composer({
   // until the composer is shown again, a newer message of the viewer's
   // lands, or a send here replaces the draft with the composer's own
   // follow-up. reset() replaces the editor without a change event, so
-  // nothing persists; focus stays with its current owner.
+  // nothing persists; focus stays with its current owner, and the caret
+  // follows the prefill.
   useEffect(() => {
     if (!presented) {
       seedApplied.current = undefined;
@@ -2558,8 +2551,9 @@ function Composer({
     automaticTag.current = seed.recipients.length
       ? JSON.stringify(seed)
       : undefined;
-    if (input.current && document.activeElement === input.current)
-      input.current.setSelectionRange(seed.text.length, seed.text.length);
+    // reset() leaves the caret at the start. Put it after the prefill even
+    // while unfocused: a retained editor keeps its caret when focused later.
+    input.current?.setSelectionRange(seed.text.length, seed.text.length);
   });
   // Alone in a Solo chat, a send addresses agents; with people it is a conversation.
   const needsRecipient = (requireMention || solo) && !withPeople;
@@ -3049,12 +3043,7 @@ function Composer({
         ),
       );
       const tuned = Object.keys(sentPicks).length > 0;
-      const stagedChats = new Set(
-        chatCardIds((captured.chatCards ?? []).join("\n\n")),
-      );
-      const linkedChats = chatCardIds(content).filter((id) =>
-        stagedChats.has(id),
-      );
+      const linkedChats = chatLinkIds(content, channels());
       if (linkedChats.length) {
         setSending(true);
         setError(undefined);
@@ -3312,7 +3301,13 @@ function Composer({
               )
             )
               return "conflict";
-            const target = attachmentDraft(session, recoveryKey, channelId);
+            const target = attachmentDraft(
+              session,
+              recoveryKey,
+              channelId,
+              false,
+              host ? [scope, `${draftKey}:files`] : undefined,
+            );
             if (target.snapshot().length) return "conflict";
             if (
               current !== capturedRevision &&
@@ -3414,6 +3409,29 @@ function Composer({
     setAttachmentsExiting(!hasAttachments);
   }
   if (attachmentsExiting && editing.target) setAttachmentsExiting(false);
+  // Keystrokes re-render the composer; stable commands let contributed tools
+  // and accessories skip those renders while still calling the latest code.
+  const toolCommands = useLatestCallbacks({
+    insertText: insertToolText,
+    insertMention,
+    insertMentions,
+    replaceRecipients,
+    replaceRecipientsIfEmpty,
+    insertResource,
+    focus: () => input.current?.focus(),
+  });
+  const voiceCommands = useLatestCallbacks({ capture: voice.begin });
+  // Each keystroke projects new arrays; equal ones keep mention consumers still.
+  const selectedRecipients = useEqualList(
+    value.recipients,
+    (a, b) => a.pubkey === b.pubkey && a.name === b.name,
+  );
+  const addressedAgents = useEqualList(addressedKeys, Object.is);
+  // Availability is read during render, so it stays a prop that changes with
+  // the host's panels; dispatch goes through the latest handler.
+  const accessoryCommands = useLatestCallbacks({
+    open: (target: string) => onOpenLink?.(target) ?? false,
+  });
   const context = (
     <div className={styles.composerContext}>
       {!cached && !submission && (
@@ -3431,8 +3449,8 @@ function Composer({
           scope={scope}
           channelId={channelId}
           threadRootId={threadRootId}
-          canOpen={(target) => canOpenLink?.(target) ?? false}
-          open={(target) => onOpenLink?.(target) ?? false}
+          canOpen={canOpenLink ?? cannotOpen}
+          open={accessoryCommands.open}
         />
       )}
     </div>
@@ -3526,7 +3544,7 @@ function Composer({
       </>
     );
   return (
-    <SelectedMentionContext.Provider value={value.recipients}>
+    <SelectedMentionContext.Provider value={selectedRecipients}>
       {context}
       {active && bringing.dialog}
       {active && nonmembers.dialog}
@@ -3609,7 +3627,7 @@ function Composer({
             value={editing.target ? undefined : workspace}
           >
             <AddressedAgentsContext.Provider
-              value={editing.target ? noAgents : addressedKeys}
+              value={editing.target ? noAgents : addressedAgents}
             >
               <ComposerCompletions
                 registry={extensions.completions}
@@ -3743,23 +3761,6 @@ function Composer({
               }}
             />
           )}
-          <ComposerChatCards
-            cards={chatCards ?? []}
-            session={session}
-            scope={scope}
-            channelId={channelId}
-            extensions={extensions}
-            disabled={editingDisabled}
-            remove={(index) => {
-              saveDraft({
-                ...valueRef.current,
-                chatCards:
-                  valueRef.current.chatCards?.filter((_, i) => i !== index) ??
-                  [],
-              });
-              input.current?.focus();
-            }}
-          />
           <div className={styles.composerInput}>
             <RichComposerInput
               ref={input}
@@ -4015,7 +4016,7 @@ function Composer({
                   <ComposerTools
                     registry={extensions.tools}
                     {...(canAttach && !editing.target
-                      ? { capture: voice.begin }
+                      ? { capture: voiceCommands.capture }
                       : {})}
                     renderLeading={renderLeadingTools}
                     session={session}
@@ -4026,13 +4027,7 @@ function Composer({
                     inviteAgents={agentChoices && !editing.target}
                     recipients={recipients}
                     audience={audience}
-                    insertText={insertToolText}
-                    insertMention={insertMention}
-                    insertMentions={insertMentions}
-                    replaceRecipients={replaceRecipients}
-                    replaceRecipientsIfEmpty={replaceRecipientsIfEmpty}
-                    insertResource={insertResource}
-                    focus={() => input.current?.focus()}
+                    {...toolCommands}
                   />
                 ) : (
                   renderLeadingTools(null)
@@ -4253,6 +4248,43 @@ function Composer({
       )}
     </SelectedMentionContext.Provider>
   );
+}
+
+/** Stable functions that call the latest of `callbacks`, which must keep the same keys. */
+function useLatestCallbacks<
+  T extends { [K in keyof T]: (...args: never[]) => unknown },
+>(callbacks: T): T {
+  const latest = useRef(callbacks);
+  useLayoutEffect(() => {
+    latest.current = callbacks;
+  });
+  const [stable] = useState(
+    () =>
+      Object.fromEntries(
+        (Object.keys(callbacks) as (keyof T)[]).map((key) => [
+          key,
+          (...args: never[]) => latest.current[key](...args),
+        ]),
+      ) as T,
+  );
+  return stable;
+}
+
+/** The previous list while `list` holds the same entries, else `list`. */
+function useEqualList<T>(
+  list: readonly T[],
+  same: (a: T, b: T) => boolean,
+): readonly T[] {
+  const [kept, setKept] = useState(list);
+  if (
+    kept !== list &&
+    (kept.length !== list.length ||
+      kept.some((item, index) => !same(item, list[index] as T)))
+  ) {
+    setKept(list);
+    return list;
+  }
+  return kept;
 }
 
 /** Retain the last preview for collapse; context semantics clear immediately. */

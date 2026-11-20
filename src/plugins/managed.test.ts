@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { managedBy, pendingManaged } from "./managed";
+import {
+  managedBy,
+  managedLabel,
+  offeredManaged,
+  pendingManaged,
+} from "./managed";
 import type { ManagedEntry, ManagedPlugins } from "./types";
 
 const entry = (id: string, state: ManagedEntry["state"]): ManagedEntry => ({
@@ -47,4 +52,39 @@ it("attributes installed plugins to their managing source", () => {
   for (const id of ["a.missing", "d.other", "unlisted"])
     expect(managedBy(managed, id)).toBeUndefined();
   expect(managedBy(undefined, "c.current")).toBeUndefined();
+});
+
+it("offers manual entries only as updates to an installed copy", () => {
+  const manual = (state: ManagedEntry["state"]): ManagedEntry => ({
+    ...entry(`manual.${state}`, state),
+    install: "manual",
+  });
+  const managed = policy(
+    manual("missing"),
+    manual("outdated"),
+    manual("other"),
+    { ...entry("auto.missing", "missing"), install: "automatic" },
+  );
+  expect(
+    managed.status === "ready" &&
+      managed.plugins.filter(offeredManaged).map(({ id }) => id),
+  ).toEqual(["manual.outdated", "auto.missing"]);
+  expect(pendingManaged(managed).map(({ id }) => id)).toEqual([
+    "manual.outdated",
+    "auto.missing",
+  ]);
+});
+
+it("labels automatically updated plugins with their source", () => {
+  const managed = policy(
+    { ...entry("a.auto", "current"), update: "automatic" },
+    { ...entry("b.review", "current"), update: "review" },
+    entry("c.default", "current"),
+  );
+  expect(managedLabel(managedBy(managed, "a.auto"))).toBe(
+    "Example Org · updates automatically",
+  );
+  expect(managedLabel(managedBy(managed, "b.review"))).toBe("Example Org");
+  expect(managedLabel(managedBy(managed, "c.default"))).toBe("Example Org");
+  expect(managedLabel(undefined)).toBeUndefined();
 });

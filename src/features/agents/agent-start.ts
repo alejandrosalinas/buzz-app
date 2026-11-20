@@ -103,12 +103,24 @@ export function resolveStart<C extends object>(input: StartInput<C>): Start<C> {
       input.agentType,
       settings.schema,
     );
-    if ("problem" in read) return blocked("invalid", read.problem, "Settings");
+    if ("problem" in read)
+      return {
+        ok: false,
+        state: "invalid",
+        reason: read.typeMismatch
+          ? read.problem
+          : `These agent settings aren't compatible with this version of Buzz: ${read.problem}`,
+      };
     config = settings.withSynced(config, read.settings);
     // The synced Recommended mark is the agent's on every device.
     config = read.recommended
       ? { ...config, preset: PRESET }
       : offRecommended(config);
+    // So are plugin notes; a local agent's stay without them.
+    const { pluginNotes: _, ...rest } = config as { pluginNotes?: unknown };
+    config = (
+      read.pluginNotes ? { ...rest, pluginNotes: read.pluginNotes } : rest
+    ) as typeof config;
     applied = read.settings;
     revisions.push(entry.head.id);
   }

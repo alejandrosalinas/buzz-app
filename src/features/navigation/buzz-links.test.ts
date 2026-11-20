@@ -6,6 +6,8 @@ import {
   parseBuzzLink,
 } from "./buzz-links";
 import { deepLinkStep } from "./deep-links";
+import { newMessageTarget } from "../channel-navigation/routes";
+import { newMessageLink } from "../direct-messages/message-person";
 
 const scope = {
   viewer: "a".repeat(64),
@@ -441,6 +443,25 @@ it.each([
 ])("rejects a malformed plugin link: %s", (href) => {
   expect(parseBuzzLink(href), href).toBeNull();
   expect(buzzLinkTarget(href, scope)).toBeNull();
+});
+it("opens a New message link as a draft to that person in the receiving community", () => {
+  const person = "a".repeat(64);
+  const href = newMessageLink(person);
+  expect(buzzLinkKind(href)).toBe("buzz");
+  expect(buzzLinkTarget(href, scope)).toEqual(
+    newMessageTarget(scope, person, expect.any(Number)),
+  );
+  for (const invalid of [
+    "buzz://dm/new",
+    "buzz://dm/new?to=",
+    "buzz://dm/new?to=not-a-key",
+    `buzz://dm/new?to=${person.toUpperCase()}`,
+    `buzz://dm/new?to=${person}&to=${person}`,
+    `buzz://dm/edit?to=${person}`,
+    `buzz://dm/new/extra?to=${person}`,
+    `buzz://dm/new?to=${person}#x`,
+  ])
+    expect(parseBuzzLink(invalid), invalid).toBeNull();
 });
 it("opens an agent card's link as Create agent on the Agents page in the receiving community", () => {
   const href = "buzz://agent/new?card=tinker&utm=qr";

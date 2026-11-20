@@ -111,6 +111,15 @@ function harness({
     notify();
     return leaveResidue;
   });
+  // Mirrors the service: the community takes the place the other holds.
+  const reorder = vi.fn((id: string, over: string) => {
+    const memberships = [...snapshot.memberships];
+    const from = memberships.findIndex((m) => m.id === id);
+    const to = memberships.findIndex((m) => m.id === over);
+    memberships.splice(to, 0, ...memberships.splice(from, 1));
+    snapshot = { ...snapshot, memberships };
+    notify();
+  });
   const read = vi.fn(async () => [
     {
       id: "e".repeat(64),
@@ -154,6 +163,7 @@ function harness({
     },
     select,
     leave,
+    reorder,
     relay,
   } as unknown as Communities;
   // The broker's session contract is deliberately unanswered: the picker holds
@@ -172,6 +182,7 @@ function harness({
     communities,
     select,
     leave,
+    reorder,
     read,
     fetch,
     markAllChannelsRead,
@@ -259,11 +270,13 @@ it("offers the original's actions on the selected community and only reads its r
   await within(menu).findByRole("menuitem", { name: "Invite to community" });
   expect(items(menu)).toEqual([
     "Mark all as read",
+    "Move up",
+    "Move down",
     "Copy community URL",
     "Invite to community",
     "Leave community",
   ]);
-  expect(within(menu).getAllByRole("separator")).toHaveLength(2);
+  expect(within(menu).getAllByRole("separator")).toHaveLength(3);
   expect(
     within(menu).getByRole("menuitem", { name: "Mark all as read" }),
   ).not.toHaveAttribute("aria-disabled");
@@ -284,10 +297,12 @@ it("offers the original's actions on the selected community and only reads its r
   const inactive = await openMenu("Secondary");
   expect(items(inactive)).toEqual([
     "Mark all as read",
+    "Move up",
+    "Move down",
     "Copy community URL",
     "Leave community",
   ]);
-  expect(within(inactive).getAllByRole("separator")).toHaveLength(2);
+  expect(within(inactive).getAllByRole("separator")).toHaveLength(3);
   const markAll = within(inactive).getByRole("menuitem", {
     name: "Mark all as read",
   });
@@ -315,6 +330,8 @@ it("offers no Invite and reads nothing while the session carries no relay author
   await act(async () => {});
   expect(items(menu)).toEqual([
     "Mark all as read",
+    "Move up",
+    "Move down",
     "Copy community URL",
     "Leave community",
   ]);
@@ -453,6 +470,51 @@ it("returns focus after a pointer open to the field the right-click interrupted,
   fireEvent.keyDown(document.activeElement ?? reopened, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   await waitFor(() => expect(target).toHaveFocus());
+});
+
+it("moves a community up and down from its menu, keeping the selection and the keyboard's place", async () => {
+  const user = userEvent.setup();
+  const h = harness();
+  render(<CommunityPicker communities={h.communities} />);
+  const rows = () =>
+    screen
+      .getAllByRole("button", { name: /^Switch to / })
+      .map((row) => row.getAttribute("aria-label"));
+  expect(rows()).toEqual(["Switch to Primary", "Switch to Secondary"]);
+  // The keyboard path: the row's own menu, opened from the row.
+  button("Secondary").focus();
+  fireEvent.keyDown(button("Secondary"), { key: "F10", shiftKey: true });
+  let menu = await screen.findByRole("menu", {
+    name: "Actions for Secondary",
+  });
+  // The last community has nowhere further down to go.
+  const down = within(menu).getByRole("menuitem", { name: "Move down" });
+  expect(down).toHaveAttribute("aria-disabled", "true");
+  await user.click(down);
+  expect(h.reorder).not.toHaveBeenCalled();
+  await user.click(within(menu).getByRole("menuitem", { name: "Move up" }));
+  expect(h.reorder).toHaveBeenLastCalledWith(secondary, primary);
+  expect(rows()).toEqual(["Switch to Secondary", "Switch to Primary"]);
+  await waitFor(() => expect(button("Secondary")).toHaveFocus());
+  // A move is not a switch: the selected community stays selected.
+  expect(h.select).not.toHaveBeenCalled();
+  expect(button("Primary")).toHaveAttribute("aria-current", "true");
+  expect(switcher()).toHaveAccessibleName("Community switcher: Primary");
+  // Now first, it can only go down.
+  menu = await openMenu("Secondary");
+  expect(
+    within(menu).getByRole("menuitem", { name: "Move up" }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await user.click(within(menu).getByRole("menuitem", { name: "Move down" }));
+  expect(h.reorder).toHaveBeenLastCalledWith(secondary, primary);
+  expect(rows()).toEqual(["Switch to Primary", "Switch to Secondary"]);
+  // A single community has nothing to reorder.
+  h.update({ memberships: [{ id: primary, name: "Primary" }] });
+  expect(items(await openMenu("Primary"))).toEqual([
+    "Mark all as read",
+    "Copy community URL",
+    "Leave community",
+  ]);
 });
 
 it("copies the canonical community origin and reports the outcome", async () => {

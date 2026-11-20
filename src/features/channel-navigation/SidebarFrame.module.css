@@ -1,6 +1,7 @@
 /* Shared sidebar frame and scrollport. Callers own their rows; these rules
    give every row inside the frame the sidebar's geometry and ink. */
 .sidebar {
+  position: relative;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -10,12 +11,14 @@
   /* Figma specifies true Semibold for unread rows, rather than the legacy 500 alias. */
   --type-weight-semibold: 600;
   --sidebar-padding: var(--space-2);
-  --sidebar-padding-end: var(--sidebar-padding);
+  --sidebar-padding-inline: var(--space-1h);
+  --sidebar-padding-end: var(--sidebar-padding-inline);
   --channel-row-radius: var(--radius-control);
   --sidenav-emoji-size: 0.8125rem;
-  padding-inline: var(--sidebar-padding) var(--sidebar-padding-end);
+  padding-inline: var(--sidebar-padding-inline) var(--sidebar-padding-end);
 }
 .sidebarFilter {
+  container-type: inline-size;
   flex: 0 0 auto;
   padding: var(--space-3) 0 0;
   min-width: 0;
@@ -27,20 +30,26 @@
   min-height: 0;
 }
 @media (hover: hover) and (pointer: fine) {
-  .sidebar [data-icon-variant="ghost"]:hover:not([data-disabled]) {
+  .sidebar
+    [data-icon-variant="ghost"]:hover:not(
+      [data-disabled],
+      [data-sidebar-floating-action] *
+    ) {
     background: var(--affordance-panel-hover);
   }
 }
 .sidebar
   [data-icon-variant="ghost"]:is(:active, [aria-expanded="true"]):not(
-    [data-disabled]
+    [data-disabled],
+    [data-sidebar-floating-action] *
   ) {
   background: var(--affordance-panel-hover);
 }
 .channelListFrame {
   position: relative;
-  /* Bring the scrollbar near the divider without clipping its native thumb. */
-  width: calc(100% + 6px);
+  /* Let the native scrollbar use the rail's trailing padding. */
+  width: calc(100% + var(--sidebar-padding-end));
+  container-type: inline-size;
   min-width: 0;
   min-height: calc(var(--space-6) + var(--space-5) + var(--space-1) + 1px);
   flex: 1;
@@ -64,16 +73,12 @@
 .channelList,
 .sidebarFilter {
   --channel-row-fill-start: var(--space-1);
-  --channel-row-fill-end: calc(var(--space-1) + 6px);
-}
-.sidebarFilter {
-  /* No scrollbar frame extension here, so the end fill omits its 6px. */
   --channel-row-fill-end: var(--space-1);
 }
 /* Wrapped channel rows paint on the wrapper; direct destination and Solo chat
    rows paint on the navigation item itself, so shorten them to the fill and
    measure their padding from that painted edge. As in ChannelSidebarRow, icons
-   start 4px and trailing content ends 6px inside the pill. */
+   start 6px and trailing content ends 8px inside the pill. */
 .channelList [data-variant="row"],
 .sidebarFilter [data-variant="row"] {
   width: calc(
@@ -82,13 +87,18 @@
     var(--channel-row-fill-end)
   );
   margin-inline: var(--channel-row-fill-start) var(--channel-row-fill-end);
-  padding-inline: calc(var(--space-2) - var(--channel-row-fill-start))
-    calc(var(--space-1) + var(--space-half));
+  padding-inline: calc(
+      var(--space-2) +
+      var(--space-half) -
+      var(--channel-row-fill-start)
+    )
+    var(--space-2);
 }
 .channelList [data-variant="row"][data-inset],
 .sidebarFilter [data-variant="row"][data-inset] {
   padding-inline-start: calc(
     var(--space-2) +
+    var(--space-half) +
     var(--space-6) -
     var(--channel-row-fill-start)
   );
@@ -114,7 +124,9 @@
   background-clip: padding-box;
 }
 .channelListContent {
-  width: 100%;
+  /* Keep the original content width with overlay scrollbars. A classic
+     scrollbar can use the trailing padding before it narrows the content. */
+  width: min(100%, calc(100cqi - var(--sidebar-padding-end)));
   min-width: 0;
   box-sizing: border-box;
   display: flex;
@@ -159,4 +171,35 @@
     [aria-current="page"]
   ) {
   --text-standard: var(--text-row-selected);
+}
+/* The New button and list share a leading edge. Reserve its size and a gap. */
+.sidebar:has([data-sidebar-floating-action]) {
+  --sidebar-floating-action-clearance: calc(
+    var(--size-control) +
+    var(--space-2)
+  );
+}
+/* Let the pinned header scroll when it would squeeze the floating row. */
+.sidebar:has([data-sidebar-floating-action]) .sidebarFilter {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 1;
+  min-block-size: 0;
+}
+.sidebar:has([data-sidebar-floating-action]) .sidebarBody {
+  min-block-size: var(--sidebar-floating-action-clearance);
+}
+.sidebar:has([data-share-action-row="stacked"]) .sidebarBody {
+  --sidebar-stacked-cue-height: max(24px, var(--space-5));
+  min-block-size: calc(2 * var(--sidebar-stacked-cue-height) + var(--space-2));
+}
+.sidebar:has([data-sidebar-floating-action]) .channelListFrame {
+  min-height: 0;
+}
+/* Put the clearance on the rows so the scrollport can shrink in a short drawer. */
+.sidebar:has([data-sidebar-floating-action]) .channelListContent {
+  padding-block-end: calc(
+    var(--sidebar-floating-action-clearance) +
+    var(--space-3)
+  );
 }

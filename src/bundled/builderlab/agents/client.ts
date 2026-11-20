@@ -433,8 +433,9 @@ export function createAgentClient(
       return statuses;
     },
     /** One page of the agent's conversation sessions, most recently active
-     * first; `more` when older ones remain. With `place`, only the session of
-     * that conversation: its thread's, else its channel's. */
+     * first, from `cursor` when given; `cursor` names the next page while
+     * older ones remain. With `place`, only the session of that
+     * conversation: its thread's, else its channel's. */
     async sessions(
       agentId: string,
       signal: AbortSignal,
@@ -443,12 +444,14 @@ export function createAgentClient(
         channelId: string;
         threadRootId?: string | undefined;
       }>,
+      cursor?: string,
     ) {
       const result = await readRequest(
         "list-agent-sessions",
         {
           agent_id: agentId,
           limit: SESSION_LIMIT,
+          ...(cursor && { cursor }),
           ...(place && {
             // Beekeeper keys conversations by the community's host.
             community: communityHost(place.community),
@@ -484,7 +487,10 @@ export function createAgentClient(
       });
       return {
         sessions,
-        more: typeof result.next_cursor === "string" && !!result.next_cursor,
+        cursor:
+          typeof result.next_cursor === "string" && result.next_cursor
+            ? result.next_cursor
+            : undefined,
       };
     },
     /** A listed session's stored messages and turns, as Builderlab sent them. */

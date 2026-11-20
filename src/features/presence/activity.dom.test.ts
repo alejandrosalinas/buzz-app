@@ -165,11 +165,23 @@ it("persists viewer-local manual choices, isolates identities, follows storage c
       });
     activity.setPreference("away");
     expect(activity.status()).toBe("away");
-    expect(activity.snapshot().error).toContain("Could not save");
+    expect(activity.snapshot().error).toBe(
+      "Could not save your availability. It applies to this window until you close it.",
+    );
     write.mockRestore();
     activity.setPreference("away");
     expect(activity.snapshot().error).toBeUndefined();
     expect(localStorage.getItem(key)).toBe("away");
+    const read = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("denied");
+      });
+    window.dispatchEvent(new StorageEvent("storage", { key }));
+    expect(activity.snapshot().error).toBe(
+      "Could not read your saved availability. Changes apply to this window.",
+    );
+    read.mockRestore();
   } finally {
     activity.dispose();
     localStorage.clear();

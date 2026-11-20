@@ -7,6 +7,7 @@ import styles from "./Compute.module.css";
 
 export function ConsumerComputeView({
   headerControl,
+  headerDescription,
   children,
   status,
   attention = false,
@@ -15,6 +16,7 @@ export function ConsumerComputeView({
   refresh,
 }: {
   headerControl?: ReactNode;
+  headerDescription?: ReactNode;
   children?: ReactNode;
   status?: string | undefined;
   attention?: boolean;
@@ -27,7 +29,11 @@ export function ConsumerComputeView({
       aria-label="Compute consumer"
       className={`${styles.content} text-body`}
     >
-      <Header title="Shared compute" actions={headerControl} />
+      <Header
+        title="Shared compute"
+        subtitle={headerDescription}
+        actions={headerControl}
+      />
       {children}
       <p
         role="status"

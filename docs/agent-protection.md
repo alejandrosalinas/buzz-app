@@ -216,6 +216,9 @@ Anthropic rejects it, Claude reviews fail closed; save a working key or choose
 another review model. A review's 60-second budget includes
 waiting for Buzz to download that release the first time; a longer download
 fails the review closed and carries on for later reviews.
+Protected Claude agents don't carry Buzz's agent gateway attribution: their
+launch reads no settings files, so a gateway app's routing doesn't apply, and
+Buzz adds no endpoint or sign-in to make it. Each such turn notes it in Activity.
 Known Claude gaps: while a review runs, other processes of yours, likely
 contained agents too (not checked against the pinned release), can read its
 API key from the review's process environment, as every Claude agent has it in

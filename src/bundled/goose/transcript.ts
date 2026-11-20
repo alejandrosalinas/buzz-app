@@ -39,7 +39,11 @@ export type Message = {
   };
 };
 /** A place the agent talks in: a channel, or a thread in one. */
-export type Place = Readonly<{ channelId: string; root?: string }>;
+export type Place = Readonly<{
+  channelId: string;
+  root?: string;
+  community?: true;
+}>;
 /** A goose session the agent ran, as goose lists it. */
 export type GooseSessionRow = Readonly<{
   sessionId: string;
@@ -296,7 +300,11 @@ export const sessionTags = (agent: string, conversation?: string) => ({
   ...(conversation ? { "buzz.conversation": conversation } : {}),
 });
 const conversationOf = (place: Place) =>
-  place.root ? `${place.channelId}/${place.root}` : place.channelId;
+  place.community
+    ? "@community"
+    : place.root
+      ? `${place.channelId}/${place.root}`
+      : place.channelId;
 
 type Listed = {
   sessionId: string;

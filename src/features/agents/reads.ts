@@ -10,9 +10,11 @@ import { validVerifiedName } from "../relay/verified-profile";
 import type { AuthorNames } from "../agent-harness/turn-records";
 import type { EventData, ReadFilter, RelayEvent } from "../relay/events";
 import type { RelayData } from "../relay/service";
-import { ownerCanvas } from "../agent-harness/project";
+import { type OwnerCanvas, ownerCanvas } from "../agent-harness/project";
 import type { ChannelLabel } from "../channels/channel-icon";
 import { soloChat } from "./solo-chat";
+import { communityDestination } from "../communities/destination";
+import { relayPartition } from "../relay/partition";
 
 /** The agent's memory entries, deleted entries' tombstones, and whether
  * some may be missing. */
@@ -67,7 +69,7 @@ export type AgentReads = Readonly<{
   /** The channel's current Canvas text when `owner`, or an agent they
    * attest, wrote it; undefined when it has none, someone else wrote it, or
    * the reader cannot read Canvas. */
-  canvas?(channelId: string, owner: string): Promise<string | undefined>;
+  canvas?(channelId: string, owner: string): Promise<OwnerCanvas | undefined>;
   /** Whether a mention in this channel continues `owner`'s Solo chat. Only the
    * owner's own connection can tell; other readers answer false. */
   soloChat(
@@ -143,6 +145,119 @@ export function ownerReads(
       ),
     memoryListing: (signal: AbortSignal, slug?: string) =>
       session.agentMemories.read(pubkey, signal, slug),
+  });
+}
+
+/** Whether a mention says a workflow wrote it, rather than the owner. The
+ * marker only decides whether a turn waits for its community; the permission
+ * check still decides whether it runs. */
+export function workflowMarked(event: RelayEvent, owner: string) {
+  return (
+    event.pubkey !== owner &&
+    event.tags.some(
+      ([name, value]) => name === "buzz:workflow" && value === "true",
+    )
+  );
+}
+
+/** `ownerReads` of the agent's own community and owner, once the community is
+ * ready, has listed its channels and knows the kind of `channelId`, which a
+ * turn needs to tell where to answer: now when it has, or after the reconnect
+ * under way, through a new session in the same community and owner if that
+ * replaces the old one. Rejects when the community ends up another one or another owner's, is
+ * disconnected or fails in a way the service does not recover from by itself,
+ * or when `signal` aborts first. It waits for the service's own notifications
+ * and never reconnects. */
+export function readyOwnerReads(
+  relay: RelayData | undefined,
+  agent: Readonly<{ relay: string; owner: string; pubkey: string }>,
+  signal: AbortSignal,
+  channelId?: string,
+): Promise<AgentReads> {
+  const unavailable = () =>
+    new Error(
+      "Workflow request could not start: its community is no longer connected.",
+    );
+  let origin: string;
+  try {
+    origin = communityDestination(agent.relay).url;
+  } catch {
+    return Promise.reject(unavailable());
+  }
+  const scope = relayPartition(origin, agent.owner);
+  // The reads, `pending` while the community reconnects or lists its
+  // channels, or undefined when it will not become ready here.
+  const pending = Symbol();
+  const settled = (): AgentReads | undefined | typeof pending => {
+    const snapshot = relay?.snapshot();
+    if (!relay || !snapshot) return undefined;
+    if (snapshot.status === "ready" && !snapshot.cached) {
+      if (
+        snapshot.origin !== origin ||
+        snapshot.viewer !== agent.owner ||
+        snapshot.scope !== scope
+      )
+        return undefined;
+      const { channels } = snapshot.session;
+      const { status, channels: listed } = channels.list();
+      if (status === "idle" || status === "loading") return pending;
+      // A list restored from disk or still paging can lack the destination's
+      // kind, and an unknown one would answer a DM in a thread.
+      if (
+        channelId &&
+        !(
+          listed.find((item) => item.id === channelId) ??
+          channels.get?.(channelId)
+        )?.channelType
+      )
+        return pending;
+      return ownerReads(relay, agent.pubkey);
+    }
+    if (
+      snapshot.status === "connecting" ||
+      (snapshot.status === "ready" && snapshot.cached) ||
+      (snapshot.status === "error" && snapshot.retrying && !snapshot.denied)
+    )
+      return pending;
+    return undefined;
+  };
+  return new Promise((resolve, reject) => {
+    let stop = () => {};
+    let stopList = () => {};
+    let listed: object | undefined;
+    const finish = () => {
+      stop();
+      stopList();
+      signal.removeEventListener("abort", aborted);
+    };
+    const aborted = () => {
+      finish();
+      reject(
+        new Error(
+          "Workflow request could not start: its community did not reconnect before the delivery deadline.",
+          { cause: signal.reason },
+        ),
+      );
+    };
+    const check = () => {
+      const reads = settled();
+      if (reads !== pending) {
+        finish();
+        return reads ? resolve(reads) : reject(unavailable());
+      }
+      // Listen to the channel list of the session the community has now.
+      const session = relay?.snapshot().session;
+      if (session && session !== listed) {
+        stopList();
+        listed = session;
+        stopList = session.channels.subscribeList(check);
+      }
+    };
+    if (signal.aborted) return aborted();
+    signal.addEventListener("abort", aborted, { once: true });
+    // Subscribe before reading, so a change in between is not missed.
+    stop = relay?.subscribe(check) ?? stop;
+    check();
   });
 }
 

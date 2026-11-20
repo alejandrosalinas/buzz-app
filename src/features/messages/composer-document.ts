@@ -6,7 +6,7 @@ import {
 } from "prosemirror-model";
 import { bulletList, orderedList, listItem } from "prosemirror-schema-list";
 import { composerLinkUrl } from "./composer-link";
-import { scanMarkdown } from "../relay/message-content";
+import { MAX_MARKDOWN_LENGTH, scanMarkdown } from "../relay/message-content";
 import type {
   MentionDraft,
   DraftRecipient,
@@ -24,8 +24,10 @@ import {
 export const composerSchema = new Schema<
   | "doc"
   | "paragraph"
+  | "heading"
   | "blockquote"
   | "code_block"
+  | "markdown_table"
   | "bullet_list"
   | "ordered_list"
   | "list_item"
@@ -49,6 +51,25 @@ export const composerSchema = new Schema<
       whitespace: "pre",
       toDOM: () => ["p", 0],
       parseDOM: [{ tag: "p" }, { tag: "div" }],
+    },
+    heading: {
+      group: "block",
+      content: "inline*",
+      defining: true,
+      attrs: {
+        level: {
+          default: 1,
+          validate: (value) => {
+            if (!Number.isInteger(value) || value < 1 || value > 6)
+              throw new RangeError("Invalid heading level");
+          },
+        },
+      },
+      toDOM: (node) => [`h${node.attrs.level}`, 0],
+      parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+        tag: `h${level}`,
+        attrs: { level },
+      })),
     },
     blockquote: {
       group: "block",
@@ -82,9 +103,39 @@ export const composerSchema = new Schema<
         },
       ],
     },
-    bullet_list: { ...bulletList, group: "block", content: "list_item+" },
-    ordered_list: { ...orderedList, group: "block", content: "list_item+" },
-    list_item: { ...listItem, content: "paragraph block*" },
+    markdown_table: {
+      group: "block",
+      isolating: true,
+      attrs: { source: { validate: "string" } },
+      leafText: (node) => node.attrs.source,
+      toDOM: (node) => ["div", { contenteditable: "false" }, node.attrs.source],
+    },
+    bullet_list: {
+      ...bulletList,
+      attrs: {
+        ...bulletList.attrs,
+        spread: { default: false, validate: "boolean" },
+      },
+      group: "block",
+      content: "list_item+",
+    },
+    ordered_list: {
+      ...orderedList,
+      attrs: {
+        ...orderedList.attrs,
+        spread: { default: false, validate: "boolean" },
+      },
+      group: "block",
+      content: "list_item+",
+    },
+    list_item: {
+      ...listItem,
+      attrs: {
+        ...listItem.attrs,
+        spread: { default: false, validate: "boolean" },
+      },
+      content: "paragraph block*",
+    },
     text: { group: "inline" },
     hard_break: {
       group: "inline",
@@ -217,9 +268,10 @@ export function markdownRanges(text: string) {
 export function readComposerDocument(
   draft: MentionDraft,
   tokens: readonly SourceToken[],
+  mode: "chat" | "document" = "chat",
 ) {
   const nodes: EditorNode[] = [];
-  const restored = readComposerSnapshot(draft.document);
+  const restored = readComposerSnapshot(draft.document, mode);
   if (restored) {
     // Mention provenance is explicit metadata, never inferred from matching text.
     const source = projectComposerDocument(restored);
@@ -418,6 +470,7 @@ const projections = new WeakMap<EditorNode, ReturnType<typeof project>>();
 
 function project(doc: EditorNode) {
   let text = "";
+  let hasBlock = false;
   const positions = new Array<number>(doc.content.size + 1).fill(0);
   const recipients: DraftRecipient[] = [];
   const pending: PendingMention[] = [];
@@ -429,10 +482,26 @@ function project(doc: EditorNode) {
     to: number;
     node: EditorNode;
   })[] = [];
+  const tables: {
+    from: number;
+    to: number;
+    start: number;
+    end: number;
+    node: EditorNode;
+  }[] = [];
   doc.descendants((node, position) => {
-    if (node.isTextblock) {
-      if (blocks.length) text += "\n";
+    if (node.isTextblock || node.type.name === "markdown_table") {
+      if (hasBlock) text += "\n";
+      hasBlock = true;
       positions[position] = text.length;
+      if (node.type.name === "markdown_table") {
+        const start = text.length;
+        text += node.attrs.source;
+        const to = position + node.nodeSize;
+        positions[to] = text.length;
+        tables.push({ from: position, to, start, end: text.length, node });
+        return false;
+      }
       positions[position + 1] = text.length;
       carets.push(position + 1);
       blocks.push({
@@ -501,6 +570,7 @@ function project(doc: EditorNode) {
     } satisfies MentionDraft,
     positions,
     tokens,
+    tables,
     blocks,
     source(position: number) {
       return (
@@ -548,6 +618,10 @@ export function composerMarkdownContext(
       text.slice(end);
   };
   doc.descendants((node, position) => {
+    if (node.type.name === "markdown_table") {
+      mask(position, position + node.nodeSize);
+      return false;
+    }
     if (node.isTextblock && node.type.spec.code) {
       mask(position + 1, position + node.nodeSize - 1);
       return false;
@@ -564,15 +638,25 @@ export function composerMarkdownContext(
 }
 
 /** Local persistence envelope. The schema, not parallel mark ranges, owns shape. */
-export function readComposerSnapshot(value: unknown): EditorNode | undefined {
+export function readComposerSnapshot(
+  value: unknown,
+  mode: "chat" | "document" = "chat",
+): EditorNode | undefined {
   // Snapshots are never mutated, and validation plus parsing is O(draft).
-  if (typeof value !== "object" || !value) return read(value);
-  if (!snapshots.has(value)) snapshots.set(value, read(value));
-  return snapshots.get(value);
+  const cache = snapshots[mode];
+  if (typeof value !== "object" || !value) return;
+  if (!cache.has(value)) cache.set(value, read(value, mode));
+  return cache.get(value);
 }
-const snapshots = new WeakMap<object, EditorNode | undefined>();
+const snapshots = {
+  chat: new WeakMap<object, EditorNode | undefined>(),
+  document: new WeakMap<object, EditorNode | undefined>(),
+};
 
-function read(value: unknown): EditorNode | undefined {
+function read(
+  value: unknown,
+  mode: "chat" | "document",
+): EditorNode | undefined {
   if (
     !value ||
     typeof value !== "object" ||
@@ -582,13 +666,14 @@ function read(value: unknown): EditorNode | undefined {
   )
     return;
   const pending = [{ node: value.content, depth: 0 }];
+  const limit = mode === "document" ? MAX_MARKDOWN_LENGTH : 16000;
   let count = 0,
     length = 0;
   while (pending.length) {
     const item = pending.pop();
     if (!item) break;
     if (
-      ++count > 32001 ||
+      ++count > limit * 2 + 1 ||
       item.depth > 100 ||
       !item.node ||
       typeof item.node !== "object"
@@ -597,11 +682,16 @@ function read(value: unknown): EditorNode | undefined {
     const node = item.node as Record<string, unknown>;
     if (typeof node.type !== "string" || !composerSchema.nodes[node.type])
       return;
+    if (
+      mode === "chat" &&
+      (node.type === "heading" || node.type === "markdown_table")
+    )
+      return;
     if (node.type === "text") {
       if (typeof node.text !== "string") return;
       length += node.text.length;
     }
-    if (node.type === "token") {
+    if (node.type === "token" || node.type === "markdown_table") {
       if (
         !node.attrs ||
         typeof node.attrs !== "object" ||
@@ -610,7 +700,11 @@ function read(value: unknown): EditorNode | undefined {
       )
         return;
       length += node.attrs.source.length;
-      if ("semantic" in node.attrs && node.attrs.semantic !== null) {
+      if (
+        node.type === "token" &&
+        "semantic" in node.attrs &&
+        node.attrs.semantic !== null
+      ) {
         const token = composerToken(node.attrs.semantic);
         if (
           !token ||
@@ -622,7 +716,7 @@ function read(value: unknown): EditorNode | undefined {
           return;
       }
     }
-    if (length > 16000) return;
+    if (length > limit) return;
     if (node.content !== undefined) {
       if (!Array.isArray(node.content)) return;
       for (const child of node.content)

@@ -147,16 +147,26 @@ async function hold(lock: string) {
   await new Promise((resolve) => holder.stdout.once("data", resolve));
   return holder;
 }
-/** Resolves once the codex.sh with process `pid` is waiting for a lock. */
-const waiting = (pid: number | undefined) =>
-  expect
-    .poll(() =>
-      run("pgrep", ["-P", String(pid), "-x", "flock|perl"]).then(
-        () => true,
-        () => false,
-      ),
-    )
-    .toBe(true);
+/** Resolves once the codex.sh `running` is waiting for a lock, and fails if it
+ * ends first. How long codex.sh takes to get there under load is not the
+ * behavior under test. */
+async function waiting(running: PromiseWithChild<unknown>) {
+  let ended = false;
+  running.then(
+    () => (ended = true),
+    () => (ended = true),
+  );
+  const pid = String(running.child.pid);
+  while (
+    !(await run("pgrep", ["-P", pid, "-x", "flock|perl"]).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    if (ended) throw new Error("codex.sh ended before it waited for a lock");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 it("waits for a switch in progress, and goes on once its holder is killed", async () => {
   const { dir, step, selected } = await disk(["0.1.0", "0.2.0"], "0.1.0");
@@ -166,7 +176,7 @@ it("waits for a switch in progress, and goes on once its holder is killed", asyn
   let switching: ReturnType<typeof step>;
   try {
     switching = step("use", "0.2.0");
-    await waiting(switching.child.pid);
+    await waiting(switching);
     expect(await selected()).toBe("codex-cli 0.1.0");
   } finally {
     holder.kill("SIGKILL");
@@ -181,7 +191,7 @@ it("leaves the release in use when its switch's release is pruned while it waits
   let switching: ReturnType<typeof step>;
   try {
     switching = step("use", "0.1.0");
-    await waiting(switching.child.pid);
+    await waiting(switching);
     // The holder's own prune removes the older release this switch named.
     await rm(join(dir, "0.1.0"), { recursive: true });
   } finally {
@@ -552,17 +562,34 @@ it("makes a review wait for a sign-in in progress", async () => {
   // Signing in again, so the sign-in that review sees names the workspace.
   await mkdir(f.codex);
   await writeFile(join(f.codex, "auth.json"), JSON.stringify(chatgpt, null, 2));
+  // Watched from before login starts, so its `started` can't be missed.
+  let started!: () => void;
+  let failed!: (error: Error) => void;
+  const signing = new Promise<void>((resolve, reject) => {
+    started = resolve;
+    failed = reject;
+  });
+  const watcher = watch(f.home, (_event, name) => {
+    if (name === "started") started();
+  });
+  watcher.once("error", failed);
   const login = f.step("login");
   try {
-    await expect
-      .poll(() => stat(join(f.home, "started")).then(Boolean, () => false))
-      .toBe(true);
+    // Observe the sign-in actually holding the lock. How long codex.sh takes
+    // to get there under load is not the behavior under test.
+    await Promise.race([
+      signing,
+      login.then(() => {
+        throw new Error("Login exited before it started signing in");
+      }),
+    ]);
     const review = f.step("review");
-    await waiting(review.child.pid);
+    await waiting(review);
     await writeFile(join(f.home, "go"), "");
     await login;
     expect((await review).stdout).toContain(workspace);
   } finally {
+    watcher.close();
     // Fails once `afterEach` has removed a timed-out test's home.
     await writeFile(join(f.home, "go"), "").catch(() => {});
     await login.catch(() => {});
@@ -660,7 +687,7 @@ it("leaves the shared sign-in alone when another run hands it over while it wait
   let handed: number;
   try {
     waiter = f.step("run");
-    await waiting(waiter.child.pid);
+    await waiting(waiter);
     // The run holding the lock hands the sign-in over and links it again.
     await writeFile(join(f.codex, "auth.json"), "signed in");
     await rm(join(f.own, "auth.json"));

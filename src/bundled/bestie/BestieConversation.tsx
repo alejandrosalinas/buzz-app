@@ -667,9 +667,7 @@ export function BestieConversation({
                   secondary.openConversationLink(channel.id, target)
                 }
                 // Adding someone can start or open another DM: go there.
-                onOpenConversation={(id) =>
-                  openLink(`buzz://channel/${encodeURIComponent(id)}`)
-                }
+                onOpenMessage={openLink}
               />
             )}
             {secondary.drag.feedback}

@@ -54,7 +54,11 @@ function buzzStart(prompt: string) {
     return undefined;
   }
   const channelId = str(context?.channel_id);
-  if (!channelId) return undefined;
+  if (
+    !channelId &&
+    !(context?.session_scope === "community" && str(context.agent))
+  )
+    return undefined;
   // Before agents joined several communities, every thread was its home's.
   const agent = str(context?.agent) || undefined;
   const root = str(context?.session_thread);
@@ -70,7 +74,7 @@ function buzzStart(prompt: string) {
   return {
     agent,
     place: {
-      channelId,
+      ...(channelId ? { channelId } : {}),
       ...(root ? { root } : {}),
       ...(title ? { title } : {}),
     },

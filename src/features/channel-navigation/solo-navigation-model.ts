@@ -43,6 +43,7 @@ export function projectSoloRegions(
     snapshot?: SoloRegionSnapshot;
     failed: boolean;
   }>[],
+  previousRegions: readonly SoloRegion[],
   title: (label: string, value?: string) => string,
   isPluginDisabled: (label: string) => boolean = () => false,
 ): SoloPlacement {
@@ -58,6 +59,9 @@ export function projectSoloRegions(
   }
   const excluded = new Set<string>();
   const managed = new Set<string>();
+  const previousByLabel = new Map(
+    previousRegions.map((region) => [region.label, region]),
+  );
   const regions = [...groups]
     .map(([label, rows]): SoloRegion => {
       const current = sources.find(
@@ -77,14 +81,26 @@ export function projectSoloRegions(
         managed.add(row.id);
         if (!disabled) excluded.add(row.id);
       }
+      const previous = previousByLabel.get(label);
+      const roster =
+        previous?.channels.length === rows.length &&
+        rows.every((row, index) => row === previous.channels[index])
+          ? previous.channels
+          : rows;
+      // Source revisions often change presentation without changing destinations.
+      const live =
+        roster === previous?.channels &&
+        previous.live.size === (reason ? 0 : roster.length)
+          ? previous.live
+          : new Set(reason ? [] : roster.map((row) => row.id));
       return {
         key:
           current?.source.key ??
           label.slice(REGION_PREFIX.length).replace(/:([^:]*)$/, "/$1"),
         label,
         title: title(label, current?.source.title),
-        channels: rows,
-        live: new Set(reason ? [] : rows.map((row) => row.id)),
+        channels: roster,
+        live,
         ...(current ? { source: current.source } : {}),
         ...(current?.snapshot ? { snapshot: current.snapshot } : {}),
         ...(reason ? { reason } : {}),

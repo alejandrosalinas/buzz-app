@@ -64,50 +64,18 @@
   margin-bottom: var(--space-4);
 }
 .viewer {
-  --diff-font-family: var(--font-mono);
-  --diff-background-color: var(--surface-panel);
-  --diff-text-color: var(--text-standard);
-  --diff-gutter-insert-background-color: var(--affordance-success);
-  --diff-gutter-delete-background-color: var(--affordance-danger);
-  --diff-code-insert-background-color: var(--affordance-success);
-  --diff-code-delete-background-color: var(--affordance-danger);
-  --diff-code-insert-edit-background-color: var(--affordance-success);
-  --diff-code-delete-edit-background-color: var(--affordance-danger);
-  --diff-omit-gutter-line-color: var(--border-standard);
-  --diff-selection-background-color: var(--affordance-selected);
   display: grid;
   gap: var(--space-3);
+}
+.viewer diffs-container {
+  display: block;
+  min-width: 0;
+  --diffs-font-family: var(--font-mono);
+  --diffs-font-size: var(--text-mono);
 }
 .file {
   min-width: 0;
   overflow: auto;
-}
-.fileHeader {
-  position: sticky;
-  left: 0;
-}
-.added,
-.viewer [class~="diff-code-insert"],
-.viewer [class~="diff-gutter-insert"] {
-  color: var(--text-success);
-}
-.removed,
-.viewer [class~="diff-code-delete"],
-.viewer [class~="diff-gutter-delete"] {
-  color: var(--text-danger);
-}
-.unified {
-  min-width: 100%;
-}
-.split {
-  min-width: 48rem;
-}
-.viewer [class~="diff"] {
-  font: inherit;
-}
-.viewer [class~="diff-code"],
-.viewer [class~="diff-gutter"] {
-  line-height: var(--text-mono--line-height);
 }
 .raw {
   margin: 0;

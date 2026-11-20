@@ -2144,6 +2144,46 @@ it.each(
     }
   },
 );
+it("keeps the message's place when older rows move its date separator to another item", async () => {
+  const h = mount(true);
+  await frame();
+  const region = screen.getByRole("region", {
+    name: "Channel message history",
+  });
+  let itemTop = 520;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      const row = this.closest<HTMLElement>("[data-message-id]");
+      const top =
+        row?.dataset.messageId === h.saved.anchor.id
+          ? itemTop +
+            (this.closest("[data-message-action-anchor]") &&
+            !document.querySelector('[data-message-id="older"]')
+              ? 120
+              : 0)
+          : row?.dataset.messageId === "older"
+            ? 0
+            : 1400;
+      return new DOMRect(0, row ? top - region.scrollTop : 0, 800, 100);
+    },
+  );
+  region.scrollTop = 400;
+  fireEvent.wheel(region, { deltaY: -1000 });
+  fireEvent.scroll(region);
+  const before = screen
+    .getByText("Saved reading anchor")
+    .getBoundingClientRect().top;
+  // The interleaved page moves the virtual item by 245px, but removes its
+  // 120px date separator. The message itself moves by only 125px.
+  scroll.itemOffset.mockImplementation((index) => (index ? 245 : 0));
+  itemTop += 245;
+  h.pageAroundAnchor();
+  expect(region.scrollTop).toBe(525);
+  expect(
+    screen.getByText("Saved reading anchor").getBoundingClientRect().top,
+  ).toBe(before);
+});
+
 it("retargets the visible row after movement consumed at a correction boundary", async () => {
   const h = mount(true);
   await frame();

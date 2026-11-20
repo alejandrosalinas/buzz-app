@@ -227,6 +227,9 @@ export function kitTag(record: KitRecord) {
 export function coordinate(record: KitRecord) {
   return `${kitTag(record)}:${encodeURIComponent(record.community)}:${record.value.type}:${record.value.id}`;
 }
+
+export const legacyWorkspaceRecipeCoordinate = (community: string) =>
+  `${ME_KIT_TAG}:${encodeURIComponent(community)}:groups:me`;
 export function resolveLineup(
   lineup: Lineup,
   entries: readonly KitEntry[],

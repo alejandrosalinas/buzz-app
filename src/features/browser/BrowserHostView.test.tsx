@@ -10,12 +10,14 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Context } from "@deepseek-ai/cordis";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PanelWorkspace } from "../panels/PanelWorkspace";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { GaugeIcon } from "../../shared/design-system/icons";
 import { BrowserHostView } from "./BrowserHostView";
 import { BrowserAttachError, type BrowserPlatform } from "./platform";
+import { BrowserService } from "./service";
 import { BrowserSessions } from "./sessions";
 
 class TestResizeObserver {
@@ -101,6 +103,31 @@ it("attaches hidden-first guest bounds and detaches on close", async () => {
   await waitFor(() =>
     expect(platform.detach).toHaveBeenCalledWith("session-1"),
   );
+});
+
+it("keeps the website when a panel that reads ctx.browser.View draws again", async () => {
+  const platform = fakePlatform();
+  const context = new Context();
+  new BrowserService(context, platform);
+  const Panel = ({ title }: { title: string }) => (
+    <div title={title}>
+      <context.browser.View url="https://example.com" />
+    </div>
+  );
+  const view = render(<Panel title="one" />);
+  await waitFor(() =>
+    expect(platform.setBounds).toHaveBeenCalledWith(
+      "session-1",
+      { x: 10, y: 20, width: 400, height: 300 },
+      true,
+    ),
+  );
+  view.rerender(<Panel title="two" />);
+  await act(async () => {});
+  expect(platform.attach).toHaveBeenCalledTimes(1);
+  expect(platform.detach).not.toHaveBeenCalled();
+  view.unmount();
+  await context.fiber.dispose();
 });
 
 it("detaches a late attach result and serializes its replacement", async () => {

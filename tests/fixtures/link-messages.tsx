@@ -104,7 +104,7 @@ const row: ChannelMessage = {
   channelId: "test",
   authorId: "test",
   createdAt: 1,
-  content: `Looks like Material 3 or [this shadcdn/ui clone]\\([https://github.com/duobaseio/forui](https://github.com/duobaseio/forui)).\nReview <https://github.com/block/buzz/issues/1234>. Files: <https://drive.google.com/drive/folders/example>.\nAsk @Alex Chen and @Build Bot in #design.\nA message: <buzz://message?channel=design&id=${"1".repeat(64)}>. A thread: <buzz://message?channel=planning&id=${"1".repeat(64)}&thread=${"2".repeat(64)}>.`,
+  content: `Skill: [SKILL.md](https://github.com/example-org/example-repo/blob/main/skills/pr-ship/SKILL.md).\nRaw skill: <https://raw.githubusercontent.com/example-org/example-repo/main/skills/pr-ship/SKILL.md>.\nSkill sections: [**Install**](https://github.com/example-org/example-repo/blob/main/skills/pr-ship/SKILL.md#install) and [*Rollback*](https://github.com/example-org/example-repo/blob/main/skills/pr-ship/SKILL.md#rollback).\nDocument: [Readme](https://github.com/block/buzz/blob/main/README.md).\nLooks like Material 3 or [this shadcdn/ui clone]\\([https://github.com/duobaseio/forui](https://github.com/duobaseio/forui)).\nReview <https://github.com/block/buzz/issues/1234>. Files: <https://drive.google.com/drive/folders/example>.\nAsk @Alex Chen and @Build Bot in #design.\nA message: <buzz://message?channel=design&id=${"1".repeat(64)}>. A thread: <buzz://message?channel=planning&id=${"1".repeat(64)}&thread=${"2".repeat(64)}>.`,
   mentions: ["a".repeat(64), "b".repeat(64)],
   participants: [],
   attachments: [],

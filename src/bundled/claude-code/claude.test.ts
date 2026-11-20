@@ -61,6 +61,20 @@ it("starts Claude as the SDK does and initializes it with the system prompt", as
   expect(claude.started).toBe(false);
 });
 
+it.each([
+  [undefined, undefined],
+  [200000, "200000"],
+])("starts Claude compacting at %s tokens", async (compactAt, window) => {
+  const { spawn, processes } = fakeSpawn();
+  await ClaudeProcess.start(spawn, {
+    ...launch,
+    ...(compactAt && { compactAt }),
+  });
+  expect(processes[0]?.options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(
+    window,
+  );
+});
+
 it("resumes a session on the system prompt it is launched with, not the one it saved", async () => {
   const { spawn, processes } = fakeSpawn();
   await ClaudeProcess.start(spawn, { ...launch, resume: "old-session" });
@@ -1113,4 +1127,136 @@ it("dispatches SDK callbacks using the process session, independent of payload c
     },
   });
   await process.kill();
+});
+
+it.each(["quiet", "exit"] as const)(
+  "releases native idle waiters on %s",
+  async (end) => {
+    const { spawn, processes } = fakeSpawn();
+    const claude = await ClaudeProcess.start(spawn, {
+      ...launch,
+      sessionId: "idle",
+    });
+    await claude.send("start background work");
+    const fake = processes[0];
+    if (!fake) throw new Error("no process");
+    backgroundTasks(fake, {});
+    const settled = vi.fn();
+    const idle = claude.idle().then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    if (end === "exit") fake.exit(0);
+    else backgroundTasks(fake, { ambient: true });
+    await idle;
+    expect(settled).toHaveBeenCalledOnce();
+    await claude.kill();
+  },
+);
+
+it("holds idle across task removal until the notified continuation finishes", async () => {
+  const { spawn, processes } = fakeSpawn();
+  const claude = await ClaudeProcess.start(spawn, {
+    ...launch,
+    sessionId: "continuation",
+  });
+  await claude.send("start background");
+  const fake = processes[0];
+  if (!fake) throw new Error("missing process");
+  fake.emit({
+    type: "system",
+    subtype: "background_tasks_changed",
+    tasks: [{ task_id: "build" }],
+  });
+  const settled = vi.fn();
+  const idle = claude.idle().then(settled);
+  fake.emit({ type: "system", subtype: "task_notification", task_id: "build" });
+  backgroundTasks(fake);
+  await Promise.resolve();
+  expect(settled).not.toHaveBeenCalled();
+  expect(claude.active).toBe(true);
+  sessionState(fake, "running");
+  sessionState(fake, "idle");
+  await idle;
+  expect(claude.active).toBe(false);
+  await claude.kill();
+});
+
+it.each(["foreground", "continuation"] as const)(
+  "settles task notifications consumed during %s work",
+  async (work) => {
+    const { spawn, processes } = fakeSpawn();
+    const claude = await ClaudeProcess.start(spawn, {
+      ...launch,
+      sessionId: "overlap",
+    });
+    await claude.send("start background");
+    const fake = processes[0];
+    if (!fake) throw new Error("missing process");
+    try {
+      fake.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "first" }, { task_id: "second" }],
+      });
+      if (work === "continuation")
+        fake.emit({
+          type: "system",
+          subtype: "task_notification",
+          task_id: "first",
+        });
+      sessionState(fake, "running");
+      fake.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "second",
+      });
+      backgroundTasks(fake);
+      const settled = vi.fn();
+      const idle = claude.idle().then(settled);
+      sessionState(fake, "idle");
+      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+      await idle;
+      expect(claude.active).toBe(false);
+    } finally {
+      await claude.kill();
+    }
+  },
+);
+
+it("releases result-only background continuations and their idle waiters", async () => {
+  const { spawn, processes } = fakeSpawn();
+  const claude = await ClaudeProcess.start(
+    (id, options) =>
+      spawn(id, {
+        ...options,
+        env: { ...options?.env, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "0" },
+      }),
+    { ...launch, sessionId: "result-only" },
+  );
+  try {
+    await claude.send("start background");
+    const fake = processes[0];
+    if (!fake) throw new Error("missing process");
+    fake.emit({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "build" }],
+    });
+    const settled = vi.fn();
+    const idle = claude.idle().then(settled);
+    fake.emit({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "build",
+    });
+    backgroundTasks(fake);
+    expect(claude.active).toBe(true);
+    fake.emit({ type: "result", subtype: "success", is_error: false });
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    await idle;
+    expect(claude.active).toBe(false);
+    await expect(claude.send("next request")).resolves.toEqual({ ok: true });
+  } finally {
+    await claude.kill();
+  }
 });

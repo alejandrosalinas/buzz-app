@@ -26,6 +26,7 @@ import inlineStyles from "../../shared/InlineReference.module.css";
 import { apply as applyLinks } from "../links/index";
 import { apply } from "./index";
 import { PullLink } from "./PullLink";
+import { GitPullRequestApprovedIcon } from "../../shared/design-system/icons/index";
 import { issueIcons, stateIcons } from "./pull-state-view";
 import type { PullState, PullStates } from "./pull-states";
 
@@ -65,11 +66,15 @@ function fakeStates(initial?: PullState | "failed") {
 const glyph = (
   Icon:
     | (typeof stateIcons)[keyof typeof stateIcons]
-    | (typeof issueIcons)[keyof typeof issueIcons],
+    | (typeof issueIcons)[keyof typeof issueIcons]
+    | typeof GitPullRequestApprovedIcon,
 ) =>
   renderToStaticMarkup(
     <Icon aria-hidden="true" className={inlineStyles.icon} />,
   );
+/* The approved glyph's mask id comes from useId, so it differs per render. */
+const withoutIds = (markup: string | undefined) =>
+  markup?.replace(/id="[^"]*"|url\(#[^)]*\)/g, "");
 const icon = (container: HTMLElement) =>
   container.querySelector("[data-pr-state]");
 
@@ -113,6 +118,54 @@ it("shows the authored label with the plain pull request glyph until read, then 
   // A removed link leaves the anchor undescribed.
   unmount();
   expect(describe).toHaveBeenLastCalledWith(undefined);
+});
+
+it("checks an open pull request's glyph only when approved, and says when changes are requested", () => {
+  const states = fakeStates();
+  const describe = vi.fn();
+  const { container } = render(
+    <LinkDescriptionContext value={describe}>
+      <PullLink url={pull} states={states} />
+    </LinkDescriptionContext>,
+  );
+  for (const [state, Icon, words] of [
+    [
+      { state: "open", review: "approved" },
+      GitPullRequestApprovedIcon,
+      "Pull request, open, approved",
+    ],
+    // A draft cannot merge, approved or not, so it keeps the draft glyph.
+    [
+      { state: "draft", review: "approved" },
+      stateIcons.draft,
+      "Pull request, draft, approved",
+    ],
+    [
+      { state: "draft", review: "changes requested", checks: "failure" },
+      stateIcons.draft,
+      "Pull request, draft, changes requested, checks failing",
+    ],
+    // Not yet approved, or read without gh: nothing about reviews.
+    [{ state: "open" }, stateIcons.open, "Pull request, open"],
+    // Once merged or closed, its reviews no longer matter.
+    [
+      { state: "merged", review: "approved" },
+      stateIcons.merged,
+      "Pull request, merged",
+    ],
+    [
+      { state: "closed", review: "changes requested" },
+      stateIcons.closed,
+      "Pull request, closed",
+    ],
+  ] as const) {
+    act(() => states.set(state));
+    expect(icon(container)).toHaveAttribute("title", words);
+    expect(describe).toHaveBeenLastCalledWith(words);
+    expect(withoutIds(icon(container)?.innerHTML)).toBe(
+      withoutIds(glyph(Icon)),
+    );
+  }
 });
 
 it("shows an issue link's authored label with the plain issue glyph until read, then each state's own", () => {

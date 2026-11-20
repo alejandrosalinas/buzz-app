@@ -268,6 +268,14 @@ for (const outcome of ["saved", "failed after moving focus"]) {
         .getByRole("button", { name: "Close Canvas tab", exact: true })
         .click();
       await expect(canvas).toHaveCount(0);
+      // The closing dock hides from the accessibility tree at once, but the
+      // split keeps moving the header until the dock leaves. The menu trigger
+      // opens on mousedown and cancels on a mouseup outside it.
+      await expect(
+        page.locator(
+          "[data-channel-workspace] > [data-panel-dock]:not([hidden])",
+        ),
+      ).toHaveCount(0);
       await openCanvas();
       await expect(view).toBeVisible();
       await edit.click();

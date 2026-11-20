@@ -183,7 +183,7 @@ export function createTurns(git: Git, storage: Storage = localStorage) {
       );
       const found = (
         await Promise.all(
-          projectFolders(canvas).map((folder) =>
+          projectFolders(canvas?.content).map((folder) =>
             checkoutsOf(git, folder).catch(() => []),
           ),
         )

@@ -4,10 +4,12 @@ import { companionPlugins } from "./companion-fixture";
 import * as shortcutCounter from "../../examples/plugins/shortcut-counter/plugin.js";
 import shortcutManifest from "../../examples/plugins/shortcut-counter/manifest.json";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import type { BundledPlugin } from "../../src/plugins/manager";
 import type { Navigation } from "../../src/features/navigation/controller";
 import type { PageProps } from "../../src/features/pages/service";
 import type { PageNavigation } from "../../src/features/navigation/service";
+import type { PageTabTarget } from "../../src/features/conversation/contracts";
 import type { RelayData } from "../../src/features/relay/service";
 import { PanelSubview } from "../../src/features/panels/PanelSubview";
 import { FolderOpenIcon } from "../../src/shared/design-system/icons";
@@ -398,7 +400,7 @@ export const fixturePlugins: readonly BundledPlugin[] = [
   {
     manifest: { id: "fixture.session", name: "Session fixture", apiVersion: 1 },
     module: {
-      inject: ["pages", "relay", "conversation"],
+      inject: ["pages", "relay", "conversation", "navigation"],
       apply(ctx) {
         const relay = ctx.relay;
         window.fixtureRelay = relay;
@@ -456,6 +458,88 @@ export const fixturePlugins: readonly BundledPlugin[] = [
             </Tabs>
           );
         }
+        function ReaderPage({ navigation }: PageProps) {
+          const [request, setRequest] = useState<{
+            opening: AbortSignal | undefined;
+            signal: AbortSignal;
+          }>();
+          const connection = useSyncExternalStore(
+            relay.subscribe,
+            relay.snapshot,
+          );
+          const Workspace = ctx.conversation.ui.Workspace;
+          const route = navigation?.target;
+          const opening = navigation?.signal;
+          const target =
+            route?.kind === "page"
+              ? (route.route?.params as PageTabTarget)
+              : undefined;
+          useEffect(() => {
+            if (connection.status === "ready" && Workspace && target)
+              navigation?.complete({ status: "opened" });
+          }, [connection.status, Workspace, target, navigation]);
+          if (connection.status !== "ready" || !Workspace || !target)
+            return null;
+          return (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                height: "100%",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() =>
+                  flushSync(() =>
+                    setRequest({
+                      opening,
+                      signal: new AbortController().signal,
+                    }),
+                  )
+                }
+              >
+                Jump retained transcript
+              </button>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <Workspace
+                  id="reader-fixture"
+                  session={connection.session}
+                  scope={connection.scope}
+                  label="Transcript fixture"
+                  target={target}
+                  latestRequest={
+                    request && request.opening === opening
+                      ? request.signal
+                      : navigation?.traversal
+                        ? undefined
+                        : opening
+                  }
+                />
+              </div>
+            </div>
+          );
+        }
+        ctx.pages.register({
+          id: "reader",
+          title: "Transcript fixture",
+          layout: "workspace",
+          handlesNavigation: true,
+          route: {
+            version: 1,
+            validate: (params) =>
+              !!params && typeof params === "object" && "channelId" in params,
+          },
+          component: ReaderPage,
+          sidebar: ({ target }) => (
+            <button
+              type="button"
+              onClick={() => void ctx.navigation.open(target)}
+            >
+              Reselect transcript
+            </button>
+          ),
+        });
         ctx.pages.register({
           id: "thread-focus",
           title: "Thread focus fixture",

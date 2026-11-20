@@ -70,7 +70,7 @@ test("registered backdrops paint in order between the shell and its controls, an
       .getBoundingClientRect();
     return {
       // Below the header row, beside the bottom of the window: a bare gutter.
-      gutter: [2, window.innerHeight - 2],
+      gutter: [window.innerWidth - 2, window.innerHeight - 2],
       // Inside the history group, above its icons, and just outside it: the
       // group's own fill and the floor's spread around it.
       group: [history.left + history.width / 2, history.top + 3],

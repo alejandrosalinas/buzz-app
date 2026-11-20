@@ -8,13 +8,18 @@ import {
 import type { RelaySession } from "../../features/relay/session";
 import type { ReadFilter } from "../../features/relay/events";
 import { MatchedLabel } from "../../features/search/MatchedLabel";
+import {
+  type PreviewMentions,
+  PreviewText,
+  withMentionedIds,
+} from "../../features/messages/PreviewText";
 import { termMatches } from "../../features/search/snippet";
 import { SEARCH_DEBOUNCE_MS } from "../../shared/search-debounce";
 import { formatItemTimestamp } from "../../shared/datetime";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { MessageRow } from "../../features/messages/MessageRow";
 import type { SearchDestination, SearchTone } from "./SearchChoices";
-import { SEARCH_KINDS, searchText } from "./useSearchMessages";
+import { SEARCH_KINDS, eventMentions, searchText } from "./useSearchMessages";
 
 /** What the preview beside a highlighted row reads to show it. */
 export type PeekTarget =
@@ -25,6 +30,7 @@ export type PeekTarget =
       createdAt: number;
       authorId: string;
       text: string;
+      mentioned: PreviewMentions;
     }
   | { kind: "channel"; channelId: string; about?: string | undefined }
   | { kind: "person"; pubkey: string };
@@ -39,6 +45,7 @@ type Line = {
   authorId: string;
   createdAt: number;
   text: string;
+  mentioned: PreviewMentions;
 };
 
 /** The pause on a row before its preview reads anything, so moving through
@@ -87,6 +94,7 @@ function linesOf(events: readonly { [key: string]: unknown }[]): Line[] {
         authorId: event.pubkey,
         createdAt: event.created_at,
         text: searchText(event) || "Attachment",
+        mentioned: eventMentions(event),
       },
     ];
   });
@@ -145,6 +153,7 @@ async function readLines(
         authorId: target.authorId,
         createdAt: target.createdAt,
         text: target.text,
+        mentioned: target.mentioned,
       },
       ...later,
     ];
@@ -186,7 +195,10 @@ function useLines(
             setState({ key, lines });
             void session.profiles
               .ensure(
-                [...new Set(lines.map((line) => line.authorId))],
+                withMentionedIds(
+                  lines.map((line) => line.authorId),
+                  lines.map((line) => line.mentioned),
+                ),
                 "background",
               )
               .catch(() => {});
@@ -285,6 +297,7 @@ export function SearchPreview({
             authorId: message.authorId,
             createdAt: message.createdAt,
             text: message.text,
+            mentioned: message.mentioned,
           },
         ].filter(readable)
       : []);
@@ -306,9 +319,13 @@ export function SearchPreview({
         }}
         bodyContent={
           <div className="search-peek-text text-message">
-            <MatchedLabel
-              label={text}
-              positions={hit || !message ? termMatches(text, terms) : undefined}
+            <PreviewText
+              text={text}
+              full={line.text}
+              mentions={line.mentioned}
+              matches={hit || !message ? termMatches(text, terms) : undefined}
+              session={session}
+              channelId={line.channelId}
             />
           </div>
         }

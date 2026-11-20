@@ -2190,6 +2190,24 @@ function RadioGroupSpecimen() {
         </Field>
       </SpecimenGroup>
       <SpecimenGroup
+        label="Compact checkmarked rows"
+        code={`<Field label="Voice">
+  <RadioGroup size="sm" defaultValue="cove">
+    <Radio value="cove" label="Cove" variant="row" />
+    <Radio value="maple" label="Maple" variant="row" />
+    <Radio value="none" label="Unavailable" variant="row" disabled />
+  </RadioGroup>
+</Field>`}
+      >
+        <Field label="Voice">
+          <RadioGroup size="sm" defaultValue="cove">
+            <Radio value="cove" label="Cove" variant="row" />
+            <Radio value="maple" label="Maple" variant="row" />
+            <Radio value="none" label="Unavailable" variant="row" disabled />
+          </RadioGroup>
+        </Field>
+      </SpecimenGroup>
+      <SpecimenGroup
         label="Native form reset"
         code={`<form aria-label="Notification preferences">
   <Field label="Notifications">

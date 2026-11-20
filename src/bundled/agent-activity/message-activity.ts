@@ -18,12 +18,19 @@ export function messageActivity(...args: Parameters<typeof requestWork>) {
   return messageWork(...args).live;
 }
 
-/** Working requests and persistent confirmed outcomes. Uncertain telemetry is
- * retained by requestWork for recovery, without becoming a conversation error. */
+/** Working requests and persistent confirmed outcomes: those the owner
+ * stopped, and finished or superseded ones with a notice about how they ran
+ * (such as without the agent gateway), which says where the turn's data
+ * went. Uncertain telemetry is retained by requestWork for recovery, without
+ * becoming a conversation error. */
 export function messageWork(...args: Parameters<typeof requestWork>) {
   const work = requestWork(...args);
   return {
     live: work.filter(live),
-    stopped: work.filter(({ state }) => state === "stopped"),
+    stopped: work.filter(
+      ({ state, notice }) =>
+        state === "stopped" ||
+        ((state === "done" || state === "superseded") && !!notice),
+    ),
   };
 }

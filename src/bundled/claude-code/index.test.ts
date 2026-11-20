@@ -120,6 +120,14 @@ it("observes saved sessions with the live status of running ones", () => {
     },
     { key: "dm", agent, sessionId: "s2", channelId: "dm", at: 2 },
     { key: "old", agent, sessionId: "s3", channelId: "old", at: 1 },
+    {
+      key: "@community",
+      agent,
+      sessionId: "shared",
+      channelId: "old",
+      community: true,
+      at: 4,
+    },
   ]);
   vi.spyOn(ClaudeRuntime.prototype, "sessions").mockReturnValue([
     { key: "room/r", busy: true },
@@ -144,7 +152,30 @@ it("observes saved sessions with the live status of running ones", () => {
     { channelId: "dm", at: 2, status: "Idle" },
     // A conversation with no running process is unobserved, not idle.
     { channelId: "old", at: 1 },
+    { channelId: "old", community: true, at: 4 },
   ]);
+});
+
+it("declares its harness to the gateway for attribution only, so the route never holds or fails a turn", () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  let type: AgentType | undefined;
+  apply({
+    settingsCards: { register: vi.fn() },
+    agentProtection: { registerModels: vi.fn() },
+    pluginOwner: { id: "buzz.claude-code", revision: "r1" },
+    host: { request: vi.fn() },
+    agents: {
+      register: (registered: AgentType) => {
+        type = registered;
+      },
+      relay: () => undefined,
+    },
+    effect: vi.fn(),
+  } as never);
+  expect(type?.gateway).toEqual({
+    harness: "claude-code",
+    mode: "attribution",
+  });
 });
 
 it("shares a Claude agent's model as the claude runtime and imports it back", () => {
@@ -303,6 +334,72 @@ it("recommends a candidate only when Claude is signed in and lists its model and
   ready = false;
   const signedOut = new ClaudeSetup(vi.fn() as never);
   await expect(signedOut.offers(candidate("model-a"))).resolves.toBe(false);
+  // A check that failed, or a model list that came back empty, says nothing
+  // either way: the answer is unsure, so it rejects.
+  vi.mocked(ClaudeSetup.prototype.check).mockImplementation(
+    async function (this: { state: object }) {
+      this.state = {
+        ...this.state,
+        status: { state: "error", message: "timed out" },
+      };
+    },
+  );
+  await expect(
+    new ClaudeSetup(vi.fn() as never).offers(candidate("model-a")),
+  ).rejects.toThrow("Claude couldn't say whether it is ready");
+  ready = true;
+  vi.mocked(ClaudeSetup.prototype.check).mockImplementation(
+    async function (this: { state: object }) {
+      this.state = { ...this.state, status: { state: "ready" } };
+    },
+  );
+  vi.mocked(ClaudeSetup.prototype.catalog).mockResolvedValue([]);
+  await expect(
+    new ClaudeSetup(vi.fn() as never).offers(candidate("model-a")),
+  ).rejects.toThrow("Claude didn't list its models");
+});
+
+it("waits for a refresh under way instead of answering from the last check", async () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  let finish = () => {};
+  // As a refresh that finds Claude signed out, while the last check said ready.
+  vi.spyOn(ClaudeSetup.prototype, "check").mockImplementation(function (this: {
+    state: object;
+  }) {
+    return new Promise<void>((resolve) => {
+      finish = () => {
+        this.state = {
+          ...this.state,
+          status: { state: "signed-out", version: "1" },
+          checking: false,
+        };
+        resolve();
+      };
+    });
+  });
+  vi.spyOn(ClaudeSetup.prototype, "catalog").mockResolvedValue([
+    { value: "model-a" },
+  ] as never);
+  const setup = new ClaudeSetup(vi.fn() as never);
+  Object.assign(setup, {
+    state: {
+      ...setup.snapshot(),
+      status: { state: "ready", version: "1" },
+      checking: true,
+    },
+  });
+  let answered: boolean | undefined;
+  const offered = setup
+    .offers({ model: "model-a", effort: "high" })
+    .then((value) => {
+      answered = value;
+    });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(answered).toBeUndefined();
+  finish();
+  await offered;
+  expect(answered).toBe(false);
 });
 
 it("runs an agent on Recommended on the candidate, else on the device default", async () => {

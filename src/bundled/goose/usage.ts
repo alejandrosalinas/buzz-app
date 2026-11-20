@@ -52,7 +52,12 @@ function buzzStart(messages: readonly Message[]) {
       ?.body.match(new RegExp(`^${name}: (.*)$`, "m"))?.[1]
       ?.trim();
   const channelId = field("Channel")?.match(/\(#([^)]+)\)$/)?.[1];
-  if (!channelId && field("Scope") !== "standalone") return undefined;
+  if (
+    !channelId &&
+    field("Session scope") !== "community" &&
+    field("Scope") !== "standalone"
+  )
+    return undefined;
   const root = field("Session scope") === "thread" && field("Thread root");
   const title = promptMessage(sections).text.split("\n", 1)[0]?.trim();
   return {

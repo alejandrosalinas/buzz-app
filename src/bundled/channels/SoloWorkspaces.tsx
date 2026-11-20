@@ -1,7 +1,10 @@
+import { workspaceSectionOrder } from "../../features/relay/sidebar-preferences";
 import { FadingLabel } from "./FadingLabel";
 import { ChannelSidebarRows } from "../../features/channel-navigation/ChannelSidebarRows";
 import { createPortal } from "react-dom";
 import type { ComposeWorkspaces } from "../../features/channel-navigation/WorkspaceComposition";
+import type { WorkspaceSidebarComposition } from "./sidebar-environment";
+import { sidebarDropRowKinds } from "./sidebar-sections";
 import { prepareSoloMove } from "../../features/channel-navigation/solo-navigation";
 import { useChatConversions } from "../../features/solo/conversion";
 import { ConvertToChannel } from "../../features/solo/ConvertToChannel";
@@ -25,7 +28,6 @@ import {
   useSidebarSectionDrag,
 } from "../../features/channel-navigation/ChannelSidebarDnd";
 import { WorkspaceSettings } from "../../features/solo/WorkspaceSettings";
-import { inactiveChat } from "./ArchiveInactiveChats";
 import {
   memo,
   cloneElement,
@@ -68,7 +70,8 @@ import {
   NavigationItem,
 } from "../../shared/design-system/ui/NavigationItem";
 import type { Navigation } from "../../features/navigation/controller";
-import { NewWorkspaceDialog, SoloChatMenuItems } from "./SoloChatMenu";
+import { SoloChatMenuItems } from "./SoloChatMenu";
+import { NewWorkspace } from "../../features/solo/NewWorkspace";
 import styles from "./SoloWorkspaces.module.css";
 import channelStyles from "./Channels.module.css";
 import {
@@ -90,6 +93,7 @@ export type ChatListItem = Readonly<{
 /** Each workspace lists its most recent chats; Show more adds a step. */
 export const SOLO_CHAT_CAP = 7;
 export const SOLO_CHAT_STEP = 10;
+const workspaceSectionKey = (id: string) => (id ? `group:${id}` : "solo");
 
 /** The existing relay preference service owns delivery, rollback and retry. */
 export function SoloWorkspaces({
@@ -105,12 +109,13 @@ export function SoloWorkspaces({
   drafts = [],
   sidebarRows = emptyRows,
   compose,
+  workspaceComposition,
 }: {
   compose?: ComposeWorkspaces | undefined;
+  workspaceComposition?: WorkspaceSidebarComposition | undefined;
   drafts?: readonly {
     id: string;
     projectId?: string | undefined;
-    selected: boolean;
     content: ReactNode;
   }[];
   onConverted?: ((id: string) => void) | undefined;
@@ -142,7 +147,7 @@ export function SoloWorkspaces({
         pluginHiddenRows.current.delete(id);
     };
   }, []);
-  const preferences = session.soloPreferences;
+  const preferences = session.sidebarPreferences;
   const rowHosts = useRef(new Map<string, WorkspaceRowsHost>());
   const collapsedKey = "solo:collapsed-projects";
   const expandedKey = "solo:expanded-projects";
@@ -158,12 +163,18 @@ export function SoloWorkspaces({
   useEffect(() => {
     if (channels.status === "ready") void preferences.ensure();
   }, [preferences, channels.status]);
-  const [collapsed, setCollapsed] = useState<string[]>(() => {
+  const [localCollapsed, setCollapsed] = useState<string[]>(() => {
+    if (workspaceComposition) return [];
     const saved = readView<unknown>(scope, collapsedKey, []);
     return Array.isArray(saved)
       ? saved.filter((id): id is string => typeof id === "string")
       : [];
   });
+  const collapsed = workspaceComposition
+    ? workspaceComposition.collapsed.flatMap((key) =>
+        key === "solo" ? [""] : key.startsWith("group:") ? [key.slice(6)] : [],
+      )
+    : localCollapsed;
   // Extra chats each workspace shows past the cap, remembered like collapse.
   const [expanded, setExpanded] = useState<Record<string, number>>(() => {
     const saved = readView<unknown>(scope, expandedKey, {});
@@ -221,13 +232,12 @@ export function SoloWorkspaces({
       )?.id ?? "";
     // Resolve against current visibility when focus is restored, including when
     // collapse was requested after the asynchronous save began.
-    const target =
-      collapsed.includes(project) && !rowHosts.current.get(project)?.unframed
-        ? `project-${project}`
-        : rowFocus;
+    const closed =
+      collapsed.includes(project) && !rowHosts.current.get(project)?.unframed;
+    const target = CSS.escape(closed ? `project-${project}` : rowFocus);
     document
       .querySelector<HTMLElement>(
-        `[data-solo-menu-id="${target}"]:not([inert] *) button`,
+        `[data-solo-menu-id="${target}"]:not([inert] *) ${closed ? "button[aria-expanded]:not([aria-haspopup])" : "button"}`,
       )
       ?.focus({ preventScroll: true });
     setRowFocus(undefined);
@@ -253,41 +263,15 @@ export function SoloWorkspaces({
     target?.focus({ preventScroll: true });
   }, [stepFocus]);
   const [creatingFor, setCreatingFor] = useState<ChatListItem>();
-  // The session runs bulk archives; it reads this when it checks each chat.
-  // The open chat stays: archiving it would pull it out from under the viewer.
-  const inactiveIn = (workspaceId: string, id: string) => {
-    const channel = session.channels
-      .list()
-      .channels.find((channel) => channel.id === id);
-    const item = chats.find((item) => item.id === id);
-    return (
-      !!channel &&
-      !!item &&
-      (ids.has(assignmentFor(item) ?? "") ? assignmentFor(item) : "") ===
-        workspaceId &&
-      !matchesConversation(
-        navigationController?.snapshot().entry.target,
-        scope,
-        id,
-      ) &&
-      inactiveChat(session, channel, Date.now() / 1000)
-    );
-  };
-  const inactiveInRef = handoff?.inactiveIn;
-  useLayoutEffect(() => {
-    if (!inactiveInRef) return;
-    const check = (workspaceId: string, id: string) =>
-      inactiveIn(workspaceId, id);
-    inactiveInRef.current = check;
-    return () => {
-      if (inactiveInRef.current === check) inactiveInRef.current = undefined;
-    };
-  });
   const [settingsFor, setSettingsFor] = useState<{
     id: string;
     name: string;
   }>();
-  const groups = snapshot.data?.sections ?? [];
+  const order = workspaceSectionOrder(snapshot.data);
+  const sections = snapshot.data?.sections ?? [];
+  const groups = snapshot.data?.sectionOrder
+    ? order.flatMap((key) => sections.filter(({ id }) => key === `group:${id}`))
+    : sections;
   const orderWritable = preferences.sectionOrderWritable;
   const [orderFocus, setOrderFocus] = useState<string>();
   useLayoutEffect(() => {
@@ -300,29 +284,29 @@ export function SoloWorkspaces({
     setOrderFocus(undefined);
   }, [orderFocus]);
   const moveProject = (id: string, to: number) => {
+    if (workspaceComposition) {
+      const key = workspaceSectionKey(id);
+      const next = order.filter((section) => section !== key);
+      next.splice(to, 0, key);
+      void preferences.reorderSections(key, next).catch(() => {});
+      return;
+    }
     const ids = groups.map((group) => group.id).filter((key) => key !== id);
     ids.splice(to, 0, id);
-    void preferences.reorderSections(id, ids).catch(() => {});
+    if (!snapshot.data?.sectionOrder) {
+      void preferences.reorderSections(id, ids).catch(() => {});
+      return;
+    }
+    let next = 0;
+    const reordered = order.map((key) =>
+      key.startsWith("group:") ? `group:${ids[next++]}` : key,
+    );
+    void preferences.reorderSections(`group:${id}`, reordered).catch(() => {});
   };
   const assigned = snapshot.data?.assignments ?? {};
   const assignmentFor = (item: ChatListItem) =>
     dormantAssignments?.has(item.id) ? undefined : assigned[item.id];
   const ids = new Set(groups.map((group) => group.id));
-  const activeDraft = drafts.find((draft) => draft.selected);
-  const draftProject = activeDraft
-    ? ids.has(activeDraft.projectId ?? "")
-      ? (activeDraft.projectId ?? "")
-      : ""
-    : undefined;
-  useEffect(() => {
-    if (draftProject === undefined) return;
-    setCollapsed((current) => {
-      if (!current.includes(draftProject)) return current;
-      const next = current.filter((id) => id !== draftProject);
-      writeView(scope, collapsedKey, next);
-      return next;
-    });
-  }, [draftProject, scope]);
   const projects = [
     ...groups.map((group) => ({
       ...group,
@@ -333,7 +317,11 @@ export function SoloWorkspaces({
       name: "Chats",
       rows: chats.filter((item) => !ids.has(assignmentFor(item) ?? "")),
     },
-  ];
+  ].filter(
+    (project) =>
+      !workspaceComposition ||
+      workspaceComposition.sections.has(workspaceSectionKey(project.id)),
+  );
   // A collapse request takes effect after the editor closes. Keep its draft and
   // save owner mounted and reachable, including when a save needs recovery.
   const renamingProject = projects.find((project) =>
@@ -347,7 +335,6 @@ export function SoloWorkspaces({
     }
     setProjectError("");
     const saving = preferences.assign(id, projectId);
-    toggle(projectId ?? "", true);
     hold([id]);
     setRowFocus(id);
     void saving.catch(() => {
@@ -406,6 +393,10 @@ export function SoloWorkspaces({
     );
   };
   const toggle = (id: string, open: boolean) => {
+    if (workspaceComposition) {
+      workspaceComposition.toggle(workspaceSectionKey(id), open);
+      return;
+    }
     const next = collapsed.filter((key) => key !== id);
     if (!open) next.push(id);
     setCollapsed(next);
@@ -541,7 +532,14 @@ export function SoloWorkspaces({
       chats.some((item) => item.id === move.channelId),
     ) ?? [];
   const entries = visible.map((project) => {
-    const groupIndex = groups.findIndex((group) => group.id === project.id);
+    const sharedFrame = !!workspaceComposition && !!project.id;
+    const projectKey = sharedFrame
+      ? workspaceSectionKey(project.id)
+      : DROP + project.id;
+    const groupIndex = workspaceComposition
+      ? order.indexOf(projectKey)
+      : groups.findIndex((group) => group.id === project.id);
+    const lastIndex = (workspaceComposition ? order.length : groups.length) - 1;
     const reorderable = !!project.id && orderWritable;
     const open =
       !collapsed.includes(project.id) || renamingProject === project.id;
@@ -552,10 +550,16 @@ export function SoloWorkspaces({
       );
     const frame = (children: ReactNode) => (
       <DropProject
-        projectKey={DROP + project.id}
+        projectKey={projectKey}
+        shared={sharedFrame}
+        registerFrame={
+          project.id ? workspaceComposition?.registerFrame : undefined
+        }
         groupIndex={groupIndex}
         reorderable={reorderable}
-        disabled={!preferences.writable}
+        disabled={
+          !preferences.writable || (!!workspaceComposition && !sharedFrame)
+        }
         key={project.id}
         className={`${styles.project} ${channelStyles.channelSection}`}
         data-project={project.id ? "" : undefined}
@@ -596,7 +600,7 @@ export function SoloWorkspaces({
               Move up
             </MenuItem>
             <MenuItem
-              disabled={!orderWritable || groupIndex >= groups.length - 1}
+              disabled={!orderWritable || groupIndex >= lastIndex}
               onClick={() => moveProject(project.id, groupIndex + 1)}
             >
               <MenuIcon>
@@ -607,30 +611,6 @@ export function SoloWorkspaces({
             <MenuItem onClick={() => setSettingsFor(project)}>
               Workspace settings
             </MenuItem>
-            {handoff && (
-              <MenuItem
-                disabled={
-                  !session.channelLifecycle.available ||
-                  !!handoff.inactiveRun ||
-                  handoff.inactiveRuns.length > 0 ||
-                  !!handoff.lifecycleDialog
-                }
-                onClick={() => {
-                  // Counted once activity loads; let the menu restore focus
-                  // before opening confirmation.
-                  const candidates = project.rows.map((item) => item.id);
-                  requestAnimationFrame(() =>
-                    handoff.archiveInactive({
-                      action: "archive",
-                      workspaceId: project.id,
-                      ids: candidates,
-                    }),
-                  );
-                }}
-              >
-                Archive inactive chats
-              </MenuItem>
-            )}
             <MenuItem
               tone="danger"
               data-delete-solo-project=""
@@ -666,21 +646,25 @@ export function SoloWorkspaces({
             actions={
               <>
                 {overflow}
+                {project.id &&
+                  workspaceComposition?.newAction(project.id, project.name)}
                 {trailing ??
-                  (onNew && (!compose || !project.id) && (
-                    <IconButton
-                      size="compact"
-                      aria-label={`New chat in ${project.name}`}
-                      title="New chat"
-                      icon={<PlusIcon size={15} strokeWidth={2.5} />}
-                      onClick={() => onNew(project.id || undefined)}
-                    />
-                  ))}
+                  (onNew &&
+                    !workspaceComposition &&
+                    (!compose || !project.id) && (
+                      <IconButton
+                        size="compact"
+                        aria-label={`New chat in ${project.name}`}
+                        title="New chat"
+                        icon={<PlusIcon size={15} strokeWidth={2.5} />}
+                        onClick={() => onNew(project.id || undefined)}
+                      />
+                    ))}
               </>
             }
           >
             <WorkspaceDragHandle
-              sectionKey={DROP + project.id}
+              sectionKey={projectKey}
               groupIndex={groupIndex}
               reorderable={reorderable}
             >
@@ -739,7 +723,8 @@ export function SoloWorkspaces({
                 id={item.id}
                 title={item.title}
                 pinned={item.pinned}
-                projectKey={DROP + project.id}
+                projectKey={projectKey}
+                movable={!dormantAssignments?.has(item.id)}
                 sectionKey={project.id}
                 channel={channel}
                 renameable={canRename(project.id, channel)}
@@ -856,7 +841,6 @@ export function SoloWorkspaces({
       name: project.name,
       open,
       toggle: changeOpen,
-      newChat: onNew ? () => onNew(project.id || undefined) : undefined,
       frame,
       header,
       panel,
@@ -872,6 +856,19 @@ export function SoloWorkspaces({
     for (const id of rowHosts.current.keys())
       if (!live.has(id)) rowHosts.current.delete(id);
   });
+  const composed = (
+    <>
+      {entries.map((entry) => entry.rows)}
+      {compose
+        ? compose({
+            chats: entries.find((entry) => !entry.id)?.ordinary,
+            chatList: entries.map((entry) => entry.chatList),
+            workspaces: entries,
+            ordinary: entries.map((entry) => entry.ordinary),
+          })
+        : entries.map((entry) => entry.ordinary)}
+    </>
+  );
   return (
     <>
       {(snapshot.status === "idle" || snapshot.status === "loading") && (
@@ -897,46 +894,44 @@ export function SoloWorkspaces({
           {readError.message}
         </p>
       )}
-      <ChannelSidebarDnd
-        writable={preferences.writable}
-        onMove={(id, key) => move(id, key.slice(DROP.length) || undefined)}
-        onReorder={(key, over) => {
-          const id = key.slice(DROP.length);
-          const to = groups.findIndex((group) => DROP + group.id === over);
-          if (groups.some((group) => group.id === id) && to >= 0)
-            moveProject(id, to);
-        }}
-        overlay={(id, group) => {
-          if (group) {
-            const project = groups.find((project) => DROP + project.id === id);
+      {workspaceComposition ? (
+        composed
+      ) : (
+        <ChannelSidebarDnd
+          writable={preferences.writable}
+          onMove={(id, key) => move(id, key.slice(DROP.length) || undefined)}
+          onReorder={(key, over) => {
+            const id = key.slice(DROP.length);
+            const to = groups.findIndex((group) => DROP + group.id === over);
+            if (groups.some((group) => group.id === id) && to >= 0)
+              moveProject(id, to);
+          }}
+          overlay={(id, group) => {
+            if (group) {
+              const project = groups.find(
+                (project) => DROP + project.id === id,
+              );
+              return (
+                project && (
+                  <div className={channelStyles.channelDragOverlay}>
+                    {project.name}
+                  </div>
+                )
+              );
+            }
+            const item = chats.find((item) => item.id === id);
             return (
-              project && (
+              item && (
                 <div className={channelStyles.channelDragOverlay}>
-                  {project.name}
+                  <span>{item.title}</span>
                 </div>
               )
             );
-          }
-          const item = chats.find((item) => item.id === id);
-          return (
-            item && (
-              <div className={channelStyles.channelDragOverlay}>
-                <span>{item.title}</span>
-              </div>
-            )
-          );
-        }}
-      >
-        {entries.map((entry) => entry.rows)}
-        {compose
-          ? compose({
-              chats: entries.find((entry) => !entry.id)?.ordinary,
-              chatList: entries.map((entry) => entry.chatList),
-              workspaces: entries,
-              ordinary: entries.map((entry) => entry.ordinary),
-            })
-          : entries.map((entry) => entry.ordinary)}
-      </ChannelSidebarDnd>
+          }}
+        >
+          {composed}
+        </ChannelSidebarDnd>
+      )}
       {snapshot.orderError && (
         <div role="alert" className={styles.listMessage}>
           <p>
@@ -1069,23 +1064,18 @@ export function SoloWorkspaces({
         />
       )}
       {creatingFor && (
-        <NewWorkspaceDialog
+        <NewWorkspace
           key={creatingFor.id}
-          name={creatingFor.title}
+          session={session}
+          moveConversation
           close={() => setCreatingFor(undefined)}
-          create={(name) => {
+          create={(section) => {
             if (
               !preferences.writable ||
               prepareSoloMove(session, creatingFor.id)
             )
-              return false;
-            const id = crypto.randomUUID();
-            void preferences
-              .createAndAssign(creatingFor.id, { id, name })
-              .catch(() => {});
-            toggle(id, true);
-            setCreatingFor(undefined);
-            return true;
+              throw new Error("Workspaces are unavailable. Try again.");
+            return preferences.createAndAssign(creatingFor.id, section);
           }}
         />
       )}
@@ -1145,6 +1135,7 @@ const SoloChatEntry = memo(function SoloChatEntry({
   title,
   pinned,
   projectKey,
+  movable,
   sectionKey,
   channel,
   renameable,
@@ -1160,6 +1151,7 @@ const SoloChatEntry = memo(function SoloChatEntry({
   title: string;
   pinned: boolean | undefined;
   projectKey: string;
+  movable: boolean;
   sectionKey: string;
   channel: ChannelSummary | undefined;
   renameable: boolean;
@@ -1172,6 +1164,11 @@ const SoloChatEntry = memo(function SoloChatEntry({
   onHiddenChange: (id: string, hidden: boolean) => () => void;
 }) {
   const rename = renameable ? () => actions.current.rename(id) : undefined;
+  const row = renderChat(
+    { id, title, ...(pinned === undefined ? {} : { pinned }) },
+    rename,
+    channel,
+  );
   const Default = (
     <ChatActionsMenu
       id={id}
@@ -1208,13 +1205,13 @@ const SoloChatEntry = memo(function SoloChatEntry({
         )
       }
     >
-      <DraggableChannel channelId={id} sectionKey={projectKey}>
-        {renderChat(
-          { id, title, ...(pinned === undefined ? {} : { pinned }) },
-          rename,
-          channel,
-        )}
-      </DraggableChannel>
+      {movable ? (
+        <DraggableChannel channelId={id} sectionKey={projectKey} rowKind="solo">
+          {row}
+        </DraggableChannel>
+      ) : (
+        row
+      )}
     </ChatActionsMenu>
   );
   return channel && sidebarRows.some((entry) => entry.render) ? (
@@ -1278,19 +1275,31 @@ function ContributedSoloRow({
 /** A drop reports only its destination, so it saves exactly like Move to. */
 function DropProject({
   projectKey,
+  shared,
+  registerFrame,
   groupIndex,
   reorderable,
   disabled,
   ...props
 }: ComponentProps<typeof Collapsible.Root> & {
   projectKey: string;
+  shared: boolean;
+  registerFrame?: WorkspaceSidebarComposition["registerFrame"] | undefined;
   groupIndex: number;
   reorderable: boolean;
   disabled: boolean;
 }) {
+  useLayoutEffect(
+    () => registerFrame?.(projectKey),
+    [projectKey, registerFrame],
+  );
   const { setNodeRef, isOver, active } = useDroppable({
     id: projectKey,
-    data: { group: reorderable, groupIndex },
+    data: {
+      group: reorderable,
+      groupIndex,
+      accepts: shared ? sidebarDropRowKinds(projectKey) : undefined,
+    },
     disabled,
     resizeObserverConfig: { updateMeasurementsFor: [] },
   });
@@ -1298,6 +1307,7 @@ function DropProject({
   return (
     <Collapsible.Root
       {...props}
+      data-sidebar-section={shared ? projectKey : undefined}
       ref={setNodeRef}
       data-drop-target={
         (!group && isOver && active?.data.current?.sectionKey !== projectKey) ||
@@ -1333,7 +1343,7 @@ function WorkspaceDragHandle({
 }
 
 /** Both entry points use one action list; right-click never selects the row. */
-export function ChatActionsMenu({
+function ChatActionsMenu({
   id,
   title,
   className,

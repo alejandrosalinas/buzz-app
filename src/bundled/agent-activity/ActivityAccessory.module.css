@@ -103,8 +103,10 @@
     opacity: 0;
     pointer-events: none;
   }
-  .overlayControls:not(:hover, :focus-within):not(:has([data-stopping]))
-    .overlayContent {
+  /* Not :focus-within: inside :is() or :not() before a descendant, WebKit
+     restyles the whole document on every focus change. */
+  .overlayControls:not(:hover, :focus, :has(:focus)):not(:has([data-stopping]))
+  .overlayContent {
     mask-image: none;
   }
   .overlayControls:hover > .inlineStop,

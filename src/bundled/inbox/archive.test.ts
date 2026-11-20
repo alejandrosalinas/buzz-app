@@ -30,6 +30,7 @@ function fixture() {
     messageIds: [mention.id],
     authorId: alice.pubkey,
     preview: mention.content,
+    previewMentions: { content: mention.content, mentions: [] },
     createdAt: 20,
     mentioned: true,
     messages: [

@@ -1,13 +1,17 @@
 import { eventDto, type RelayEvent } from "./events";
+import { parseStoredFollows, type StoredFollows } from "./follow-manager";
 import {
   EMPTY_READ_STATE,
+  channelContext,
   contextId,
+  READ_STATE_KEYS,
   parseReadBlob,
   readCoordinate,
   READ_STATE_SLOTS,
   record,
   slotId,
   uint32,
+  unreadCoordinate,
   type ReadState,
 } from "./read-state-model";
 
@@ -17,6 +21,8 @@ import {
   READ_RESERVE_KEYS,
 } from "./read-state-retention";
 
+export const READ_LOCAL_UNREAD_KEYS = 10_000;
+
 export type ReadJournal = Readonly<{
   version: 1;
   slot: string;
@@ -24,6 +30,12 @@ export type ReadJournal = Readonly<{
   state: ReadState;
   /** Explicitly local-only intent; the counter fences older reading handles. */
   localUnread: Readonly<Record<string, number>>;
+  /** What covered each local message or thread unread when it was marked:
+   * [its `localUnread` revision, the covering read mark, channel, root ("" for
+   * none, `UNRESOLVED_ROOT` while unknown)]. A later advance past it ends the mark, after a reload too. */
+  localCovers?: Readonly<Record<string, LocalCover>> | undefined;
+  /** Local-only last change revision per unread key; reset with the undo epoch. */
+  localUnreadIntent?: Readonly<Record<string, number>>;
   /** Local interaction order, bounded with retained frontier hints. */
   recent?: Readonly<Record<string, number>>;
   /** Local-only evicted receipts, deleted with this partition even by old builds. */
@@ -39,18 +51,12 @@ export type ReadJournal = Readonly<{
   /** The frontiers this installation advanced: all it publishes, never a
    * peer's value. Message marks stay local (frontier-only sync). */
   own?: Readonly<Record<string, number>>;
-  /** Local recovery points for decoded peer generations awaiting committed ingest. */
-  peerOverlaps?: readonly Readonly<{
-    coordinate: string;
-    key: string;
-    set: number;
-    baseline: number;
-    version: Readonly<{ id: string; created_at: number }>;
-  }>[];
   /** Further slots this installation owns after `slot`, in placement order. */
   spill?: readonly string[];
-  /** Conditional captured-read inverse; any later durable save retires it. */
+  /** Local captured-Undo epoch; rotates on startup or intent-history retention. */
   capturedReadUndo?: string;
+  /** Message keys held by in-session captured Undo actions. */
+  capturedUndoVersions?: Readonly<Record<string, string>>;
   revision: number;
   /** Saves among `revision` that read nothing (row `seen:` marks), from any
    * window, so unread intent is `revision - quiet`. */
@@ -58,7 +64,42 @@ export type ReadJournal = Readonly<{
   acceptedRevision: number;
   lastCreatedAt: number;
   pending?: Readonly<{ event: RelayEvent; revision: number }>;
+  /** Synced thread follow choices, saved in these same transactions. */
+  follows?: StoredFollows;
+  /** Expiring unread (version 2). Absent on a journal saved before it: its
+   * version-1 override groups are never imported. */
+  unread?: UnreadJournal;
 }>;
+/** One held-back incoming contribution: [S, C, B, F], F its paired frontier
+ * (or this device's, if greater) at the time it was held. Never admitted, so
+ * it gets the incoming cutoff, not the local discard guard, when it resolves. */
+export type LocalCover = readonly [number, number, string, string];
+/** A cover's root while the message's thread is not yet known: not "none". */
+export const UNRESOLVED_ROOT = "?";
+export type HeldGroup = readonly [number, number, number, number];
+export type UnreadJournal = Readonly<{
+  /** This installation's one version-2 coordinate. */
+  slot: string;
+  /** The greatest expiry clock any successful save used: a clock rollback
+   * never makes an expired mark live again. */
+  watermark: number;
+  held: Readonly<Record<string, readonly HeldGroup[]>>;
+  /** A clock or held refusal's warning, kept across reloads. The clear
+   * itself is not retried; the user reads again. */
+  blockedClear?: string;
+  /** The channels whose clears it refused: it clears once each has had a
+   * successful clear or its group is no longer active. */
+  blockedKeys?: readonly string[];
+  /** Channels whose clears capacity refused, which a fitting publication
+   * also resolves. */
+  capacityKeys?: readonly string[];
+}>;
+export const HELD_GROUPS_PER_KEY = 8;
+export const newUnreadJournal = (): UnreadJournal => ({
+  slot: newSlotId(),
+  watermark: 0,
+  held: {},
+});
 /** Mutations run against the latest record in one strict transaction (including other tabs). */
 export interface ReadStateStorage {
   update(
@@ -72,6 +113,10 @@ export interface ReadStateStorage {
   close(): void;
 }
 export const newSlotId = () => crypto.randomUUID().replaceAll("-", "");
+export const newReadUndoEpochId = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 export function newReadJournal(): ReadJournal {
   return {
     version: 1,
@@ -79,10 +124,90 @@ export function newReadJournal(): ReadJournal {
     clientId: crypto.randomUUID(),
     state: EMPTY_READ_STATE,
     localUnread: {},
+    localUnreadIntent: {},
     revision: 0,
     acceptedRevision: 0,
     lastCreatedAt: 0,
+    unread: newUnreadJournal(),
   };
+}
+function readUnread(raw: unknown, slots: readonly string[]): UnreadJournal {
+  if (
+    !record(raw) ||
+    !slotId(raw.slot) ||
+    slots.includes(raw.slot) ||
+    !uint32(raw.watermark) ||
+    !record(raw.held) ||
+    Object.keys(raw.held).length > READ_STATE_KEYS / 3 ||
+    (raw.blockedClear !== undefined &&
+      (typeof raw.blockedClear !== "string" ||
+        raw.blockedClear.length > 200)) ||
+    (raw.blockedKeys !== undefined &&
+      (raw.blockedClear === undefined ||
+        !Array.isArray(raw.blockedKeys) ||
+        raw.blockedKeys.length > READ_STATE_KEYS / 3 ||
+        !raw.blockedKeys.every(channelContext))) ||
+    (raw.capacityKeys !== undefined &&
+      (!Array.isArray(raw.capacityKeys) ||
+        raw.capacityKeys.length > READ_STATE_KEYS / 3 ||
+        !raw.capacityKeys.every(channelContext)))
+  )
+    throw new Error("Invalid saved unread state");
+  const held: Record<string, readonly HeldGroup[]> = {};
+  for (const [key, groups] of Object.entries(raw.held)) {
+    if (
+      !channelContext(key) ||
+      !Array.isArray(groups) ||
+      groups.length < 1 ||
+      groups.length > HELD_GROUPS_PER_KEY ||
+      !groups.every(
+        (group) =>
+          Array.isArray(group) && group.length === 4 && group.every(uint32),
+      )
+    )
+      throw new Error("Invalid saved held unread group");
+    held[key] = Object.freeze(
+      groups.map((group) => Object.freeze([...group]) as unknown as HeldGroup),
+    );
+  }
+  return Object.freeze({
+    slot: raw.slot,
+    watermark: raw.watermark,
+    held: Object.freeze(held),
+    ...(raw.blockedClear === undefined
+      ? {}
+      : { blockedClear: raw.blockedClear as string }),
+    ...(raw.blockedKeys === undefined
+      ? {}
+      : { blockedKeys: Object.freeze([...(raw.blockedKeys as string[])]) }),
+    ...(raw.capacityKeys === undefined
+      ? {}
+      : { capacityKeys: Object.freeze([...(raw.capacityKeys as string[])]) }),
+  });
+}
+/** Keeps only the covers of marks still saved at the same revision. */
+function readLocalCovers(
+  raw: unknown,
+  localUnread: Readonly<Record<string, number>>,
+): Readonly<Record<string, LocalCover>> {
+  if (!record(raw) || Object.keys(raw).length > 10000)
+    throw new Error("Invalid saved local unread covers");
+  const covers: Record<string, LocalCover> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (
+      !Array.isArray(value) ||
+      value.length !== 4 ||
+      !Number.isSafeInteger(value[0]) ||
+      !Number.isSafeInteger(value[1]) ||
+      (value[1] as number) < -1 ||
+      typeof value[2] !== "string" ||
+      typeof value[3] !== "string"
+    )
+      throw new Error("Invalid saved local unread covers");
+    if (localUnread[key] === value[0])
+      covers[key] = Object.freeze([...value]) as unknown as LocalCover;
+  }
+  return Object.freeze(covers);
 }
 /** Storage is untrusted. Corrupt intent is an error, never an empty journal to overwrite. */
 export function readJournal(raw: unknown, viewer: string): ReadJournal {
@@ -97,6 +222,13 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     !record(raw.localUnread) ||
     !uint32(raw.lastCreatedAt) ||
     (raw.capturedReadUndo !== undefined && !slotId(raw.capturedReadUndo)) ||
+    (raw.capturedUndoVersions !== undefined &&
+      (!record(raw.capturedUndoVersions) ||
+        Object.keys(raw.capturedUndoVersions).length > READ_LOCAL_UNREAD_KEYS ||
+        !Object.entries(raw.capturedUndoVersions).every(
+          ([key, action]) =>
+            contextId(key) && key.startsWith("msg:") && slotId(action),
+        ))) ||
     !Number.isSafeInteger(raw.revision) ||
     (raw.revision as number) < 0 ||
     !Number.isSafeInteger(raw.acceptedRevision) ||
@@ -126,13 +258,16 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     contexts[`ov_c:${key}`] = value.clear;
     contexts[`ov_b:${key}`] = value.baseline;
   }
-  const parsed = parseReadBlob({ v: 1, client_id: raw.clientId, contexts });
+  const parsed = parseReadBlob(
+    { v: 2, client_id: raw.clientId, contexts },
+    true,
+  );
   if (
     Object.keys(parsed.state.frontiers).length !==
       Object.keys(raw.state.frontiers).length ||
     Object.keys(parsed.state.overrides).length !==
       Object.keys(raw.state.overrides).length ||
-    Object.keys(raw.localUnread).length > 10000 ||
+    Object.keys(raw.localUnread).length > READ_LOCAL_UNREAD_KEYS ||
     !Object.values(raw.localUnread).every(
       (v) =>
         Number.isSafeInteger(v) &&
@@ -141,6 +276,18 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     )
   )
     throw new Error("Invalid saved read entries");
+  if (
+    raw.localUnreadIntent !== undefined &&
+    (!record(raw.localUnreadIntent) ||
+      Object.keys(raw.localUnreadIntent).length > READ_LOCAL_UNREAD_KEYS ||
+      !Object.values(raw.localUnreadIntent).every(
+        (value) =>
+          Number.isSafeInteger(value) &&
+          (value as number) > 0 &&
+          (value as number) <= (raw.revision as number),
+      ))
+  )
+    throw new Error("Invalid saved read intent revisions");
   if (
     raw.recent !== undefined &&
     (!record(raw.recent) ||
@@ -186,44 +333,6 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     throw new Error("Invalid saved own read state");
   if (raw.floor !== undefined && !uint32(raw.floor))
     throw new Error("Invalid saved read floor");
-  const peerOverlaps: NonNullable<ReadJournal["peerOverlaps"]>[number][] = [];
-  if (raw.peerOverlaps !== undefined) {
-    if (!Array.isArray(raw.peerOverlaps))
-      throw new Error("Invalid saved read overlaps");
-    const seen = new Set<string>();
-    for (const item of raw.peerOverlaps) {
-      if (
-        !record(item) ||
-        typeof item.coordinate !== "string" ||
-        !/^read-state:[0-9a-f]{32}$/.test(item.coordinate) ||
-        !contextId(item.key) ||
-        !item.key.startsWith("msg:") ||
-        !markMessage(item.key) ||
-        !uint32(item.set) ||
-        !uint32(item.baseline) ||
-        !record(item.version) ||
-        typeof item.version.id !== "string" ||
-        !/^[0-9a-f]{64}$/.test(item.version.id) ||
-        !uint32(item.version.created_at)
-      )
-        throw new Error("Invalid saved read overlap");
-      const id = JSON.stringify([item.coordinate, item.key, item.set]);
-      if (seen.has(id)) throw new Error("Duplicate saved read overlap");
-      seen.add(id);
-      peerOverlaps.push(
-        Object.freeze({
-          coordinate: item.coordinate,
-          key: item.key,
-          set: item.set,
-          baseline: item.baseline,
-          version: Object.freeze({
-            id: item.version.id,
-            created_at: item.version.created_at,
-          }),
-        }),
-      );
-    }
-  }
   const spill = raw.spill ?? [];
   if (
     !Array.isArray(spill) ||
@@ -232,6 +341,13 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     new Set([raw.slot, ...spill]).size !== spill.length + 1
   )
     throw new Error("Invalid saved read slots");
+  // A malformed saved unread record is corrupt intent: an error, like the rest.
+  let unread: UnreadJournal | undefined;
+  let fresh = true;
+  if (raw.unread !== undefined) {
+    unread = readUnread(raw.unread, [raw.slot, ...(spill as string[])]);
+    fresh = false;
+  }
   // Before own values were kept apart, the journal published everything it held.
   const own =
     (raw.own as Record<string, number> | undefined) ??
@@ -262,24 +378,43 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     )
       throw new Error("Invalid saved read operation");
     const event = eventDto(raw.pending.event);
-    if (
+    // A fresh unread record drops the envelope its discarded slot was sending.
+    if (fresh && unreadCoordinate(event)) {
+      if (event.pubkey !== viewer || event.created_at > raw.lastCreatedAt)
+        throw new Error("Saved read operation identity mismatch");
+    } else if (
       event.pubkey !== viewer ||
-      ![raw.slot, ...spill].some(
-        (slot) => readCoordinate(event) === `read-state:${slot}`,
-      ) ||
+      ![
+        ...[raw.slot, ...spill].map((slot) => `read-state:${slot}`),
+        ...(unread ? [`read-state-unread-v2:${unread.slot}`] : []),
+      ].includes(readCoordinate(event) ?? "") ||
       event.created_at > raw.lastCreatedAt
     )
       throw new Error("Saved read operation identity mismatch");
-    pending = { event, revision: raw.pending.revision as number };
+    else pending = { event, revision: raw.pending.revision as number };
   }
   return {
     version: 1,
     slot: raw.slot,
     clientId: raw.clientId,
-    state: parsed.state,
+    // A journal from before version 2 holds only version-1 marks: not imported.
+    state: unread
+      ? parsed.state
+      : Object.freeze({ frontiers: parsed.state.frontiers, overrides: {} }),
     localUnread: Object.freeze({ ...raw.localUnread }) as Readonly<
       Record<string, number>
     >,
+    ...(raw.localCovers !== undefined && {
+      localCovers: readLocalCovers(
+        raw.localCovers,
+        raw.localUnread as Record<string, number>,
+      ),
+    }),
+    ...(raw.localUnreadIntent !== undefined && {
+      localUnreadIntent: Object.freeze({
+        ...(raw.localUnreadIntent as Record<string, number>),
+      }),
+    }),
     recent: Object.freeze({
       ...(raw.recent as Record<string, number> | undefined),
     }),
@@ -293,14 +428,20 @@ export function readJournal(raw: unknown, viewer: string): ReadJournal {
     ...(raw.capturedReadUndo !== undefined && {
       capturedReadUndo: raw.capturedReadUndo as string,
     }),
+    ...(raw.capturedUndoVersions !== undefined && {
+      capturedUndoVersions: Object.freeze({
+        ...(raw.capturedUndoVersions as Record<string, string>),
+      }),
+    }),
     revision: raw.revision as number,
     ...(raw.quiet !== undefined && { quiet: raw.quiet as number }),
     acceptedRevision: raw.acceptedRevision as number,
     lastCreatedAt: raw.lastCreatedAt,
-    ...(peerOverlaps.length
-      ? { peerOverlaps: Object.freeze(peerOverlaps) }
-      : {}),
     ...(pending ? { pending } : {}),
+    ...(raw.follows !== undefined && {
+      follows: parseStoredFollows(raw.follows, viewer),
+    }),
+    unread: unread ?? newUnreadJournal(),
   };
 }
 function openDatabase() {

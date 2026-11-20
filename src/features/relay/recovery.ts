@@ -16,7 +16,9 @@ export type RecoverySource = Readonly<{
   name?: NetworkSource;
   status(): RecoveryStatus;
   subscribe(listener: () => void): () => void;
-  retry(): void;
+  /** `background` is true only from recovery's own timer, so a source can
+   * keep a retry it has already scheduled; signals and credentials omit it. */
+  retry(background?: boolean): void;
   /** Credentials changed: read again after any read already in flight, even
    * one its status does not show (a ready catalog revalidating). Without it,
    * recovery waits out a `busy` read before retrying. */
@@ -246,16 +248,17 @@ export function createRecovery(
             latenessMs: Math.max(0, performance.now() - scheduled - delay),
           });
       attempt++;
-      run();
+      run(undefined, true);
     }, delay);
   }
-  function run(except?: RecoverySource) {
+  function run(except?: RecoverySource, background = false) {
     if (disposed) return;
     // Retries can publish synchronously; evaluate once after all of them.
     running = true;
     try {
       for (const source of sources)
-        if (source !== except && source.status() === "failed") source.retry();
+        if (source !== except && source.status() === "failed")
+          source.retry(background || undefined);
     } finally {
       running = false;
     }

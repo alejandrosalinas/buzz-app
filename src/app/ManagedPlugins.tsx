@@ -6,6 +6,7 @@ import { PreferenceRow } from "../shared/design-system/ui/PreferenceRow";
 import { SettingsGroup } from "../shared/design-system/ui/SettingsGroup";
 import { Switch } from "../shared/design-system/ui/Switch";
 import { gitScope } from "../plugins/git-scope";
+import { offeredManaged } from "../plugins/managed";
 import type { PluginManager } from "../plugins/manager";
 import type {
   Catalog,
@@ -79,9 +80,7 @@ export function ManagedPlugins({
     />
   ) : null;
   const rows =
-    managed.status === "ready"
-      ? managed.plugins.filter(({ state }) => state !== "current")
-      : [];
+    managed.status === "ready" ? managed.plugins.filter(offeredManaged) : [];
   const section =
     managed.status === "loading" ? (
       <section

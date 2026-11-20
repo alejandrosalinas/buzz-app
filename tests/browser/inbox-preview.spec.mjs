@@ -226,3 +226,44 @@ test("hovering the sidebar Activity row previews recent conversations and opens 
     path: testInfo.outputPath("selected-inbox-row.png"),
   });
 });
+
+test("hover turns a preview row's unread dot into Mark as read, which reads it in place", async ({
+  page,
+  app,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, app);
+  const card = page.getByRole("dialog", { name: "Activity", exact: true });
+  const rows = card.getByRole("list", { name: "Recent activity" });
+  await activityRow(page).hover();
+  await expect(card.getByText("Checking recent activity…")).toHaveCount(0);
+  const row = rows.getByRole("listitem").filter({ hasText: "Unread reply 1" });
+  const dot = row.getByRole("img", { name: "Unread" });
+  const markRead = row.getByRole("button", { name: /^Mark as read / });
+  const date = row.locator("[data-inbox-date]");
+  await expect(dot).toBeVisible();
+  await expect(markRead.locator("xpath=..")).toHaveCSS("opacity", "0");
+  const center = async (locator) => {
+    const { x, y, width, height } = await locator.boundingBox();
+    return { x: x + width / 2, y: y + height / 2 };
+  };
+  const [actionCenter, dotCenter] = [await center(markRead), await center(dot)];
+  expect(Math.abs(actionCenter.x - dotCenter.x)).toBeLessThan(1);
+  expect(Math.abs(actionCenter.y - dotCenter.y)).toBeLessThan(1);
+  // The action's hover fill clears the date, which stays.
+  const [action, stamp] = [
+    await markRead.boundingBox(),
+    await date.boundingBox(),
+  ];
+  expect(stamp.x + stamp.width).toBeLessThanOrEqual(action.x);
+  await row.hover();
+  await expect(markRead.locator("xpath=..")).toHaveCSS("opacity", "1");
+  await expect(dot).toHaveCSS("opacity", "0");
+  await expect(date).toHaveCSS("opacity", "1");
+  await markRead.click();
+  // The row stays, read, and the card stays open.
+  await expect(dot).toHaveCount(0);
+  await expect(markRead).toHaveCount(0);
+  await expect(row).toHaveCount(1);
+  await expect(card).toBeVisible();
+});

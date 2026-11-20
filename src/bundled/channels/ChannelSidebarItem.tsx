@@ -1,3 +1,5 @@
+import type { ChatIcon } from "../../features/conversation/service";
+import type { Navigation } from "../../features/navigation/controller";
 import { UserStatusDisplay } from "../../features/user-status/StatusDisplay";
 import { useIsPresent } from "motion/react";
 import {
@@ -10,23 +12,33 @@ import {
   type ComponentType,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import {
   ContextMenuRoot,
   ContextMenuTrigger,
   MenuPopup,
+  MenuRoot,
+  MenuTrigger,
 } from "../../shared/design-system/ui/Menu";
+import { IconButton } from "../../shared/design-system/ui/IconButton";
 import type { ChannelSummary, Profile } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
-import { ClockIcon } from "../../shared/design-system/icons/index";
+import { useLiveChannelSummary } from "../../features/relay/react";
+import {
+  ClockIcon,
+  DotsThreeIcon,
+} from "../../shared/design-system/icons/index";
 import { channelIcon } from "../../features/channels/channel-icon";
 import { ChannelActivityPopover } from "./ChannelActivityPopover";
 import { channelDurationLabel } from "./ChannelDurationField";
+import { ChatSharedMark, soloSharedMarkId } from "./ChatSharedMark";
 import { ChannelSidebarRow } from "./ChannelSidebarRow";
 import { DmTypingBadge } from "./DmTypingBadge";
 import { usePresenceStatus } from "../../features/presence/react";
 import { UnreadBadge, ordinaryUnread, useConfirmedMute } from "./UnreadBadge";
+import { SoloChatTitle } from "../../features/solo/SoloChatTitle";
 import { useWorkingAgents } from "./useWorkingAgents";
 import { WorkingAgentsBadge } from "./WorkingAgentsBadge";
 import styles from "./Channels.module.css";
@@ -37,8 +49,10 @@ import {
   type RegisteredSidebarRows,
 } from "../../features/channel-navigation/sidebar-rows-service";
 import { avatarMedia } from "../../shared/avatar-source";
+import { sidebarRowKind, type SidebarRowKind } from "./sidebar-sections";
 
 type ItemProps = {
+  chatIcon?: ChatIcon["component"] | undefined;
   rowContributions?: readonly RegisteredSidebarRows[] | undefined;
   onHiddenChange?: ((id: string, hidden: boolean) => () => void) | undefined;
   channel: ChannelSummary;
@@ -47,6 +61,14 @@ type ItemProps = {
   working: boolean;
   selected: string | undefined;
   onSelect: (id: string) => void;
+  navigation?: Navigation | undefined;
+  onRename?: ((id: string) => boolean) | undefined;
+  pendingClick?:
+    | RefObject<ReturnType<typeof setTimeout> | undefined>
+    | undefined;
+  onShareChat?:
+    | ((channel: ChannelSummary, trigger: HTMLElement) => void)
+    | undefined;
   onOpenThread: (channelId: string, rootId: string) => void;
   onOpenMessage: (channelId: string, messageId: string) => void;
   onOpenWorkingAgent?: (
@@ -67,6 +89,7 @@ type ItemProps = {
     | ComponentType<{
         channelId: string;
         sectionKey: string;
+        rowKind: SidebarRowKind;
         children: ReactNode;
       }>
     | undefined;
@@ -137,12 +160,17 @@ function useOrdinaryUnread(
 
 function ChannelSidebarItemCore({
   rowContributions,
+  chatIcon: ChatIconComponent,
   onHiddenChange,
   channel,
   profile,
   session,
   selected,
   onSelect,
+  navigation,
+  onRename,
+  pendingClick,
+  onShareChat,
   onOpenThread,
   onOpenMessage,
   onOpenWorkingAgent,
@@ -176,6 +204,9 @@ function ChannelSidebarItemCore({
       ? channel.participants[0]
       : undefined;
   const presence = usePresenceStatus(peer ? session.presence : undefined, peer);
+  const actions = useRef<HTMLButtonElement>(null);
+  const actionsOpen = !!menuAnchor && menuAnchor === actions.current;
+  const menuLabel = `Actions for ${channel.name}`;
   // Keep the closing row's items through the popup's exit transition.
   const lastMenuContent = useRef<ReactNode>(undefined);
   useLayoutEffect(() => {
@@ -185,6 +216,69 @@ function ChannelSidebarItemCore({
   const row = (
     <ChannelSidebarRow
       channel={channel}
+      title={
+        channel.channelType === "solo" ? (
+          // Incoming renames animate; a rename saved here shows at once.
+          <SoloChatTitle
+            key={channel.id}
+            channelId={channel.id}
+            title={channel.name}
+            details={session.channelDetails}
+          />
+        ) : undefined
+      }
+      menuAction={
+        menuEnabled &&
+        channel.channelType === "solo" && (
+          <MenuRoot
+            open={menuOpen && present && actionsOpen}
+            onOpenChange={(open) => {
+              if (open && sectionKey && actions.current)
+                onOpenMenu?.(channel, sectionKey, actions.current);
+              else if (!open && actionsOpen) onCloseMenu?.();
+            }}
+            onOpenChangeComplete={(open) => {
+              if (!open) onMenuClosed?.(channel.id);
+            }}
+          >
+            <MenuTrigger
+              ref={actions}
+              render={(props) => (
+                <IconButton
+                  {...props}
+                  variant="bare"
+                  size="compact"
+                  aria-label={menuLabel}
+                  data-solo-row-action=""
+                  icon={<DotsThreeIcon size={15} strokeWidth={2.5} />}
+                />
+              )}
+            />
+            <MenuPopup
+              align="end"
+              aria-label={menuLabel}
+              finalFocus={() => menuFinalFocus?.(channel.id) ?? false}
+            >
+              {menuContent ?? lastMenuContent.current}
+            </MenuPopup>
+          </MenuRoot>
+        )
+      }
+      sharedDescription={
+        onShareChat && channel.channelType === "solo"
+          ? soloSharedMarkId(channel.id)
+          : undefined
+      }
+      sharedAction={
+        onShareChat &&
+        channel.channelType === "solo" && (
+          <ChatSharedMark
+            session={session}
+            channel={channel}
+            onOpen={(trigger) => onShareChat(channel, trigger)}
+          />
+        )
+      }
       working={agents.length > 0}
       ordinary={ordinary}
       muted={muted}
@@ -221,6 +315,14 @@ function ChannelSidebarItemCore({
               <Icon size={16} />
             )}
           </DmTypingBadge>
+        ) : ChatIconComponent ? (
+          <ContributionBoundary fallback={<Icon size={16} />}>
+            <ChatIconComponent
+              session={session}
+              channelId={channel.id}
+              fallback={<Icon size={16} />}
+            />
+          </ContributionBoundary>
         ) : (
           <Icon size={16} />
         )
@@ -297,7 +399,11 @@ function ChannelSidebarItemCore({
           activity
         );
         return SelectFrame && sectionKey ? (
-          <SelectFrame channelId={channel.id} sectionKey={sectionKey}>
+          <SelectFrame
+            channelId={channel.id}
+            sectionKey={sectionKey}
+            rowKind={sidebarRowKind(channel)}
+          >
             {select}
           </SelectFrame>
         ) : (
@@ -310,6 +416,9 @@ function ChannelSidebarItemCore({
       }
       onPrepare={(id) => session.channels.prepare?.(id)}
       onSelect={onSelect}
+      navigation={navigation}
+      onRename={onRename}
+      {...(pendingClick ? { pendingClick } : {})}
       {...(onHideDm ? { onHideDm } : {})}
     />
   );
@@ -332,7 +441,7 @@ function ChannelSidebarItemCore({
   if (!menuEnabled) return rendered;
   return (
     <ContextMenuRoot
-      open={menuOpen && present}
+      open={menuOpen && present && !actionsOpen}
       onOpenChange={(open) => {
         if (open) {
           if (sectionKey) onOpenMenu?.(channel, sectionKey);
@@ -347,7 +456,7 @@ function ChannelSidebarItemCore({
     >
       {rendered}
       <MenuPopup
-        aria-label={`Actions for ${channel.name}`}
+        aria-label={menuLabel}
         anchor={menuOpen ? menuAnchor : undefined}
         finalFocus={() => menuFinalFocus?.(channel.id) ?? false}
       >
@@ -385,9 +494,16 @@ function ContributedChannelRow({
     [session, target],
   );
   const unread = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const live = useLiveChannelSummary(session.channels, channel);
+  const pluginSection =
+    channel.channelType === "solo"
+      ? sectionKey.startsWith("group:")
+        ? sectionKey.slice(6)
+        : ""
+      : sectionKey;
   const row = useMemo(
-    () => sidebarRow(channel, sectionKey, unread),
-    [channel, sectionKey, unread],
+    () => sidebarRow(live, pluginSection, unread),
+    [live, pluginSection, unread],
   );
   return (
     <SidebarRowRenderer

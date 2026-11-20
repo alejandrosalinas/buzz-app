@@ -112,6 +112,7 @@ export function ToastSpecimens() {
               {linked && (
                 <ToastNotice
                   title="Plugin update available"
+                  onDismiss={() => setLinked(false)}
                   description="Save your drafts before you update."
                   navigation={{
                     label: "Open related dialog",

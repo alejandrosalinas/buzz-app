@@ -144,7 +144,7 @@ async function search(
   for (const name of paths) {
     const named = fields.get(name);
     const channel = named?.get("Channel");
-    if (!named || !channel) {
+    if (!named || (!channel && named.get("Session scope") !== "community")) {
       state.starts.delete(name);
       if (unread.has(name)) state.unstarted.delete(name);
       else state.unstarted.add(name);
@@ -154,7 +154,8 @@ async function search(
     const scope = named.get("Session scope");
     const root = named.get("Thread root");
     state.starts.set(name, {
-      channelId: channel.match(/\(#([^)]+)\)$/)?.[1] ?? channel,
+      channelId:
+        channel?.match(/\(#([^)]+)\)$/)?.[1] ?? channel ?? "@community",
       ...(agent ? { agent } : {}),
       ...(scope ? { scope } : {}),
       ...(root ? { root } : {}),

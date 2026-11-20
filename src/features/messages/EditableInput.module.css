@@ -37,11 +37,11 @@ html[data-keyboard-navigation] .input:focus-visible:not([aria-disabled]) {
   background-color: var(--surface-text-selection);
   color: var(--text-on-selection);
 }
-.input:focus .token[data-editor-selected] {
+.input[data-selection-inside] .token[data-editor-selected] {
   background-color: var(--surface-text-selection);
   color: var(--text-on-selection);
 }
-.input:focus .token[data-editor-selected] * {
+.input[data-selection-inside] .token[data-editor-selected] * {
   background-color: transparent;
   color: inherit;
 }
@@ -98,13 +98,21 @@ html[data-keyboard-navigation] .input:focus-visible:not([aria-disabled]) {
   vertical-align: bottom;
   margin-top: calc(var(--text-body-sm) - var(--size-emoji-display));
 }
-.input[data-emoji-images-only]:focus .token[data-editor-selected] img {
+.input[data-emoji-images-only][data-selection-inside]
+  .token[data-editor-selected]
+  img {
   background-color: Highlight;
 }
 
 .input p {
   margin: 0;
   line-height: inherit;
+}
+.markdownTable {
+  margin-block: var(--space-2);
+}
+.input:focus .markdownTable[class~="ProseMirror-selectednode"] {
+  outline: 2px solid var(--border-focus);
 }
 
 .input code {
@@ -150,6 +158,11 @@ html[data-keyboard-navigation] .input:focus-visible:not([aria-disabled]) {
   background: transparent;
 }
 
+/* WebKit paints a selected list's own boxes apart from its text: each marker
+   in a box of its own and the indent beside it. Only the text shows selected. */
+.input :is(ul, ol, li)::selection {
+  background-color: transparent;
+}
 .input :is(ul, ol) {
   margin: 0;
   padding-left: var(--space-6);
@@ -176,7 +189,7 @@ html[data-keyboard-navigation] .input:focus-visible:not([aria-disabled]) {
 @media (forced-colors: active) {
   .input::selection,
   .input ::selection,
-  .input:focus .token[data-editor-selected] {
+  .input[data-selection-inside] .token[data-editor-selected] {
     background-color: Highlight;
     color: HighlightText;
   }

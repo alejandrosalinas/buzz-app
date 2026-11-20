@@ -21,6 +21,7 @@ it("parses a row preview's Markdown once across renders", () => {
     createdAt: 1,
     messageIds: [],
     preview: "**cached** preview",
+    previewMentions: { content: "**cached** preview", mentions: [] },
     unreadCount: 0,
     manual: false,
   } as unknown as InboxItem;
@@ -28,7 +29,7 @@ it("parses a row preview's Markdown once across renders", () => {
     <InboxRowButton
       item={item}
       identity={{ sender: "Sender", context: "Channel", profile: undefined }}
-      media={undefined as unknown as RelaySession["media"]}
+      session={{} as unknown as RelaySession}
       feed={{ incomplete: [] } as unknown as InboxFeedSnapshot}
       time={time}
     />
@@ -39,4 +40,45 @@ it("parses a row preview's Markdown once across renders", () => {
   const again = render(row("now"));
   expect(again.getByText("cached preview")).toBeInTheDocument();
   expect(content.messagePreview).toHaveBeenCalledOnce();
+});
+
+it("shows a preview's resolved mentions as chips", () => {
+  const tomb = "c".repeat(64);
+  const profiles = new Map([[tomb, { name: "tomb" }]]);
+  const item = {
+    id: "row",
+    channelId: "room",
+    authorId: "a".repeat(64),
+    createdAt: 1,
+    messageIds: [],
+    preview: "ugh @tomb now getting",
+    previewMentions: { content: "ugh @tomb now getting", mentions: [tomb] },
+    unreadCount: 0,
+    manual: false,
+  } as unknown as InboxItem;
+  const view = render(
+    <InboxRowButton
+      item={item}
+      identity={{ sender: "Sender", context: "Channel", profile: undefined }}
+      session={
+        {
+          profiles: { subscribe: () => () => {}, snapshot: () => profiles },
+          channels: {
+            list: () => ({ channels: [] }),
+            subscribeList: () => () => {},
+          },
+        } as unknown as RelaySession
+      }
+      feed={{ incomplete: [] } as unknown as InboxFeedSnapshot}
+      time="now"
+      previewId="preview"
+    />,
+  );
+  const preview = view.container.querySelector("#preview");
+  expect(preview?.querySelector("[data-mention-kind]")).toHaveTextContent(
+    "tomb",
+  );
+  expect(preview).toHaveTextContent("ugh tomb now getting");
+  // Names built from the preview still say someone was mentioned.
+  expect(view.getByRole("img", { name: "@" })).toBeInTheDocument();
 });

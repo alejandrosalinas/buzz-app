@@ -237,6 +237,28 @@ test("statuses edit, synchronize, clear, reject stale traffic and retain failed 
       "Working remotely",
     );
     await expect(bobByline.locator("[tabindex]")).toHaveCount(0);
+    // Emoji ink rises above the caption line. Neither the resting nor the
+    // scrolling preview ticker may clip or mask its top or bottom.
+    const tickers = page
+      .getByRole("region", { name: "Profile preview", exact: true })
+      .locator('[title="🏠 Working remotely"]');
+    for (const [index, scrolling] of [false, true].entries()) {
+      const ticker = tickers.nth(index);
+      await expect
+        .poll(() =>
+          ticker.evaluate((element) => {
+            const emoji = [...element.querySelectorAll("span")]
+              .find((span) => span.textContent === "🏠")
+              .getBoundingClientRect();
+            const box = element.getBoundingClientRect();
+            return {
+              scrolling: element.hasAttribute("data-overflow"),
+              inside: emoji.top >= box.top && emoji.bottom <= box.bottom,
+            };
+          }),
+        )
+        .toEqual({ scrolling, inside: true });
+    }
     // Where the full status is shown, hovering the emoji names it, as
     // reaction previews do.
     const profileStatus = page.getByRole("region", {

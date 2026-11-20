@@ -269,6 +269,71 @@ test("composer code and recipient fills remain distinct in both themes", async (
   }
 });
 
+// WebKit paints list markers and their indent apart from the selected text.
+test("selecting a list paints its text, not boxes around its markers", async ({
+  page,
+}) => {
+  const { input } = await compose(page, variants[0]);
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("- one");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("two");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("three");
+  await expect(input.locator("ul > li")).toHaveCount(3);
+  const gutters = () =>
+    input.evaluate((el) =>
+      [...el.querySelectorAll("li")].map((item) => {
+        const list = item.parentElement.getBoundingClientRect();
+        const box = item.getBoundingClientRect();
+        return {
+          x: Math.floor(list.left),
+          // Inset from the neighbouring lines, whose own selection may paint.
+          y: Math.ceil(box.top) + 2,
+          width: Math.floor(box.left) - Math.floor(list.left),
+          height: Math.floor(box.height) - 4,
+        };
+      }),
+    );
+  for (const mode of ["light", "dark"]) {
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+    }, mode);
+    await input.press("ControlOrMeta+End");
+    const idle = [];
+    for (const clip of await gutters())
+      idle.push(await page.screenshot({ clip, scale: "css" }));
+    await input.press("ControlOrMeta+a");
+    const clips = await gutters();
+    for (const [index, clip] of clips.entries())
+      expect(
+        await page.screenshot({ clip, scale: "css" }),
+        `${mode} item ${index + 1}`,
+      ).toEqual(idle[index]);
+  }
+});
+
+// Focus can leave the editor or its window while the selection still paints.
+test("a selected mention stays painted while the selection outlives focus", async ({
+  page,
+}) => {
+  const { input, caret, end } = await compose(page, variants[0]);
+  await caret(end);
+  const idle = await paint(page, input);
+  await input.press("ControlOrMeta+a");
+  const selected = await paint(page, input);
+  expect(selected.mention).not.toEqual(idle.mention);
+  await input.evaluate((el) => el.blur());
+  await expect(input).not.toBeFocused();
+  expect(await page.evaluate(() => String(getSelection()))).not.toBe("");
+  expect(await paint(page, input)).toEqual(selected);
+  // Without the selection the mention is no longer painted selected.
+  await page.evaluate(() => getSelection().removeAllRanges());
+  await expect
+    .poll(async () => (await paint(page, input)).mention)
+    .toEqual(idle.mention);
+});
+
 async function settleComposer(page, composer) {
   await page.evaluate(() => new Promise(requestAnimationFrame));
   await expect

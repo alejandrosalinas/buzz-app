@@ -4,11 +4,9 @@ import { syncedSettingsSchema, withSyncedSettings } from "./settings";
 import type { AgentKey } from "../../features/agents/membership";
 import type { AgentType } from "../../features/agents/service";
 import { type Config, config } from "./config";
-import type { CodexRuntime } from "./runtime";
+import { type CodexRuntime, HANDOVER_MS } from "./runtime";
 
 export const TYPE_ID = "codex";
-/** A turn's run returns once Codex has it, so this bounds only the hand-over. */
-const HANDOVER_MS = 2 * 60_000;
 
 /** How agents of this type run on `runtime`, each turn once `ready`, which
  * can wait out a download of Codex or a check that it is signed in, until

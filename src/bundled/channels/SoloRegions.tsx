@@ -26,7 +26,6 @@ import {
   type RefObject,
 } from "react";
 import { OwnedContribution } from "../../plugins/OwnedContribution";
-import { NavigationSectionHeading } from "../../shared/design-system/ui/NavigationSection";
 import { SidebarSection } from "./SidebarSection";
 import styles from "./Channels.module.css";
 import { orderContributedSidebarSections } from "./sidebar-sections";
@@ -64,6 +63,18 @@ import type {
   SoloRegionProps,
 } from "../../features/channel-navigation/solo-navigation-contract";
 
+export function visibleSoloRegions(
+  regions: readonly SoloRegion[],
+  order: readonly string[],
+) {
+  return orderContributedSidebarSections(
+    regions
+      .filter((region) => !region.hidden && region.reason !== "disabled")
+      .map((region) => ({ key: `solo-region:${region.key}`, region })),
+    order,
+  ).map(({ region }) => region);
+}
+
 export function SoloRegions({
   session,
   navigator,
@@ -73,8 +84,6 @@ export function SoloRegions({
   ordinary,
   composeOrdinary,
   fallback,
-  groupDisclosure,
-  hidePrimaryHeading = false,
   pendingClick: sharedPendingClick,
 }: {
   session: RelaySession;
@@ -85,15 +94,6 @@ export function SoloRegions({
   ordinary?: ReactNode;
   composeOrdinary?: ((compose: ComposeWorkspaces) => ReactNode) | undefined;
   fallback?: ReactNode;
-  hidePrimaryHeading?: boolean;
-  groupDisclosure?:
-    | {
-        sectionKey: string;
-        title: string;
-        open: boolean;
-        onToggle(open: boolean): void;
-      }
-    | undefined;
   pendingClick?: RefObject<ReturnType<typeof setTimeout> | undefined>;
 }) {
   const localPendingClick = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -102,76 +102,17 @@ export function SoloRegions({
   const pendingClick = sharedPendingClick ?? localPendingClick;
   const snapshot = useSoloNavigation(session);
   const service = soloNavigationFor(session);
-  const regions = orderContributedSidebarSections(
-    // Hidden sources draw nothing; explicitly disabled chats use ordinary Solo.
-    snapshot.regions
-      .filter((region) => !region.hidden && region.reason !== "disabled")
-      .map((region) => ({
-        key: `solo-region:${region.key}`,
-        region,
-      })),
+  const regions = visibleSoloRegions(
+    snapshot.regions,
     sidebar.contributionOrder,
-  ).map(({ region }) => region);
+  );
   const primary = regions.findIndex((region) => region.source);
-  const current = target.kind === "conversation" ? target.channelId : undefined;
-  const currentChannel = current
-    ? session.channels.list().channels.find((channel) => channel.id === current)
-    : undefined;
-  const fallbackOwnsCurrent =
-    primary < 0 &&
-    currentChannel?.channelType === "solo" &&
-    !snapshot.excluded.has(currentChannel.id);
-  const fallbackSectionKey = groupDisclosure?.sectionKey;
-  const fallbackOpen = groupDisclosure?.open;
-  useLayoutEffect(
-    () =>
-      sidebar.beforeReveal((location) => {
-        if (
-          !fallbackSectionKey ||
-          fallbackOpen ||
-          !fallbackOwnsCurrent ||
-          !current ||
-          location !== `conversation:${current}`
-        )
-          return true;
-        sidebar.toggle(fallbackSectionKey, true);
-        return false;
-      }),
-    [
-      current,
-      fallbackOpen,
-      fallbackOwnsCurrent,
-      fallbackSectionKey,
-      sidebar.beforeReveal,
-      sidebar.toggle,
-    ],
-  );
-  const fallbackContents = groupDisclosure ? (
-    <SidebarSection
-      sectionKey={groupDisclosure.sectionKey}
-      title={groupDisclosure.title}
-      open={groupDisclosure.open}
-      onToggle={groupDisclosure.onToggle}
-      hideMoreActions
-      persistentChevron
-    >
-      {ordinary}
-    </SidebarSection>
-  ) : hidePrimaryHeading ? (
-    // Like Team, the Solo tab names its list, so the rows sit directly in it.
-    (ordinary ?? null)
-  ) : (
-    (fallback ?? null)
-  );
-  if (!service) return fallbackContents;
+  if (!service) return fallback ?? null;
   return (
     <>
       {regions.map((region, index) => (
         <div
           key={`${region.key}:${snapshot.binding?.incarnation ?? "recovery"}`}
-          hidden={
-            !!groupDisclosure && !groupDisclosure.open && index !== primary
-          }
         >
           <RegionFrame
             region={region}
@@ -197,13 +138,10 @@ export function SoloRegions({
             last={index === regions.length - 1}
             ordinary={index === primary ? ordinary : undefined}
             composeOrdinary={index === primary ? composeOrdinary : undefined}
-            groupDisclosure={index === primary ? groupDisclosure : undefined}
-            groupSectionKey={groupDisclosure?.sectionKey}
-            hideHeading={hidePrimaryHeading && index === primary}
           />
         </div>
       ))}
-      {primary < 0 ? fallbackContents : null}
+      {primary < 0 ? fallback : null}
     </>
   );
 }
@@ -221,9 +159,6 @@ function RegionFrame({
   last,
   ordinary,
   composeOrdinary,
-  groupDisclosure,
-  groupSectionKey,
-  hideHeading,
   pendingClick,
 }: {
   scope: string;
@@ -239,24 +174,11 @@ function RegionFrame({
   last: boolean;
   ordinary?: ReactNode;
   composeOrdinary?: ((compose: ComposeWorkspaces) => ReactNode) | undefined;
-  groupDisclosure?:
-    | {
-        sectionKey: string;
-        title: string;
-        open: boolean;
-        onToggle(open: boolean): void;
-      }
-    | undefined;
-  groupSectionKey?: string | undefined;
-  hideHeading?: boolean;
 }) {
   const binding = service.snapshot().binding;
   const source = region.source;
   const [actionError, setActionError] = useState(false);
-  const [revealRequest, setRevealRequest] = useState<{
-    id: string;
-    explicit: boolean;
-  }>();
+  const [revealRequest, setRevealRequest] = useState<string>();
   const root = useRef<HTMLDivElement>(null);
   const current =
     target.kind === "conversation" &&
@@ -295,50 +217,48 @@ function RegionFrame({
       source && binding ? service.presentation(source, binding) : undefined,
     [service, source, binding],
   );
-  const active = () =>
-    !!binding &&
-    service.snapshot().binding === binding &&
-    !!source &&
-    service.sources().includes(source);
-  const { toggle, retryReveal, revealAgain } = sidebar;
-  const ownsCurrent =
-    !!current && region.channels.some((channel) => channel.id === current);
+  const { retryReveal, revealAgain } = sidebar;
+  const open = !sidebar.collapsed.includes(sectionKey);
+  const { channels, live } = region;
+  const destination = useMemo(
+    () => ({
+      channels,
+      live,
+      session,
+      navigator,
+      pendingClick,
+      scope,
+      current,
+      active: () =>
+        !!binding &&
+        service.snapshot().binding === binding &&
+        !!source &&
+        service.sources().includes(source),
+      retryReveal,
+    }),
+    [
+      channels,
+      live,
+      session,
+      navigator,
+      pendingClick,
+      scope,
+      current,
+      binding,
+      service,
+      source,
+      retryReveal,
+    ],
+  );
+  const { active } = destination;
   useLayoutEffect(() => {
-    let prepared = false;
-    return sidebar.beforeReveal((location) => {
-      if (
-        prepared ||
-        !current ||
-        !ownsCurrent ||
-        location !== `conversation:${current}`
-      )
-        return true;
-      prepared = true;
-      if (groupSectionKey) toggle(groupSectionKey, true);
-      toggle(sectionKey, true);
-      service.reveal(current, false);
-      return false; // Retry against the expanded source path after its commit.
-    });
-  }, [
-    sidebar.beforeReveal,
-    current,
-    ownsCurrent,
-    sectionKey,
-    toggle,
-    service,
-    groupSectionKey,
-  ]);
-  useLayoutEffect(() => {
-    if (sidebar.collapsed.includes(sectionKey)) return;
-    if (revealRequest?.explicit && revealRequest.id === current) revealAgain();
-    else retryReveal();
-    if (revealRequest) setRevealRequest(undefined);
-  });
+    if (!revealRequest) return;
+    if (revealRequest === current) revealAgain(sectionKey);
+    setRevealRequest(undefined);
+  }, [current, revealAgain, revealRequest, sectionKey]);
   const reveal = useEffectEvent((id: string, explicit: boolean) => {
     if (!region.channels.some((channel) => channel.id === id)) return false;
-    if (groupSectionKey) toggle(groupSectionKey, true);
-    toggle(sectionKey, true);
-    setRevealRequest({ id, explicit });
+    if (explicit && id === current) setRevealRequest(id);
     return true;
   });
   useLayoutEffect(() => service.subscribeReveal(reveal, true), [service]);
@@ -487,60 +407,28 @@ function RegionFrame({
         </WorkspaceCompositionContext>
       ))
     : body;
-  const hasActions = actions.length > 0;
   return (
-    <RegionDestinationContext.Provider
-      value={{
-        region,
-        session,
-        navigator,
-        pendingClick,
-        scope,
-        current,
-        active,
-        retryReveal,
-      }}
-    >
+    <RegionDestinationContext.Provider value={destination}>
       <div ref={root}>
-        {hideHeading ? (
-          // The tab already names this region, so it has no title row. Its
-          // actions, when it has any, take a headingless row in the flow.
-          <>
-            {hasActions && <NavigationSectionHeading actions={headerActions} />}
-            {headerNotice}
-            <RegionChannelGroups session={session}>
-              {contents}
-            </RegionChannelGroups>
-            {!composing && groupDisclosure ? ordinary : null}
-          </>
-        ) : (
-          <SidebarSection
-            sectionKey={sectionKey}
-            title={groupDisclosure?.title ?? region.title}
-            icon={source?.icon}
-            open={
-              groupDisclosure?.open ?? !sidebar.collapsed.includes(sectionKey)
-            }
-            onToggle={
-              groupDisclosure?.onToggle ??
-              ((open) => sidebar.toggle(sectionKey, open))
-            }
-            move={{
-              ...(!first ? { up: () => move(-1) } : {}),
-              ...(!last ? { down: () => move(1) } : {}),
-            }}
-            hideMoreActions={first && last}
-            persistentChevron={!!groupDisclosure}
-            headerActions={headerActions}
-            headerNotice={headerNotice}
-          >
-            <RegionChannelGroups session={session}>
-              {contents}
-            </RegionChannelGroups>
-            {!composing && groupDisclosure ? ordinary : null}
-          </SidebarSection>
-        )}
-        {composing || groupDisclosure ? null : ordinary}
+        <SidebarSection
+          sectionKey={sectionKey}
+          title={region.title}
+          icon={source?.icon}
+          open={open}
+          onToggle={(open) => sidebar.toggle(sectionKey, open)}
+          move={{
+            ...(!first ? { up: () => move(-1) } : {}),
+            ...(!last ? { down: () => move(1) } : {}),
+          }}
+          hideMoreActions={first && last}
+          headerActions={headerActions}
+          headerNotice={headerNotice}
+        >
+          <RegionChannelGroups session={session}>
+            {contents}
+          </RegionChannelGroups>
+        </SidebarSection>
+        {composing ? null : ordinary}
       </div>
     </RegionDestinationContext.Provider>
   );

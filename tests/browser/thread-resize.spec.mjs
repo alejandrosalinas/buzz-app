@@ -438,9 +438,11 @@ test.describe("exact history resize ownership", () => {
       );
       await seen;
       await expect(target).toBeFocused();
-      for (let i = 0; i < 15; i++) reply();
+      // Enough replies to fill the history well past its viewport, so the
+      // target at its top is not also at the latest reply.
+      for (let i = 0; i < 30; i++) reply();
       await expect(
-        history.getByText("Review live reply 14", { exact: true }),
+        history.getByText("Review live reply 29", { exact: true }),
       ).toHaveCount(1);
       await page.evaluate(() => window.releaseExactReveal());
       await settle(page, history);
@@ -498,7 +500,7 @@ test.describe("exact history resize ownership", () => {
           for (const [name, original] of Object.entries(originals))
             Node.prototype[name] = function (node, ...rest) {
               const result = original.call(this, node, ...rest);
-              if (node?.textContent?.includes("Review live reply 15")) {
+              if (node?.textContent?.includes("Review live reply 30")) {
                 Object.assign(Node.prototype, originals);
                 if (contract) {
                   const scroller = el.closest('[aria-label="Thread messages"]');
@@ -518,7 +520,7 @@ test.describe("exact history resize ownership", () => {
       }
       reply();
       await expect(
-        history.getByText("Review live reply 15", { exact: true }),
+        history.getByText("Review live reply 30", { exact: true }),
       ).toHaveCount(1);
       await settle(page, history);
       if (shift === "contraction after reading")

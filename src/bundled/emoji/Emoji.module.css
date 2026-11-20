@@ -37,9 +37,11 @@
   flex-shrink: 0;
   margin: 0 var(--space-3);
 }
-/* Tabs are the first child, or follow the optional Remove row. */
-.emojiContent > :first-child:not(.emojiRemove),
-.emojiRemove + *,
+/* Tabs follow the optional Remove row. Name them by class: a universal
+   subject such as `.emojiRemove + *` is matched against every element and
+   makes every list insertion restyle its siblings. */
+/* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules global selector targets the shared Tabs root. */
+.emojiContent > :global(.buzz-tab-panels),
 .emojiContent [role="tabpanel"] {
   display: flex;
   flex-direction: column;
@@ -49,8 +51,8 @@
 .emojiContent [role="tabpanel"][data-ending-style] {
   display: none;
 }
-.emojiContent:not([data-tabs]) > :first-child:not(.emojiRemove),
-.emojiContent:not([data-tabs]) > .emojiRemove + * {
+/* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules global selector targets the shared Tabs root. */
+.emojiContent:not([data-tabs]) > :global(.buzz-tab-panels) {
   gap: 0;
 }
 .emojiContent:not([data-tabs]) [role="tablist"] {

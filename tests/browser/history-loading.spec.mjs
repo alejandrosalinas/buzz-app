@@ -258,6 +258,40 @@ test.describe("pages inside one second", () => {
       await expectAnchor(page, before);
     });
 
+  test.describe("split before the first loaded row", () => {
+    // With these keys and send times, the next page lands above the first
+    // loaded row and takes its day divider, byline and group spacing.
+    test.use({ historyRowsPerSecond: 27, fixedKeys: true });
+    test("an older page keeps a reader on the first loaded row", async ({
+      page,
+      app,
+    }) => {
+      const pending = await reading(page, app, 3000);
+      const before = await anchor(page);
+      const first = history(page).locator("[data-message-id]").first();
+      await expect(first).toHaveAttribute("data-message-id", before.id);
+      const height = await history(page).evaluate((e) => e.scrollHeight);
+      pending.release();
+      await expect
+        .poll(() => history(page).evaluate((e) => e.scrollHeight))
+        .toBeGreaterThan(height);
+      await expect(first).not.toHaveAttribute("data-message-id", before.id);
+      await settle(page);
+      await expectAnchor(page, before);
+    });
+    // A reader 1400px up keeps their rows to the end, so the page shifts them
+    // and holds no row. The first hold starts at the live message, after the
+    // reader's input ended.
+    test(
+      "a drag released before the first render that holds its row ends the hold",
+      endedBeforeHold("drag"),
+    );
+    test(
+      "a wheel ended before the first render that holds its row ends the hold",
+      endedBeforeHold("wheel"),
+    );
+  });
+
   test("input after the page lands starts from the reader's row", async ({
     page,
     app,
@@ -587,56 +621,86 @@ test.describe("pages inside one second", () => {
     await expectAnchor(page, beforeGrowth);
   });
 
-  test("a drag released before a render that holds its row again ends the hold", async ({
-    page,
-    app,
-  }) => {
-    const pending = await reading(page, app, 1400);
-    const box = await history(page).boundingBox();
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    await page.mouse.down();
-    const height = await history(page).evaluate((e) => e.scrollHeight);
-    await holdFrames(page);
-    try {
-      pending.release();
-      await expect
-        .poll(() => history(page).evaluate((e) => e.scrollHeight))
-        .toBeGreaterThan(height);
-      await history(page).evaluate(
-        (e) =>
-          new Promise((resolve) => {
-            e.addEventListener("scrollend", resolve, { once: true });
+  test(
+    "a drag released before a render that holds its row again ends the hold",
+    endedBeforeHold("drag"),
+  );
+  // Reader input moves 300px up and ends while the page's rows wait to
+  // measure, before a live message renders.
+  function endedBeforeHold(input) {
+    return async ({ page, app }) => {
+      const pending = await reading(page, app, 1400);
+      const box = await history(page).boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      if (input === "drag") await page.mouse.down();
+      const height = await history(page).evaluate((e) => e.scrollHeight);
+      await holdFrames(page);
+      try {
+        pending.release();
+        await expect
+          .poll(() => history(page).evaluate((e) => e.scrollHeight))
+          .toBeGreaterThan(height);
+        // A Virtua correction's scrollend can arrive before the input's own
+        // scroll, which Linux WebKit can deliver after later renders. The
+        // input ends at a scrollend once the reader has moved.
+        await history(page).evaluate((e) => {
+          const start = e.scrollTop;
+          let corrected = 0;
+          e.dataset.scrollEnded = "";
+          e.addEventListener("virtua-scroll-correction", ({ detail }) => {
+            corrected += detail.after - detail.before;
+          });
+          const ended = () => {
+            if (start + corrected - e.scrollTop < 150) return;
+            delete e.dataset.scrollEnded;
+            e.removeEventListener("scrollend", ended);
+          };
+          e.addEventListener("scrollend", ended);
+        });
+        if (input === "drag")
+          await history(page).evaluate((e) => {
             e.scrollTop -= 300;
-          }),
-      );
-      await page.mouse.up();
-      // The timeline renders new rows before the page's rows measure, and
-      // holds the reader's row again for them.
-      app.append("primary", "alpha", undefined, true, false);
-      await expect(latest(page)).toHaveText("1 new message");
-    } finally {
-      await page.evaluate(() => window.releaseFrames());
-    }
-    await measured(page);
-    const before = await anchor(page);
-    // The reader's row and the rows after it in view grow below their
-    // paragraphs. A hold left on any of them would move the reader's row.
-    await history(page).evaluate((e, id) => {
-      const bottom = e.getBoundingClientRect().bottom;
-      const rows = [...e.querySelectorAll("[data-message-id]")];
-      for (const row of rows.slice(
-        rows.findIndex((row) => row.dataset.messageId === id),
-      )) {
-        const paragraph = row.querySelector("p");
-        if (paragraph.getBoundingClientRect().bottom > bottom) break;
-        const extra = document.createElement("div");
-        extra.style.height = "300px";
-        paragraph.after(extra);
+          });
+        // Linux WebKit animates a wheel scroll, and a row measurement's
+        // correction can stop it short. Wheel again until the reader moves.
+        else
+          for (
+            let i = 0;
+            i < 4 &&
+            (await history(page).getAttribute("data-scroll-ended")) !== null;
+            i++
+          )
+            await wheel(page, -300);
+        await expect(history(page)).not.toHaveAttribute("data-scroll-ended");
+        if (input === "drag") await page.mouse.up();
+        // The timeline renders new rows before the page's rows measure, and
+        // holds the reader's row again for them.
+        app.append("primary", "alpha", undefined, true, false);
+        await expect(latest(page)).toHaveText("1 new message");
+      } finally {
+        await page.evaluate(() => window.releaseFrames());
       }
-    }, before.id);
-    await settle(page);
-    await expectAnchor(page, before);
-  });
+      await measured(page);
+      const before = await anchor(page);
+      // The reader's row and the rows after it in view grow below their
+      // paragraphs. A hold left on any of them would move the reader's row.
+      await history(page).evaluate((e, id) => {
+        const bottom = e.getBoundingClientRect().bottom;
+        const rows = [...e.querySelectorAll("[data-message-id]")];
+        for (const row of rows.slice(
+          rows.findIndex((row) => row.dataset.messageId === id),
+        )) {
+          const paragraph = row.querySelector("p");
+          if (paragraph.getBoundingClientRect().bottom > bottom) break;
+          const extra = document.createElement("div");
+          extra.style.height = "300px";
+          paragraph.after(extra);
+        }
+      }, before.id);
+      await settle(page);
+      await expectAnchor(page, before);
+    };
+  }
 
   test("a cancelled drag ends the hold", async ({ page, app }) => {
     const pending = await reading(page, app, 1400);

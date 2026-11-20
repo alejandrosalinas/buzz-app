@@ -1,13 +1,12 @@
-// The Buzz tools' guidance, which every agent plugin gives its agents after
-// the shared base prompt (features/agent-harness): the posting conventions.
-// How to use the attention tools is in their descriptions, so this never
-// changes with the owner's attention setting.
-import buzzPrompt from "./prompt.md?raw";
+// What the Buzz tools tell an agent outside their own descriptions: the
+// product help line, and the turn instructions the tools' routing depends
+// on. How to post is in the base prompt's sections
+// (features/agent-harness/sections).
+import productHelp from "../features/agent-harness/sections/product-help.md?raw";
 
-export const BUZZ_HELP_PROMPT =
-  "When someone asks how to use Buzz, read buzz_help for product guidance bundled with this version. Check available tools and context before promising a capability.";
-
-export const BUZZ_PROMPT = `${buzzPrompt.trim()}\n\n## Product help\n\n${BUZZ_HELP_PROMPT}`;
+/** The base prompt's Product help section, which a client that connects
+ * without the base prompt gets as the server's instructions. */
+export const BUZZ_HELP_PROMPT = productHelp.trim();
 
 /** The turn instruction for a conversation whose messages stay at the
  * channel's top level; the tools refuse a reply into a thread there. */

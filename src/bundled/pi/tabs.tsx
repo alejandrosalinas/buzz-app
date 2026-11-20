@@ -1,3 +1,4 @@
+import { sessionScope } from "../../features/agent-harness/session-scope";
 // Pi's New agent choices and agent settings. Providers, their keys and their
 // models are Pi's own: listed from it, and keys saved with its login.
 import {
@@ -17,7 +18,12 @@ import {
   whenShown,
 } from "../../features/agents/TranscriptPanel";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
-import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
+import { CompactionField } from "../../features/agents/Compaction";
+import { withCompactAt } from "../../features/agents/compact-at";
+import {
+  AgentSaveButton,
+  ClearModelOverrides,
+} from "../../features/agents/AgentSaveButton";
 import { ModelPicker } from "../../features/agents/ModelPicker";
 import {
   ConversationName,
@@ -70,6 +76,7 @@ const SCOPES = [
     options: [
       { value: "thread", label: "One conversation per thread" },
       { value: "channel", label: "One conversation per channel" },
+      { value: "community", label: "One conversation per community" },
     ],
   },
 ];
@@ -87,8 +94,10 @@ const providerIcon = (id: string | undefined) => {
   return Icon && <Icon size={18} aria-hidden="true" />;
 };
 const CONVERSATION_LIMIT = 30;
-const label = ({ channelId, name, root }: Place) =>
-  `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
+const label = ({ channelId, name, root, community }: Place) =>
+  community
+    ? "Community session"
+    : `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
 type Read<T> = (
   | { status: "loading"; value?: T }
   | { status: "ready"; value: T }
@@ -775,6 +784,8 @@ export function createTabs({
       places,
       conversation,
       async () => undefined,
+      undefined,
+      readConfig(agent.config).scope,
     );
     const status = (place: Place) =>
       working.includes(place.conversation) ? "Working" : undefined;
@@ -894,6 +905,22 @@ export function createTabs({
       setSaving(true);
       setError("");
       try {
+        if (
+          settingsHost?.proposedModelOrEffort &&
+          (draft.model || draft.effort)
+        ) {
+          const model = models.value?.find(
+            ({ id }) => id === (draft.model || defaultModel(draft, defaults)),
+          );
+          if (!model)
+            throw new Error(
+              "Choose an available Pi model or clear the model and thinking overrides.",
+            );
+          if (draft.effort && !model.thinking.includes(draft.effort))
+            throw new Error(
+              "Choose a thinking level this Pi model supports or use Default.",
+            );
+        }
         await save({
           ...draft,
           workspace: draft.workspace.trim() || DEFAULT_CONFIG.workspace,
@@ -967,6 +994,11 @@ export function createTabs({
                 groups={[{ label: "", options: efforts }]}
                 onValueChange={(effort) => setDraft({ ...draft, effort })}
               />
+              <CompactionField
+                value={draft.compactAt}
+                disabled={saving}
+                onChange={(value) => setDraft(withCompactAt(draft, value))}
+              />
             </SettingsGroup>
             <AgentInstructions
               value={draft.instructions}
@@ -995,12 +1027,19 @@ export function createTabs({
               onValueChange={(value) =>
                 setDraft({
                   ...draft,
-                  scope: value === "channel" ? "channel" : "thread",
+                  scope: sessionScope(value),
                 })
               }
             />
           </>
         )}
+        {settingsHost?.proposedModelOrEffort &&
+          (draft.model || draft.effort) && (
+            <ClearModelOverrides
+              disabled={saving}
+              onClick={() => setDraft({ ...draft, model: "", effort: "" })}
+            />
+          )}
         <AgentSaveButton
           form={form}
           saving={saving}

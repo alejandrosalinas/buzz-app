@@ -50,7 +50,7 @@ it("keeps listening channels distinct from destinations and respects rearmed tim
         expires_at: null,
       },
       110,
-      2,
+      { armedAt: 100, nextDue: 220, used: 2 },
     ).spent,
   ).toBe(true);
 });
@@ -198,6 +198,9 @@ it.each(["source", "event", "timer"] as const)(
               expires_at: null,
             };
     const value = { ...watch, enabled: true, interest_id: "release", channel };
+    // A timer's controls also name its schedule.
+    const named = (prefix: string) =>
+      type === "timer" ? new RegExp(`^${prefix}, Every 1m`) : prefix;
     let agent = {
       key: "membership-a",
       pubkey: "a",
@@ -324,15 +327,17 @@ it.each(["source", "event", "timer"] as const)(
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(
-      screen.getByRole("button", { name: "Watch status for release" }),
+      screen.getByRole("button", { name: named("Watch status for release") }),
     ).toBeTruthy();
     save.mockClear();
     expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull();
     fireEvent.click(
-      screen.getByRole("button", { name: "Watch status for release" }),
+      screen.getByRole("button", { name: named("Watch status for release") }),
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
-    const remove = screen.getByRole("menuitem", { name: "Delete release" });
+    const remove = screen.getByRole("menuitem", {
+      name: named("Delete release"),
+    });
     try {
       await waitFor(() =>
         expect(
@@ -368,7 +373,9 @@ it.each(["source", "event", "timer"] as const)(
         screen.getByText("Ask Ada to set this timer’s next run."),
       ).toBeTruthy();
     }
-    fireEvent.click(screen.getByRole("menuitem", { name: "Delete release" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: named("Delete release") }),
+    );
     // Deleting a watch asks first, like deleting its Interest does. This watch
     // has no name of its own, so the title names its kind rather than echoing
     // the Interest's "Delete release?".
@@ -378,7 +385,7 @@ it.each(["source", "event", "timer"] as const)(
     expect(
       within(confirm).getByText(
         type === "timer"
-          ? /^This deletes the timer\./
+          ? /^This deletes the “Every 1m.*” timer\./
           : /^This deletes the watch\./,
       ),
     ).toBeTruthy();
@@ -391,11 +398,13 @@ it.each(["source", "event", "timer"] as const)(
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(save).toHaveBeenCalledTimes(1);
     const pill = screen.getByRole("button", {
-      name: "Watch status for release",
+      name: named("Watch status for release"),
     });
     await waitFor(() => expect(document.activeElement).toBe(pill));
     fireEvent.click(pill);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Delete release" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: named("Delete release") }),
+    );
     fireEvent.click(
       within(screen.getByRole("alertdialog")).getByRole("button", {
         name: "Delete",
@@ -404,7 +413,7 @@ it.each(["source", "event", "timer"] as const)(
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(screen.queryByRole("menuitem", { name: "Pause" })).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Watch status for release" }),
+      screen.queryByRole("button", { name: named("Watch status for release") }),
     ).toBeNull();
     // The dialog deletes the watch as paused above, not as first rendered.
     expect(save).toHaveBeenLastCalledWith("membership-a", {
@@ -1678,15 +1687,24 @@ it("shows a fired timer's wake as activity", () => {
   render(
     React.createElement(createTab(ctx), { agent: { key: "membership-a" } }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Details for release" }));
-  const activity = screen.getByLabelText("Show activity for release");
+  // A timer's button names its schedule, so timers under one Interest differ.
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /^Details for release, Every 1h · next /,
+    }),
+  );
+  const activity = screen.getByLabelText(
+    /^Show activity for release, Every 1h · next /,
+  );
   expect(activity.querySelector(".attention-detail-preview")?.textContent).toBe(
     "1 event",
   );
   fireEvent.click(activity);
   expect(
     within(
-      screen.getByRole("list", { name: "Activity for release" }),
+      screen.getByRole("list", {
+        name: /^Activity for release, Every 1h · next /,
+      }),
     ).getByLabelText("Open activity: Check the release."),
   ).toBeTruthy();
 });

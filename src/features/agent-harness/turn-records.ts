@@ -36,6 +36,62 @@ export function withNames<T extends { id: string; pubkey: string }>(
   };
 }
 
+/** Tags that say what a message means: who it mentions, what it quotes or
+ * refers to, the thread it came from, the message it answers, its files,
+ * topics and custom emoji. Transport and runtime bookkeeping stays out. */
+const READABLE = new Set([
+  "p",
+  "q",
+  "e",
+  "buzz:request",
+  "buzz:sent-from-thread",
+  "imeta",
+  "t",
+  "emoji",
+]);
+
+/** A message's tags for an agent to read. */
+export const readableTags = (tags: readonly (readonly string[])[]) =>
+  tags.filter(([name]) => READABLE.has(name ?? ""));
+
+/** A message's tags with the files and custom emoji an edit may have
+ * replaced, as its timeline shows them. */
+export const editedTags = (
+  tags: readonly (readonly string[])[],
+  files: readonly (readonly string[])[],
+  emoji: readonly (readonly string[])[],
+) => [
+  ...tags.filter(([name]) => name !== "imeta" && name !== "emoji"),
+  ...files.filter(([name]) => name === "imeta"),
+  ...emoji.filter(([name]) => name === "emoji"),
+];
+
+/** The characters a context record's content and tags may take together. */
+export const CONTENT_LIMIT = 4000;
+
+/** A context record's content and the tags that fit beside it in
+ * CONTENT_LIMIT, saying when some didn't. */
+export const contentFields = (
+  content: string,
+  tags: readonly (readonly string[])[],
+) => {
+  const text = content.slice(0, CONTENT_LIMIT);
+  const readable = readableTags(tags);
+  const fit: (readonly string[])[] = [];
+  let room = CONTENT_LIMIT - text.length;
+  for (const tag of readable) {
+    const size = JSON.stringify(tag).length;
+    if (size > room) continue;
+    room -= size;
+    fit.push(tag);
+  }
+  return {
+    content: text,
+    ...(fit.length ? { tags: fit } : {}),
+    ...(fit.length < readable.length ? { tags_omitted: true } : {}),
+  };
+};
+
 /** The event a turn is for, then what it asks of the agent. */
 export const eventBody = (
   event: EventData,

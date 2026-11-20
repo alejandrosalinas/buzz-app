@@ -18,22 +18,25 @@ const T0 = 1_700_000_000;
 const newestFirst = (a: RelayEvent, b: RelayEvent) =>
   b.created_at - a.created_at || a.id.localeCompare(b.id);
 
+// Signing the history took most of each test's time, so a slow runner spent
+// the test's own budget on it. Tests never mutate it: sign it once per file.
+// Each harness still gets its own relay and viewer identities.
+const alice = keypair();
+const count = 300;
+const history = Array.from({ length: count }, (_, i) =>
+  message(alice, "c", `m${i}`, T0 + i * HOUR),
+);
+
 /** A session over an auto-answering relay holding `count` hourly messages in channel "c". */
 function harness({
-  count = 300,
   maxHistoryRows,
   prepared,
 }: {
-  count?: number;
   maxHistoryRows?: number;
   prepared?: boolean;
 } = {}) {
   const relay = keypair(),
-    viewer = keypair(),
-    alice = keypair();
-  const history = Array.from({ length: count }, (_, i) =>
-    message(alice, "c", `m${i}`, T0 + i * HOUR),
-  );
+    viewer = keypair();
   const ordered = [...history].sort(newestFirst);
   const reads: ReadFilter[] = [];
   const gate: { hold?: Promise<void> | undefined; failHead?: boolean } = {};

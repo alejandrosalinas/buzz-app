@@ -21,24 +21,23 @@ test("workspace settings rename preserves filing in ordinary and composed headin
   await page.clock.install();
   await page.goto(app.origin);
   await newChat(page);
-  const sidebar = page.getByRole("navigation", { name: "Solo conversations" });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  await sidebar.getByRole("button", { name: "Alpha", exact: true }).hover();
   await sidebar.getByRole("button", { name: "Actions for Alpha" }).click();
-  await page.getByRole("menuitem", { name: "Move to", exact: true }).focus();
+  await page.getByRole("menuitem", { name: "Move to…", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
   await page
-    .getByRole("menuitem", { name: "New workspace", exact: true })
+    .getByRole("menuitem", { name: "Create new…", exact: true })
     .click();
-  const create = page.getByRole("dialog", { name: "Create new workspace" });
-  await create.getByRole("textbox", { name: "Workspace name" }).fill("Work");
+  const create = page.getByRole("dialog", { name: "Move to new workspace" });
+  await create.getByRole("textbox", { name: "Name", exact: true }).fill("Work");
   await create.getByRole("button", { name: "Create and move" }).click();
-  await expect(
-    sidebar.getByRole("button", { name: "Work", exact: true }),
-  ).toBeVisible();
+  await expect(sidebar.locator('summary[aria-label="Work"]')).toBeVisible();
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
-  const initial = app.report.sidebarPublications[0].blob.value;
-  const id = initial.groups[0].id;
+  const initial = app.report.sidebarPublications[0].blob;
+  const id = initial.sections[0].id;
   const createdAt = app.report.sidebarPublications[0].event.created_at * 1000;
-  const header = sidebar.locator(`[data-solo-menu-id="project-${id}"]`);
+  const header = sidebar.locator(`[data-sidebar-section="group:${id}"]`);
   let name = "Work";
   for (const composed of [false, true]) {
     if (composed) {
@@ -58,15 +57,18 @@ test("workspace settings rename preserves filing in ordinary and composed headin
       exact: true,
     });
     if (await show.isVisible()) await show.click();
-    const title = sidebar.getByRole("button", { name, exact: true });
-    await expect(title).toBeVisible();
+    const title = () =>
+      composed
+        ? sidebar.getByRole("button", { name, exact: true })
+        : header.locator("summary");
+    await expect(title()).toBeVisible();
     const open = async () => {
       if (composed) {
-        await title.focus();
+        await title().focus();
         await page.keyboard.press("Shift+F10");
       } else {
         await header
-          .getByRole("button", { name: `Actions for ${name}` })
+          .getByRole("button", { name: `More actions for ${name}` })
           .click();
       }
       const settings = page.getByRole("menuitem", {
@@ -74,6 +76,16 @@ test("workspace settings rename preserves filing in ordinary and composed headin
         exact: true,
       });
       await expect(settings).toBeVisible();
+      await expect(
+        page.getByRole("menuitem", {
+          name: "Archive inactive chats",
+          exact: true,
+        }),
+      ).toHaveCount(0);
+      if (!composed)
+        await expect(
+          page.getByRole("menuitem", { name: "Filter", exact: true }),
+        ).toBeVisible();
       await expect(
         page.getByRole("menuitem", { name: "Rename workspace", exact: true }),
       ).toHaveCount(0);
@@ -99,13 +111,22 @@ test("workspace settings rename preserves filing in ordinary and composed headin
     await settings
       .getByRole("textbox", { name: /^Instructions/ })
       .fill("Keep the workspace context");
+    if (!composed)
+      await page.route("**/sidebar-section-rename", (route) => {
+        app.report.sidebarPreferenceFailures ??= [];
+        app.report.sidebarPreferenceFailures.push(route.request().url());
+        return route.fulfill({ status: 502, json: { error: "Rename failed" } });
+      });
     await settings
       .getByRole("button", { name: "Save changes", exact: true })
       .click();
     if (!composed) {
-      // Existing same-second replacement refusal keeps both inputs for retry.
-      await expect(settings.getByRole("alert")).toContainText("wait a second");
+      await expect(settings.getByRole("alert")).toContainText("502");
       await expect(field).toHaveValue(name);
+      await expect(
+        settings.getByRole("textbox", { name: /^Instructions/ }),
+      ).toHaveValue("Keep the workspace context");
+      await page.unroute("**/sidebar-section-rename");
       await page.clock.setFixedTime(createdAt + 1000);
       await settings
         .getByRole("button", { name: "Save changes", exact: true })
@@ -114,26 +135,30 @@ test("workspace settings rename preserves filing in ordinary and composed headin
     await expect(settings).toHaveCount(0);
     await expect
       .poll(() => app.report.sidebarPublications.length)
-      .toBe(composed ? 5 : 3);
+      .toBe(composed ? 4 : 3);
     const saved = app.report.sidebarPublications
-      .slice(-2)
-      .map(({ blob }) => blob.value);
+      .slice(composed ? -1 : -2)
+      .map(({ blob, coordinate }) =>
+        coordinate === "channel-workspaces" ? blob : blob.value,
+      );
     expect(saved).toEqual([
-      { ...initial, groups: [{ ...initial.groups[0], name }] },
-      expect.objectContaining({
-        type: "template",
-        name: `${name} chats`,
-        canvas: "Keep the workspace context",
-      }),
+      { ...initial, sections: [{ ...initial.sections[0], name }] },
+      ...(!composed
+        ? [
+            expect.objectContaining({
+              type: "template",
+              name: `${name} chats`,
+              canvas: "Keep the workspace context",
+            }),
+          ]
+        : []),
     ]);
     await page.reload();
     if (composed) await show.click();
-    await expect(
-      sidebar.getByRole("button", { name, exact: true }),
-    ).toBeVisible();
+    await expect(title()).toBeVisible();
     await expect(
       sidebar
-        .locator(`[data-solo-project="${id}"]`)
+        .locator(`[data-sidebar-section="group:${id}"]`)
         .getByRole("button", { name: "Alpha", exact: true }),
     ).toBeVisible();
   }

@@ -114,7 +114,7 @@ test("a replacement sidebar unmounts Messages and returning restores its view", 
     page.getByRole("menu", { name: "More actions for Work", exact: true }),
   ).toHaveCount(0);
   await page
-    .getByRole("button", { name: "More actions for Channels", exact: true })
+    .getByRole("button", { name: "More actions for Team", exact: true })
     .press("Enter");
   await page.getByRole("menuitem", { name: "Sort", exact: true }).hover();
   await expect(

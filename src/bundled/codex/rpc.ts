@@ -34,6 +34,8 @@ export type ToolReply = {
 
 /** Codex's answer refusing a request, which it therefore did not carry out. */
 export class Refused extends Error {}
+/** No reply arrived before the RPC deadline. */
+export class RequestTimeout extends Error {}
 /** A line over the connection's frame, which closes it. */
 export class Oversized extends Error {
   constructor() {
@@ -57,6 +59,7 @@ export class AppServer {
   private buffer = "";
   private stderr = "";
   private listeners = new Set<(message: Wire) => void>();
+  private readonly unconfirmedReleases = new Set<string>();
   private closing?: Promise<void> | undefined;
   private gone = false;
   private opened?: [Spawn, string | undefined, boolean];
@@ -132,11 +135,32 @@ export class AppServer {
     this.closing = undefined;
     this.gone = false;
     this.buffer = this.stderr = "";
+    this.unconfirmedReleases.clear();
     return this.open(spawn, cwd, protectedRuntime);
   }
   /** Whether the process has exited. */
   get exited() {
     return this.gone;
+  }
+  /** A timed-out release may have reached Codex. Wait for a confirmed
+   * unsubscribe before resuming that thread with new instructions. */
+  async releaseThread(threadId: string) {
+    this.unconfirmedReleases.add(threadId);
+    await this.request("thread/unsubscribe", { threadId });
+    this.unconfirmedReleases.delete(threadId);
+  }
+  async confirmThreadReleased(threadId: string) {
+    if (this.unconfirmedReleases.has(threadId))
+      await this.releaseThread(threadId);
+  }
+  /** A separate read distinguishes a silent server from a stuck unsubscribe. */
+  async closeIfUnresponsive() {
+    try {
+      await this.request("account/read");
+    } catch (error) {
+      if (error instanceof RequestTimeout)
+        await this.close("app-server responsiveness check");
+    }
   }
   onMessage(listener: (message: Wire) => void) {
     this.listeners.add(listener);
@@ -244,7 +268,7 @@ export class AppServer {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Codex ${method} timed out`));
+        reject(new RequestTimeout(`Codex ${method} timed out`));
       }, 30_000);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
@@ -258,8 +282,20 @@ export class AppServer {
       });
     });
   }
-  close(): Promise<void> {
-    this.fail(new Error("Codex connection closed"));
+  close(
+    cleanup?:
+      | "turn interrupt"
+      | "thread unsubscribe"
+      | "background terminal cleanup"
+      | "app-server responsiveness check",
+  ): Promise<void> {
+    this.fail(
+      new Error(
+        cleanup
+          ? `Buzz closed the Codex connection after ${cleanup} failed`
+          : "Codex connection closed",
+      ),
+    );
     if (!this.process) return Promise.resolve();
     if (this.closing) return this.closing;
     const process = this.process;
@@ -302,4 +338,16 @@ export async function listModels(rpc: AppServer) {
     cursor = page.nextCursor;
   } while (cursor);
   return models;
+}
+
+/** The installed Codex's voice catalog; older releases omit v3. */
+export async function voiceCatalog(rpc: AppServer) {
+  const result = await rpc.request<{
+    voices?: { v3?: string[]; defaultV1?: string };
+  }>("thread/realtime/listVoices");
+  return result.voices;
+}
+
+export async function listVoices(rpc: AppServer) {
+  return (await voiceCatalog(rpc))?.v3;
 }

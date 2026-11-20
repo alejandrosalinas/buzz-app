@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -104,8 +105,8 @@ function setup(
   const session = {
     ...owner.session,
     channelDetails: details.capability,
-    soloPreferences: {
-      ...owner.session.soloPreferences,
+    sidebarPreferences: {
+      ...owner.session.sidebarPreferences,
       snapshot: () => (filed ? filedProjects : unfiledProjects),
       refresh: projectsRefresh,
       assign: unfile,
@@ -218,11 +219,11 @@ it.each(["private", "public"])(
     fireEvent.click(confirm());
     await waitFor(() => expect(h.close).toHaveBeenCalledOnce());
     expect(h.publish).toHaveBeenCalledOnce();
-    expect(h.unfile).toHaveBeenCalledExactlyOnceWith(id, undefined);
-    expect(h.convertedCallback).toHaveBeenCalledOnce();
-    expect(h.publish.mock.invocationCallOrder[0]).toBeLessThan(
-      h.unfile.mock.invocationCallOrder[0] ?? 0,
+    expect(h.unfile).not.toHaveBeenCalled();
+    expect(h.session.sidebarPreferences.snapshot().data?.assignments[id]).toBe(
+      "g",
     );
+    expect(h.convertedCallback).toHaveBeenCalledOnce();
     expect(chatConversion(h.session, id)).toBeUndefined();
     const event = h.sign.mock.calls[0]?.[0];
     expect(event?.kind).toBe(9002);
@@ -389,7 +390,7 @@ it("keeps Finish recovery after a transient read failure and completes without r
   fireEvent.click(finish);
   await waitFor(() => expect(h.close).toHaveBeenCalledOnce());
   expect(h.publish).toHaveBeenCalledOnce();
-  expect(h.unfile).toHaveBeenCalledOnce();
+  expect(h.unfile).not.toHaveBeenCalled();
 });
 it.each(["authority", "conflict"])(
   "fresh %s prevents conversion and reload explicitly recovers",
@@ -548,79 +549,7 @@ it("an unrelated unconfirmed metadata change cannot be checked as conversion", a
   expect(h.publish).toHaveBeenCalledOnce();
 });
 
-it("retries only project unfiling after confirmed conversion and remount", async () => {
-  const h = setup();
-  h.unfile.mockRejectedValueOnce(new Error("Projects save unavailable"));
-  await ready();
-  await selectAccess("Public");
-  fireEvent.click(confirm());
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Projects save unavailable",
-  );
-  expect(chatConversion(h.session, id)?.converted).toBe(true);
-  expect(h.convertedCallback).not.toHaveBeenCalled();
-  expect(h.close).not.toHaveBeenCalled();
-  expect(
-    canConvertToChannel(h.session, {
-      id,
-      name: "Original",
-      channelType: "stream",
-    }),
-  ).toBe(true);
-  h.mounted.unmount();
-  render(
-    <ConvertToChannel
-      session={h.session}
-      id={id}
-      close={h.close}
-      onConverted={h.convertedCallback}
-    />,
-  );
-  expect(
-    screen.getByText(
-      "Channel converted. Finish removing it from its Solo workspace.",
-    ),
-  ).toBeVisible();
-  expect(accessControl()).toHaveTextContent("Public");
-  fireEvent.click(screen.getByRole("button", { name: "Finish conversion" }));
-  await waitFor(() => expect(h.convertedCallback).toHaveBeenCalledOnce());
-  expect(h.publish).toHaveBeenCalledOnce();
-  expect(h.sign).toHaveBeenCalledOnce();
-  expect(h.unfile).toHaveBeenCalledTimes(2);
-  expect(chatConversion(h.session, id)).toBeUndefined();
-});
-it.each(["visit", "unmount"])(
-  "retains converted recovery but suppresses completion after %s during unfiling",
-  async (retire) => {
-    const h = setup();
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    h.unfile.mockImplementationOnce(async () => {
-      await held;
-      return { sections: [], assignments: {}, starred: [], muted: [] };
-    });
-    await ready();
-    fireEvent.click(confirm());
-    try {
-      await waitFor(() => expect(h.unfile).toHaveBeenCalledOnce());
-      expect(h.publish).toHaveBeenCalledOnce();
-      if (retire === "visit") h.visit.abort();
-      else h.mounted.unmount();
-    } finally {
-      await act(async () => {
-        release();
-        await held;
-      });
-    }
-    expect(h.convertedCallback).not.toHaveBeenCalled();
-    expect(h.close).not.toHaveBeenCalled();
-    expect(chatConversion(h.session, id)?.converted).toBe(true);
-  },
-);
-
-it("finishes removal when another details consumer confirmed the uncertain conversion", async () => {
+it("finishes when another details consumer confirmed the uncertain conversion", async () => {
   const h = setup();
   h.publish.mockRejectedValueOnce(new Error("lost acknowledgment"));
   await ready();
@@ -644,39 +573,52 @@ it("finishes removal when another details consumer confirmed the uncertain conve
   );
   await waitFor(() => expect(h.convertedCallback).toHaveBeenCalledOnce());
   expect(h.publish).toHaveBeenCalledOnce();
-  expect(h.unfile).toHaveBeenCalledOnce();
+  expect(h.unfile).not.toHaveBeenCalled();
 });
-it("serializes conversion completion across two mounted forms", async () => {
+it("serializes metadata recovery across two mounted forms", async () => {
   const h = setup();
   await ready();
+  h.publish.mockRejectedValueOnce(new Error("lost acknowledgment"));
+  fireEvent.click(confirm());
+  await screen.findByRole("alert");
+  h.mounted.unmount();
+  h.converted();
+  await h.session.channelDetails.check(id);
+  render(
+    <ConvertToChannel
+      session={h.session}
+      id={id}
+      close={h.close}
+      onConverted={h.convertedCallback}
+    />,
+  );
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  h.unfile.mockImplementationOnce(async () => {
-    await held;
-    return { sections: [], assignments: {}, starred: [], muted: [] };
+  const load = h.read.getMockImplementation();
+  if (!load) throw new Error("Missing details reader");
+  const first = await screen.findByRole("button", {
+    name: "Finish conversion",
   });
-  fireEvent.click(confirm());
+  h.read.mockImplementationOnce(async () => {
+    await held;
+    return load();
+  });
+  fireEvent.click(first);
   try {
-    await waitFor(() => expect(h.unfile).toHaveBeenCalledOnce());
     render(<ConvertToChannel session={h.session} id={id} close={vi.fn()} />);
-    const finish = screen.getAllByRole("button", {
-      name: "Finish conversion",
-      hidden: true,
-    });
-    expect(finish).toHaveLength(2);
-    for (const button of finish) {
-      expect(button).toBeDisabled();
-      fireEvent.click(button);
-    }
+    await waitFor(() =>
+      expect(screen.getAllByRole("dialog", { hidden: true })).toHaveLength(2),
+    );
+    expect(first).toBeDisabled();
+    const other = screen.getByRole("dialog");
+    expect(
+      within(other).getByRole("button", { name: /convert|finish/i }),
+    ).toBeDisabled();
     expect(h.publish).toHaveBeenCalledOnce();
-    expect(h.unfile).toHaveBeenCalledOnce();
   } finally {
-    await act(async () => {
-      release();
-      await held;
-    });
+    await act(async () => release());
   }
   await waitFor(() => expect(h.convertedCallback).toHaveBeenCalledOnce());
 });

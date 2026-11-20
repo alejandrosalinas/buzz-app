@@ -16,7 +16,7 @@ import type {
   ReadMutationResult,
   ReadSyncSnapshot,
 } from "./read-state";
-import type { ReadJournal } from "./read-state-storage";
+import { type ReadJournal, UNRESOLVED_ROOT } from "./read-state-storage";
 import { markMessage } from "./read-state-retention";
 import { LIVE_RESUME_LAG } from "./live";
 import type { Priority, RelayReader } from "./reader";
@@ -111,6 +111,11 @@ export type ThreadActivityItem = Readonly<{
   createdAt: number;
   preview: string;
   unreadCount: number;
+  /** An unread reply is in a conversation of the viewer's own, rather than
+   * counting only as a mention or broadcast. */
+  participating?: true;
+  /** The newest unread reply that mentions the viewer. */
+  mention?: MentionActivityItem;
 }>;
 export type MentionActivityItem = Readonly<{
   channelId: string;
@@ -140,6 +145,9 @@ export type ReadingHandle = Readonly<{
   view(
     messageIds: readonly string[],
     visible: (messageId: string, measured: boolean) => boolean,
+    /** False for a placeholder while the consumer re-measures: it keeps the
+     * visit's last measurement, which marked-while-shown protection follows. */
+    measured?: boolean,
   ): void;
   /** Only message IDs actually visible to the active consumer; no caller timestamps. */
   observe(messageIds: readonly string[]): Promise<void>;
@@ -174,8 +182,17 @@ export interface UnreadCapability {
   revision(): number;
   /** Access/cache/connection retirement fence. */
   generation(): number;
-  /** `rootId` names the thread a reader shows, which bounds its DM reads. */
-  reading(channelId: string, rootId?: string): ReadingHandle;
+  /** `rootId` names the thread a reader shows, which bounds its DM reads.
+   * `visit` is one reader's stay in this conversation, across its leases:
+   * a message marked unread while that visit shows it stays unread until
+   * the visit measures it away or `leave`s. Without it, the lease is the visit. */
+  reading(channelId: string, rootId?: string, visit?: object): ReadingHandle;
+  /** `visit` presents this thread in a pane, whether or not any row counts as
+   * shown: the thread marked unread during it stays marked through its
+   * catch-ups until `leave`. Presence reads nothing. */
+  present(channelId: string, rootId: string, visit: object): void;
+  /** The reader departed: a return is a new visit. */
+  leave(visit: object): void;
   /** Whether the viewer follows this canonical root: an explicit choice,
    * otherwise writing or replying anywhere in its thread. */
   following(channelId: string, rootId: string): boolean;
@@ -184,14 +201,28 @@ export interface UnreadCapability {
    * floor. Individual reply marks do not count: they say nothing of older
    * replies. */
   threadReadThrough(channelId: string, rootId: string): number;
-  /** Saves an explicit choice on this device; throws, unchanged, if not saved.
-   * Wakes `subscribeSync` listeners. */
-  follow(channelId: string, rootId: string, following: boolean): void;
+  /** Saves an explicit choice; resolves once it is saved and rejects,
+   * unchanged, if not. Wakes `subscribeSync` listeners. */
+  follow(channelId: string, rootId: string, following: boolean): Promise<void>;
   /** Explicit prefix intent, unlike individual-message visibility observations. */
   markThrough(
     target: ReadTarget,
     messageId: string,
   ): Promise<ReadMutationResult>;
+  /** An Activity row's `readThrough` steps as one explicit intent, saved in
+   * order. Local unread intent is cut once, at the call: a newer Mark as
+   * unread on a later step's target, even one queued behind an earlier step,
+   * rejects that step and stops the rest. */
+  markReadThrough(
+    steps: readonly Readonly<{ target: ReadTarget; messageId: string }>[],
+  ): Promise<readonly ReadMutationResult[]>;
+  /** `markReadThrough`'s steps, each saved when its caller runs it, so a
+   * caller can check between steps and retry one. The cut is still the
+   * preparing call's: running a step again cannot clear a newer Mark as
+   * unread on its target. Run them in order. */
+  prepareReadThrough(
+    steps: readonly Readonly<{ target: ReadTarget; messageId: string }>[],
+  ): readonly (() => Promise<ReadMutationResult>)[];
   /** Explicit read of these verified top-level messages in one save, as the
    * reader's catch-up reads a channel bottom: the channel catch-up mark reads
    * ordinary messages through the newest, and still-unread mentions,
@@ -213,8 +244,10 @@ export interface UnreadCapability {
    * Only results with `undoScope: "captured-action"` and `undo` offer the full
    * receipt, saved-reminder and visit-overlay inverse. Older handles may restore
    * saved reminders only. Synced prefixes stay monotonic.
-   * Any later journal write or lost action validity expires the inverse; pending
-   * force-unread intent also withholds it. Older hosts may omit this capability. */
+   * A later overlapping read or local unread intent, retention change that
+   * touches its inverse, or lost action validity expires the inverse; unrelated
+   * writes do not. Pending or newly forced intent for a selected ID also
+   * withholds or expires it. Older hosts may omit this capability. */
   markCapturedMessagesRead?(
     messageIds: readonly string[],
   ): Promise<ReadMutationResult>;
@@ -270,6 +303,24 @@ const EVIDENCE_LOW_EVENTS = 3072;
 const EVIDENCE_LOW_BYTES = 6 * 1024 * 1024;
 const eventBytes = (event: RelayEvent) =>
   new TextEncoder().encode(JSON.stringify(event)).byteLength;
+const noMentions = Object.freeze({ content: "", mentions: Object.freeze([]) });
+/** A row's preview text: its body, or a plain description of its attachments
+ * when attachment presentation left no text, so the row is never blank. */
+const previewText = (message: ChannelMessage) => {
+  if (message.content.trim() || !message.attachments.length)
+    return message.content;
+  const count = message.attachments.length;
+  const [first] = message.attachments;
+  const kind = message.attachments.every((item) => item.kind === first?.kind)
+    ? first?.kind
+    : undefined;
+  const noun =
+    kind === "image" ? "image" : kind === "video" ? "video" : "attachment";
+  return count === 1
+    ? `${noun[0]?.toUpperCase()}${noun.slice(1)}`
+    : `${count} ${noun}s`;
+};
+
 /** Rendered message order: effective ms, then event id. */
 const order = (a: RelayEvent, b: RelayEvent) =>
   eventMs(a) - eventMs(b) || a.id.localeCompare(b.id);
@@ -329,6 +380,10 @@ function channelOwnership(find: (id: string) => RelayEvent | undefined) {
   }
   return owners;
 }
+/** Shown when another device's follow choices can't be read here. */
+const FOLLOWS_INCOMPLETE =
+  "Some follow choices from your other devices can't be read here, so their replies may not count as unread";
+
 /** Bounded verified evidence and one projection; no sidebar counters, sockets or implicit reads. */
 export function createUnread({
   reads,
@@ -406,6 +461,29 @@ export function createUnread({
       visible: (messageId: string, measured: boolean) => boolean;
     }
   >();
+  /** Each visit's last completed measurement. */
+  const shownBy = new Map<object, ReadonlySet<string>>();
+  /** Messages marked unread while shown, and the visits that showed them:
+   * those visits leave the reminder alone until they measure it away or end. */
+  const markedWhileShown = new Map<string, Set<object>>();
+  /** Each visit's presented thread, by its `thread:` key. */
+  const presenting = new Map<object, string>();
+  /** Threads marked unread while presented, and the visits presenting them:
+   * those visits' catch-ups leave the thread's own reminder until they end. */
+  const markedWhilePresented = new Map<string, Set<object>>();
+  const shields = (local: string, visit: object) =>
+    !!(
+      local.startsWith("msg:")
+        ? markedWhileShown.get(local.slice(4))
+        : markedWhilePresented.get(local)
+    )?.has(visit);
+  function leave(visit: object) {
+    shownBy.delete(visit);
+    presenting.delete(visit);
+    for (const marks of [markedWhileShown, markedWhilePresented])
+      for (const [id, holders] of marks)
+        if (holders.delete(visit) && !holders.size) marks.delete(id);
+  }
   // Per-visit message overlay; only the sidebar hint is persisted in read state.
   const forcedMessages = new Map<string, Set<string>>();
   // A force mark can be queued behind a read's save before its overlay is committed.
@@ -792,6 +870,41 @@ export function createUnread({
   // Read on first use: constructing a session touches no storage.
   let saved: ThreadFollows | undefined;
   const choices = () => (saved ??= follows.read());
+  /** Read-state health, with a follow publication error that happened after
+   * its tap surfaced in the same notice. Stable while neither changes. */
+  let shown:
+    | { reads: ReadSyncSnapshot; error?: string; out: ReadSyncSnapshot }
+    | undefined;
+  function sync(): ReadSyncSnapshot {
+    const current = reads.snapshot();
+    const health = follows.syncHealth?.();
+    const failed = health?.status === "failed";
+    // Missing peer choices are a warning, not a failed read sync.
+    const incomplete =
+      health?.complete === false &&
+      (health.status === "synchronized" || health.status === "pending");
+    const error =
+      current.status === "error"
+        ? undefined
+        : failed
+          ? health.error
+          : incomplete
+            ? FOLLOWS_INCOMPLETE
+            : undefined;
+    if (shown?.reads !== current || shown.error !== error)
+      shown = {
+        reads: current,
+        ...(error ? { error } : {}),
+        out: error
+          ? {
+              ...current,
+              ...(failed ? { status: "error" as const } : {}),
+              error,
+            }
+          : current,
+      };
+    return shown.out;
+  }
   /** An explicit follow choice for the reply's whole thread, if any. */
   const chosen = ({ channelId, threadRootId }: Evidence) =>
     threadRootId === undefined
@@ -874,21 +987,14 @@ export function createUnread({
     const rootId = earlier === undefined ? entry.rootId : undefined;
     const own = effectiveFrontier(state, `msg:${event.id}`, channelId, rootId);
     const frontier = earlier === undefined ? own : Math.max(own ?? -1, earlier);
-    const forced =
-      overrideActive(state.overrides[`msg:${event.id}`], frontier) ||
-      overrideActive(
-        state.overrides[channelId],
-        effectiveFrontier(state, channelId),
-      ) ||
-      (entry.rootId !== undefined &&
-        overrideActive(
-          state.overrides[`thread:${entry.rootId}`],
-          earlier ??
-            effectiveFrontier(state, `thread:${entry.rootId}`, channelId),
-        ));
-    // Channel catch-up never acknowledges thread replies: retained evidence
-    // cannot prove nonparticipation, especially after reload. Only ordinary
-    // top-level messages inherit it; reply attention/direct thread dots survive.
+    // Only whole-channel groups sync; message and thread unread is local.
+    const forced = overrideActive(
+      state.overrides[channelId],
+      effectiveFrontier(state, channelId),
+    );
+    // Channel catch-up writes the channel frontier, so replies and mentions
+    // older than its cut are read too. An `activity:` frontier still covers
+    // ordinary top-level messages only.
     const ordinary = timeline(entry, dm)
       ? state.frontiers[`activity:${channelId}`]
       : undefined;
@@ -1291,7 +1397,7 @@ export function createUnread({
     let presented: Map<string, string> | undefined;
     const previewOf = (event: RelayEvent) => {
       presented ??= new Map(
-        folded(channelId).map((message) => [message.id, message.content]),
+        folded(channelId).map((message) => [message.id, previewText(message)]),
       );
       return presented.get(event.id) ?? event.content;
     };
@@ -1325,6 +1431,28 @@ export function createUnread({
         continue;
       const current = grouped.get(rootId);
       const preview = previewOf(event);
+      const participating = conversation(evidence)
+        ? true
+        : current?.participating;
+      const mention =
+        category(evidence, dm) === "mention" &&
+        (!current?.mention ||
+          event.created_at > current.mention.createdAt ||
+          (event.created_at === current.mention.createdAt &&
+            event.id < current.mention.messageId))
+          ? Object.freeze({
+              channelId,
+              messageId: event.id,
+              authorId: event.pubkey,
+              workflowOwnerId: workflowOwner(event, workflowAuthority),
+              createdAt: event.created_at,
+              preview,
+            })
+          : current?.mention;
+      const marks = {
+        ...(participating ? { participating } : {}),
+        ...(mention ? { mention } : {}),
+      };
       if (!current) {
         grouped.set(
           rootId,
@@ -1337,6 +1465,7 @@ export function createUnread({
             createdAt: event.created_at,
             preview,
             unreadCount: 1,
+            ...marks,
           }),
         );
         continue;
@@ -1358,6 +1487,7 @@ export function createUnread({
           createdAt: latest ? event.created_at : current.createdAt,
           preview: latest ? preview : current.preview,
           unreadCount: current.unreadCount + 1,
+          ...marks,
         }),
       );
     }
@@ -1401,7 +1531,11 @@ export function createUnread({
             item.workflowOwnerId === other.workflowOwnerId &&
             item.createdAt === other.createdAt &&
             item.preview === other.preview &&
-            item.unreadCount === other.unreadCount
+            item.unreadCount === other.unreadCount &&
+            item.participating === other.participating &&
+            item.mention?.messageId === other.mention?.messageId &&
+            item.mention?.authorId === other.mention?.authorId &&
+            item.mention?.preview === other.mention?.preview
           );
         }))) &&
     (a.mentions?.length ?? 0) === (b.mentions?.length ?? 0) &&
@@ -1484,7 +1618,26 @@ export function createUnread({
         }
         if (!groups.size) continue;
         const rows = folded(channel.id);
-        const content = new Map(rows.map((row) => [row.id, row.content]));
+        const content = new Map(rows.map((row) => [row.id, previewText(row)]));
+        // Only what a preview binds, so other changes to the message keep
+        // the snapshot equal.
+        const previewRows = new Map(
+          rows.map((row) => [
+            row.id,
+            {
+              content: row.content,
+              // A patch shows as raw text, so it binds no one.
+              mentions: row.diff ? [] : row.mentions,
+              ...(row.mentionReferences && !row.diff
+                ? { mentionReferences: row.mentionReferences }
+                : {}),
+              ...(row.edited ? { edited: true as const } : {}),
+              ...(row.attachmentSeams
+                ? { attachmentSeams: row.attachmentSeams }
+                : {}),
+            },
+          ]),
+        );
         // A session's top-level row shows its newest message from someone
         // else, unless that message is the root of its own thread row. This
         // mostly matches its newest evidence, but follows a relay-signed row's
@@ -1587,6 +1740,7 @@ export function createUnread({
               workflowOwnerId: workflowOwner(shown, workflowAuthority),
               preview: content.get(shown.id) ?? shown.content,
               previewMessageId: shown.id,
+              previewMentions: previewRows.get(shown.id) ?? noMentions,
               createdAt: shown.created_at,
               mentioned: entries.some((entry) => entry.mentioned),
               messages: Object.freeze(
@@ -1725,7 +1879,145 @@ export function createUnread({
       for (const listener of activityListeners.get(channelId) ?? [])
         notify(listener);
   }
+  // The read mark covering each device-local message or thread unread when it
+  // was first seen. Any later advance, from this device or a peer, ends it.
+  const localBases = new Map<string, number>();
+  /** Revision and baseline of a mark whose unresolved root has loaded. */
+  const resolvedBases = new Map<
+    string,
+    readonly [number | undefined, number, string]
+  >();
+  /** Resolutions saved or saving; a failed one is retried as captured. */
+  const coverSaves = new Map<string, Promise<void> | true>();
+  const clearing = new Set<string>();
+  function localCover(key: string, state: ReadState) {
+    const separator = key.indexOf(":");
+    const kind = key.slice(0, separator);
+    const id = key.slice(separator + 1);
+    if (kind !== "msg" && kind !== "thread") return undefined;
+    indexEvidence();
+    const entry = byId.get(id);
+    const channel = entry?.channelId ?? reads.home(id);
+    return (
+      effectiveFrontier(
+        state,
+        key,
+        channel,
+        kind === "msg" ? entry?.rootId : undefined,
+      ) ?? -1
+    );
+  }
+  /** A reply marked before its root loaded takes its thread, and that
+   * thread's mark as its baseline, once its ancestry is known: saved, so a
+   * later advance clears it, even after a reload. */
+  function resolveCovers() {
+    if (closed) return;
+    for (const key of reads.localUnreadKeys()) {
+      const saved = reads.localCover(key);
+      const revision = reads.localUnread(key);
+      if (saved?.[3] !== UNRESOLVED_ROOT || revision === undefined) continue;
+      const captured = resolvedBases.get(key);
+      if (captured?.[0] === revision) {
+        if (!coverSaves.has(key))
+          save(key, revision, captured[1], saved[2], captured[2]);
+        continue;
+      }
+      indexEvidence();
+      const root = byId.get(key.slice(4))?.rootId;
+      if (!root) continue;
+      const base = Math.max(
+        saved[1],
+        effectiveFrontier(reads.state(), key, saved[2], root) ?? -1,
+      );
+      resolvedBases.set(key, [revision, base, root]);
+      save(key, revision, base, saved[2], root);
+    }
+    function save(
+      key: string,
+      revision: number,
+      base: number,
+      channel: string,
+      root: string,
+    ) {
+      const saving = reads
+        .resolveLocalCover(key, [revision, base, channel, root])
+        .then(
+          () => {
+            if (coverSaves.get(key) === saving) coverSaves.set(key, true);
+          },
+          () => {
+            if (coverSaves.get(key) === saving) coverSaves.delete(key);
+          },
+        );
+      coverSaves.set(key, saving);
+    }
+  }
+  function endCoveredLocal() {
+    if (closed) return;
+    resolveCovers();
+    const state = reads.state();
+    const live = new Set<string>();
+    for (const key of reads.localUnreadKeys()) {
+      // A mark saved with its cover compares against that, not against
+      // whatever evidence this load happens to have.
+      const saved = reads.localCover(key);
+      // A reply marked before its root loaded resolves its thread later: the
+      // thread position it learns then is the baseline, not an advance.
+      // Until it is saved, a resolution made this load stands in for it.
+      const revision = reads.localUnread(key);
+      const resolved =
+        saved?.[3] === UNRESOLVED_ROOT &&
+        resolvedBases.get(key)?.[0] === revision
+          ? resolvedBases.get(key)
+          : undefined;
+      const root = resolved
+        ? resolved[2]
+        : saved?.[3] === UNRESOLVED_ROOT
+          ? undefined
+          : saved?.[3] || undefined;
+      const at = saved
+        ? (effectiveFrontier(state, key, saved[2], root) ?? -1)
+        : localCover(key, state);
+      if (at === undefined) continue;
+      live.add(key);
+      const base = resolved ? resolved[1] : (saved?.[1] ?? localBases.get(key));
+      if (base === undefined) localBases.set(key, at);
+      else if (at > base && !clearing.has(key)) {
+        clearing.add(key);
+        void reads
+          .clearLocalUnread(
+            key,
+            [key],
+            (journal) => !closed && journal.localUnread[key] === revision,
+          )
+          .catch(() => undefined)
+          .finally(() => clearing.delete(key));
+      }
+    }
+    for (const [channelId, forced] of forcedMessages) {
+      let changed = false;
+      for (const id of forced) {
+        const key = `forced:${id}`;
+        const at = localCover(`msg:${id}`, state);
+        if (at === undefined) continue;
+        live.add(key);
+        const base = localBases.get(key);
+        if (base === undefined) localBases.set(key, at);
+        else if (at > base) changed = forced.delete(id);
+      }
+      if (!forced.size) forcedMessages.delete(channelId);
+      if (changed) publish(new Set([channelId]));
+    }
+    for (const key of localBases.keys())
+      if (!live.has(key)) localBases.delete(key);
+    for (const key of resolvedBases.keys())
+      if (!live.has(key)) {
+        resolvedBases.delete(key);
+        coverSaves.delete(key);
+      }
+  }
   const stopRead = reads.subscribe(publish);
+  const stopLocal = reads.subscribe(endCoveredLocal);
   const stopProfiles = profiles?.subscribe(() => {
     const owner = profiles.owner;
     if (
@@ -2460,6 +2752,7 @@ export function createUnread({
       // projection affected by a deletion, including delete-of-edit chains.
     }
     if (evicted) dropOrphans();
+    if (changed.size) resolveCovers();
     if (changed.size) {
       // The session admits profiles from this same batch after unread evidence.
       if (profiles)
@@ -2622,25 +2915,22 @@ export function createUnread({
       [...keys].filter((key) => key !== messageForceKey(channelId)),
     );
     return async () => {
+      // The save's frontier advance can end overlays before it returns, and
+      // Undo never restores them.
+      const hadForced = Boolean(forcedMessages.get(channelId)?.size);
       const result =
         rows.length || reads.snapshot().capability === "frontier-sync"
-          ? await reads.read(
-              channelId,
-              cut,
-              valid,
-              true,
-              [...keys],
-              undefined,
-              fence,
-              { keys: undoableLocalKeys, valid: undoValid },
-            )
+          ? await reads.read(channelId, cut, valid, true, [...keys], fence, {
+              keys: undoableLocalKeys,
+              valid: undoValid,
+            })
           : await reads.clearLocalUnread(channelId, [...keys], valid, fence, {
               keys: undoableLocalKeys,
               valid: undoValid,
             });
-      let clearedForced = false;
+      let clearedForced = hadForced;
       if (valid()) {
-        clearedForced = Boolean(forcedMessages.get(channelId)?.size);
+        clearedForced ||= Boolean(forcedMessages.get(channelId)?.size);
         if (forcedMessages.delete(channelId)) publish(new Set([channelId]));
       }
       if (
@@ -2678,12 +2968,16 @@ export function createUnread({
     },
     activity,
     subscribeActivity: addActivityListener,
-    sync: reads.snapshot,
+    sync,
     subscribeSync(listener) {
       const stop = reads.subscribe(listener);
+      const stopFollows = follows.syncHealth
+        ? follows.subscribe(listener)
+        : undefined;
       membershipListeners.add(listener);
       return () => {
         stop();
+        stopFollows?.();
         membershipListeners.delete(listener);
       };
     },
@@ -2702,6 +2996,7 @@ export function createUnread({
     retrySync: async () => {
       await reads.refresh();
       await reads.flush();
+      await follows.retry?.();
     },
     syncedManualUnread: false,
     threadReadThrough(channelId, rootId) {
@@ -2725,10 +3020,16 @@ export function createUnread({
       // every reply under the root: the viewer wrote or replied in the thread.
       return ownThreads.has(key);
     },
-    follow(channelId, rootId, following) {
+    async follow(channelId, rootId, following) {
       if (closed || !allowed(channelId) || !/^[0-9a-f]{64}$/i.test(rootId))
         throw new Error("Thread unavailable");
       const key = conversationKey(channelId, rootId.toLowerCase());
+      if (follows.set) {
+        await follows.set(key, following);
+        saved = undefined;
+        followsChanged(new Set([channelId]));
+        return;
+      }
       const next = new Map(choices());
       next.delete(key);
       next.set(key, following);
@@ -2742,17 +3043,28 @@ export function createUnread({
       saved = next;
       followsChanged(changed);
     },
-    reading(channelId, rootId) {
+    present(channelId, rootId, visit) {
+      if (closed || !allowed(channelId)) return;
+      presenting.set(visit, targetKey({ kind: "thread", channelId, rootId }));
+    },
+    leave,
+    reading(channelId, rootId, visit) {
       if (closed || !allowed(channelId) || handles.size >= 64)
         throw new Error("Reading handle unavailable");
       let active = true;
       const generation = epoch;
       const manualRevision = reads.revision();
+      // A synced channel mark unread changes no local revision: its saved
+      // stamp fences the lease too.
+      const unreadSet = reads.unreadSet(channelId);
       const observed = new Set<string>();
+      const owned = !visit;
+      const stay = visit ?? {};
       const dispose = () => {
         active = false;
         handles.delete(dispose);
         views.delete(dispose);
+        if (owned) leave(stay);
       };
       // A newer manual unread cancels this lease. Inside a save, check the
       // journal being replaced: another window may have marked it since.
@@ -2763,7 +3075,10 @@ export function createUnread({
         !closed &&
         generation === epoch &&
         allowed(channelId) &&
-        manual(channelId, journal) <= manualRevision;
+        manual(channelId, journal) <= manualRevision &&
+        (journal
+          ? (journal.state.overrides[channelId]?.set ?? 0)
+          : reads.unreadSet(channelId)) <= unreadSet;
       handles.add(dispose);
       // Reading a DM reads all of it, through the newest retained message,
       // and ends a manual unread on it. A DM is all for the reader, so there
@@ -2806,6 +3121,7 @@ export function createUnread({
         view(
           ids: readonly string[],
           visible: (id: string, measured: boolean) => boolean,
+          measured = true,
         ) {
           if (!valid() || ids.length > 128) return;
           const verified = ids.filter((id) => {
@@ -2821,6 +3137,12 @@ export function createUnread({
             ids: new Set(verified),
             visible: (id, measured) => valid() && visible(id, measured),
           });
+          if (!measured) return;
+          const shown = new Set(verified);
+          shownBy.set(stay, shown);
+          for (const [id, holders] of markedWhileShown)
+            if (!shown.has(id) && holders.delete(stay) && !holders.size)
+              markedWhileShown.delete(id);
         },
         async catchUp(id: string, rootId?: string) {
           if (!valid()) return;
@@ -2833,51 +3155,72 @@ export function createUnread({
             return;
           }
           const event = requireMessage(target, id);
-          const key = rootId
-            ? `thread-activity:${rootId}`
-            : `activity:${channelId}`;
+          // A broadcast reply is shown in the channel but never its cutoff.
+          if (!rootId && threadReference(event)) return;
+          // Catch-up moves the main read mark: a channel's to its newest
+          // top-level message reached (never past a reply), a thread's to its
+          // newest reply. Everything at or below it is read on every device.
+          const key = rootId ? `thread:${rootId}` : channelId;
           // A historical window is not the live bottom. Check retained evidence
           // at invocation, not after a later arrival queues behind this intent.
-          // Copy it: a live arrival extends the index in place during the save.
           indexEvidence();
-          const rows = [...(byChannel.get(channelId) ?? [])];
+          const rows = byChannel.get(channelId) ?? [];
           const newer = rows.some(
             (entry) =>
               entry.event.created_at > event.created_at &&
               (rootId
                 ? entry.rootId === rootId
-                : !threadReference(entry.event) ||
-                  entry.event.tags.some(
-                    ([name, value]) => name === "broadcast" && value === "1",
-                  )),
+                : !threadReference(entry.event)),
           );
           if (newer) return;
-          // Replies can be newer than the last top-level row. Quiet that already
-          // retained activity too, without acknowledging the replies themselves.
-          const cut = rootId
-            ? event.created_at
-            : rows.reduce(
-                (latest, row) => Math.max(latest, row.event.created_at),
-                event.created_at,
-              );
-          const frontiers = reads.state().frontiers;
+          const cut = event.created_at;
+          const state = reads.state();
           const current = (journal: ReadJournal) =>
             valid(journal) &&
             requireMessage(target, id) === event &&
             (!rootId || manual(`thread:${rootId}`, journal) <= manualRevision);
           // Reaching the live bottom of a channel ends a manual unread on the
-          // channel. Unseen replies and marked messages stay unread.
-          const endManual = !rootId && !!reads.localUnread(channelId);
-          // A broader mark already covering the cut makes this one redundant.
-          if (
-            Math.max(
-              frontiers[key] ?? -1,
-              frontiers[channelId] ?? -1,
-              rootId ? (frontiers[`thread:${rootId}`] ?? -1) : -1,
-            ) >= cut
-          ) {
+          // channel, synced or local. Synced message marks stay unread.
+          const endManual =
+            !rootId &&
+            (!!reads.localUnread(channelId) ||
+              overrideActive(
+                state.overrides[channelId],
+                effectiveFrontier(state, channelId),
+              ));
+          // Reaching a thread's bottom ends its own and its replies' local
+          // reminders, a channel's those of the top-level messages it covers,
+          // even when the read mark is already there.
+          const reminders = (
+            rootId
+              ? [
+                  key,
+                  ...rows
+                    .filter((entry) => entry.rootId === rootId)
+                    .map((entry) => `msg:${entry.event.id}`),
+                ]
+              : rows
+                  .filter(
+                    (entry) => !entry.parentId && entry.event.created_at <= cut,
+                  )
+                  .map((entry) => `msg:${entry.event.id}`)
+          ).filter(
+            (local) => reads.localUnread(local) && !shields(local, stay),
+          );
+          const fresh = (journal: ReadJournal) =>
+            current(journal) &&
+            reminders.every(
+              (local) => manual(local, journal) <= manualRevision,
+            );
+          if ((effectiveFrontier(state, key, channelId) ?? -1) >= cut) {
             if (endManual)
-              await reads.clearLocalUnread(channelId, [channelId], current);
+              await reads.clearLocalUnread(
+                channelId,
+                [channelId, ...reminders],
+                fresh,
+              );
+            else if (reminders.length)
+              await reads.clearLocalUnread(key, reminders, fresh);
           } else
             await reads.read(
               key,
@@ -2885,52 +3228,6 @@ export function createUnread({
               current,
               endManual,
               endManual ? [channelId] : undefined,
-            );
-          if (rootId) return;
-          // The timeline above the bottom also shows mentions and broadcasts,
-          // which `activity:` never reads: it is a timestamp, so it would also
-          // read attention that arrives later with an older timestamp. Mark
-          // the retained ones through the bottom row individually instead,
-          // at most the newest 128, as one observation reads, so a backlog
-          // cannot crowd older marks out of the synced budget.
-          const state = reads.state();
-          const shown = rows
-            .filter(
-              (entry) =>
-                entry.event.created_at <= event.created_at &&
-                (!threadReference(entry.event) || entry.broadcast) &&
-                priority(entry, false) &&
-                !forcedMessages.get(channelId)?.has(entry.event.id) &&
-                !reads.localUnread(`msg:${entry.event.id}`) &&
-                !overrideActive(
-                  state.overrides[`msg:${entry.event.id}`],
-                  effectiveFrontier(
-                    state,
-                    `msg:${entry.event.id}`,
-                    channelId,
-                    entry.rootId,
-                  ),
-                ) &&
-                isUnread(entry, state, false),
-            )
-            .sort((a, b) => order(b.event, a.event))
-            .slice(0, 128);
-          if (shown.length)
-            await reads.readMessages(
-              shown.map((entry) => ({
-                key: `msg:${entry.event.id}`,
-                timestamp: entry.event.created_at,
-                channelId,
-                ...(entry.rootId ? { rootId: entry.rootId } : {}),
-              })),
-              undefined,
-              (journal) =>
-                current(journal) &&
-                shown.every(
-                  (entry) =>
-                    events.get(entry.event.id) === entry.event &&
-                    !manual(`msg:${entry.event.id}`, journal),
-                ),
             );
         },
         async observe(ids: readonly string[]) {
@@ -2967,6 +3264,17 @@ export function createUnread({
                 threadReference(event) ? root(event) : undefined,
               ) ?? -1) >= event.created_at
             ) {
+              // Shown: its own local reminder ends with no new read mark.
+              const local = targetKey(target);
+              if (reads.localUnread(local) && !shields(local, stay))
+                await reads.clearLocalUnread(
+                  local,
+                  [local],
+                  (journal) =>
+                    valid(journal) &&
+                    requireMessage(target, id) === event &&
+                    manual(local, journal) <= manualRevision,
+                );
               observed.add(id);
               continue;
             }
@@ -2976,14 +3284,6 @@ export function createUnread({
               (journal) =>
                 valid(journal) && requireMessage(target, id) === event,
               false,
-              undefined,
-              (state) =>
-                effectiveFrontier(
-                  state,
-                  targetKey(target),
-                  channelId,
-                  threadReference(event) ? root(event) : undefined,
-                ),
             );
             observed.add(id);
           }
@@ -3004,6 +3304,39 @@ export function createUnread({
           true,
         ),
       );
+    },
+    async markReadThrough(steps) {
+      const results: ReadMutationResult[] = [];
+      for (const save of capability.prepareReadThrough(steps))
+        results.push(await save());
+      return results;
+    },
+    prepareReadThrough(steps) {
+      const generation = epoch;
+      const admitted = steps.map(({ target, messageId }) => ({
+        target,
+        messageId,
+        event: requireMessage(target, messageId),
+      }));
+      // Reserve one saved cut at the click, before any newer manual action.
+      const cut = reads.captureLocalUnreadRevision();
+      return admitted.map(({ target, messageId, event }) => {
+        const fence = reads.captureLocalUnread([targetKey(target)], cut);
+        return () =>
+          serialize(target.channelId, () =>
+            reads.read(
+              targetKey(target),
+              event.created_at,
+              () =>
+                !closed &&
+                generation === epoch &&
+                requireMessage(target, messageId) === event,
+              true,
+              undefined,
+              fence,
+            ),
+          );
+      });
     },
     async markTimelineRead(channelId, messageIds) {
       const target = { kind: "channel" as const, channelId };
@@ -3047,20 +3380,17 @@ export function createUnread({
             timestamp: entry.event.created_at,
             channelId,
           }));
-        const covered =
-          Math.max(
-            state.frontiers[`activity:${channelId}`] ?? -1,
-            state.frontiers[channelId] ?? -1,
-          ) >= cut;
+        const covered = (state.frontiers[channelId] ?? -1) >= cut;
         return reads.readMessages(
           covered
             ? marks
-            : [
-                { key: `activity:${channelId}`, timestamp: cut, channelId },
-                ...marks,
-              ],
+            : [{ key: channelId, timestamp: cut, channelId }, ...marks],
           undefined,
           valid,
+          false,
+          undefined,
+          [],
+          { explicit: true },
         );
       });
     },
@@ -3094,6 +3424,7 @@ export function createUnread({
                 for (const row of rows) forced.add(row.id);
                 forcedMessages.set(channelId, forced);
                 publish(new Set([channelId]));
+                endCoveredLocal();
               }
               return result;
             }),
@@ -3130,6 +3461,10 @@ export function createUnread({
             })),
           remaining ? undefined : messageForceKey(channelId),
           valid,
+          false,
+          undefined,
+          rows.map((row) => `msg:${row.id}`),
+          { explicit: true },
         );
         if (valid()) {
           for (const row of rows) forced?.delete(row.id);
@@ -3191,24 +3526,40 @@ export function createUnread({
         valid() &&
         [...capturedIdsByChannel].every(
           ([channelId, ids]) => !hasPendingForcedMessages(channelId, ids),
+        ) &&
+        [...capturedIdsByChannel].every(([channelId, ids]) =>
+          [...ids].every((id) => !forcedMessages.get(channelId)?.has(id)),
         );
       const fence = reads.captureLocalUnread([
         ...selected.map(({ id }) => `msg:${id}`),
         ...channelIds.map(messageForceKey),
       ]);
+      const messageRead = ({
+        id,
+        channelId,
+        event,
+      }: (typeof selected)[number]) => ({
+        key: `msg:${id}`,
+        timestamp: event.created_at,
+        channelId,
+        ...(threadReference(event) && root(event)
+          ? { rootId: root(event) }
+          : {}),
+      });
       return serializeChannels(channelIds, async () => {
         if (!valid()) throw new Error("Unread channel visit expired");
+        // The save's frontier advance can end overlays before it returns.
+        const wasForced = new Set(
+          selected
+            .filter(({ id, channelId }) =>
+              forcedMessages.get(channelId)?.has(id),
+            )
+            .map(({ id }) => id),
+        );
         const result = await reads.readMessages(
           selected
             .filter(({ event }) => event.pubkey !== viewer)
-            .map(({ id, channelId, event }) => ({
-              key: `msg:${id}`,
-              timestamp: event.created_at,
-              channelId,
-              ...(threadReference(event) && root(event)
-                ? { rootId: root(event) }
-                : {}),
-            })),
+            .map(messageRead),
           undefined,
           valid,
           false,
@@ -3217,7 +3568,23 @@ export function createUnread({
           messageKeys,
           {
             preserveCapturedSet: true,
-            undo: { keys: new Set(messageKeys), valid: undoValid },
+            selectedMessages: selected.map(messageRead),
+            undo: {
+              keys: new Set(messageKeys),
+              intentKeys: [
+                ...new Set([
+                  ...messageKeys,
+                  ...selected.flatMap(({ id, channelId, event }) => [
+                    channelId,
+                    ...(threadReference(event) && root(event)
+                      ? [`thread:${root(event)}`]
+                      : []),
+                    `msg:${id}`,
+                  ]),
+                ]),
+              ],
+              valid: undoValid,
+            },
           },
         );
         // The save succeeded; do not clear overlays from a visit that ended
@@ -3228,7 +3595,7 @@ export function createUnread({
           if (generation !== epoch || !messageValid(row)) continue;
           const { id, channelId } = row;
           const forced = forcedMessages.get(channelId);
-          if (forced?.delete(id)) {
+          if (forced?.delete(id) || wasForced.has(id)) {
             const cleared = clearedForced.get(channelId) ?? new Set<string>();
             cleared.add(id);
             clearedForced.set(channelId, cleared);
@@ -3365,13 +3732,22 @@ export function createUnread({
       return () =>
         serialize(channelId, async () => {
           const forced = forcedMessages.get(channelId);
+          // The save's frontier advance can end overlays before it returns.
+          const hadForced = [...ids].some((id) => forced?.has(id));
+          // The thread's own mark syncs the read; reply marks stay local.
+          const newest = Math.max(-1, ...rows.map((row) => row.created_at));
           const result = await reads.readMessages(
-            rows.map((row) => ({
-              key: `msg:${row.id}`,
-              timestamp: row.created_at,
-              channelId,
-              rootId,
-            })),
+            [
+              ...(newest < 0
+                ? []
+                : [{ key: targetKey(target), timestamp: newest, channelId }]),
+              ...rows.map((row) => ({
+                key: `msg:${row.id}`,
+                timestamp: row.created_at,
+                channelId,
+                rootId,
+              })),
+            ],
             // The shared sidebar hint has no subtree ownership; another
             // window may have replaced it even while this overlay exists.
             undefined,
@@ -3381,7 +3757,7 @@ export function createUnread({
             [targetKey(target)],
             { undo: { keys: undoableLocalKeys, valid: undoValid } },
           );
-          let clearedForced = false;
+          let clearedForced = hadForced;
           if (valid()) {
             for (const id of ids) if (forced?.delete(id)) clearedForced = true;
             if (!forced?.size) forcedMessages.delete(channelId);
@@ -3478,9 +3854,38 @@ export function createUnread({
       };
       if (!valid()) throw new Error("Unread target unavailable");
       if (target.kind === "message") refuseAgentCoordination(target.messageId);
-      return reads.markLocalUnread(key, valid, (save) =>
-        serialize(target.channelId, save),
+      if (target.kind === "message") {
+        indexEvidence();
+        const holders = new Set<object>();
+        for (const [visit, shown] of shownBy)
+          if (shown.has(target.messageId)) holders.add(visit);
+        if (holders.size) markedWhileShown.set(target.messageId, holders);
+      }
+      if (target.kind === "thread") {
+        const holders = new Set<object>();
+        for (const [visit, presented] of presenting)
+          if (presented === key) holders.add(visit);
+        if (holders.size) markedWhilePresented.set(key, holders);
+      }
+      const result = await reads.markLocalUnread(
+        key,
+        valid,
+        (save) => serialize(target.channelId, save),
+        target.kind === "channel"
+          ? undefined
+          : {
+              channelId: target.channelId,
+              rootId:
+                target.kind === "message"
+                  ? (byId.get(target.messageId)?.rootId ??
+                    (byId.get(target.messageId)?.parentId
+                      ? UNRESOLVED_ROOT
+                      : undefined))
+                  : undefined,
+            },
       );
+      endCoveredLocal();
+      return result;
     },
     async clearUnreadLocal(target) {
       const key = targetKey(target);
@@ -3601,6 +4006,7 @@ export function createUnread({
       membershipListeners.clear();
       for (const stop of [...handles]) stop();
       stopRead();
+      stopLocal();
       stopProfiles?.();
       stopFollows();
       stopChannels();

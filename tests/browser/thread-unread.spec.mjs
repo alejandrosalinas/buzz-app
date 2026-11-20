@@ -473,13 +473,13 @@ test("thread buttons show observed unread independently, clear only after readin
   await openChannelDetails(page);
   await page.getByText("Diagnostics", { exact: true }).click();
   await page
-    .getByRole("button", { name: "Mark unread on this device", exact: true })
+    .getByRole("button", { name: "Mark as unread", exact: true })
     .click();
   await page
     .getByRole("button", { name: "Close Channel settings tab", exact: true })
     .click();
   await expect(
-    alpha.getByRole("img", { name: /Marked unread on this device only/ }),
+    alpha.getByRole("img", { name: /^Marked unread$/ }),
   ).toBeAttached();
   // Marking it unread shows the whole row again, its threads included.
   await expect(activity).toHaveAccessibleName(/unread threads?/);
@@ -556,6 +556,20 @@ test("thread buttons show observed unread independently, clear only after readin
     .click();
   await expect(alpha).toBeFocused();
   await page.clock.resume();
+  // The channel mark syncs and forces every reply unread. End only that mark
+  // before reading the threads: their own unread indications must remain.
+  await page.evaluate(() =>
+    window.fixtureRelay
+      .snapshot()
+      .session.unread.clearUnreadLocal({ kind: "channel", channelId: "alpha" }),
+  );
+  await expect(alpha.getByRole("img", { name: /^Marked unread$/ })).toHaveCount(
+    0,
+  );
+  await expect
+    .poll(async () => (await channelUnread(page, "alpha")).threads)
+    .toBe(2);
+  await expect(broadcast).toHaveAccessibleName(/Observed unread replies/);
   const beforeRect = await first.boundingBox();
   await first.hover();
   const afterRect = await first.boundingBox();

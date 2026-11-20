@@ -58,8 +58,8 @@ Viewers without a remote agent type installed see relay presence only.
 The account avatar, message/thread bylines and one-to-one DM avatars
 consume the selected community session's observed directory. A menu choice is a
 command, not evidence: only accepted publication, verified live events, or a
-verified complete snapshot changes badges. Pending/unavailable status has no
-badge; the account control says **Status unavailable**. Personal space has no
+verified complete snapshot changes badges. Pending/unknown status has no
+badge; the account control says **Availability unknown**. Personal space has no
 community authority, so it also has no observed badge.
 
 The account dropdown offers **Online**, **Away**, and **Offline**. Online resumes
@@ -143,8 +143,12 @@ or imply confirmed delivery. There is no durable invisible policy on the relay.
   An owner may request an earlier read that keeps current evidence and still
   waits for the start gate; input-activity changes do, and no agent surface does
   now.
-  Empty demand makes no request; removed authors lose their evidence. Hidden views,
-  disconnect, access/cache invalidation and disposal invalidate observations.
+  Empty demand makes no request. A removed author other than the viewer keeps
+  unexpired evidence (up to 1,024 authors), unread and unobserved, so a remount
+  within the lease shows it at once, even if it changed meanwhile, until the next
+  snapshot; a remount past the 256-author limit shows none. Hidden views, disconnect,
+  access/cache invalidation and disposal invalidate observations and retained
+  evidence.
 - One demand-scoped kind:20001 live-only route shares the authenticated socket.
   Its author set updates at the existing coalesced snapshot/start gate, not on
   every mounted row. Replacement keeps the old wire until the new EOSE; removed

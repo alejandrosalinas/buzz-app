@@ -230,8 +230,10 @@ including empty pages whose raw scan cursor does not occur among delivered event
 
 Strict root admission/validation runs once before each load or refresh traversal,
 not between the pages of a retained-range repair: repairing N pages uses one root
-read plus N independently verified window reads. Each separate scrollback load
-still reads the root. Root deletion observed live and access revocation retain their
+read plus N independently verified window reads. A load given a read frontier
+pages until it reaches a reply at or before that time the same way, so the
+older paging that reaches the first unread reply reads the root once. Each separate scrollback
+load still reads the root. Root deletion observed live and access revocation retain their
 existing session paths; a later refresh/load revalidates the root. Neither the root
 lookup nor the page sequence provides an atomic snapshot.
 
@@ -327,9 +329,12 @@ retain their previous lifetime. This does not yet add main-pane tabs or dragging
 
 ## Global message search and public previews
 
-Global message searches (`kinds: [9, 40002]`, no `#h`) keep the relay's order.
-Before admitting hits, the session resolves only their distinct nonmember channel
-IDs through the existing verified reader. The palette requests 20 hits; resolution
+Global message searches (`kinds: [9, 40002]`, no `#h`) keep the relay's order,
+unless the device's Decisions API provider can answer: then a relevance-ranked
+search with text reads 60 hits in its first request and the client reorders those
+60 by the provider's yes/no answers, keeping the relay order if any call fails.
+Later pages use `limit: 20` from page 4. Before admitting hits, the session resolves only their distinct nonmember channel
+IDs through the existing verified reader. A palette page is at most 60 hits; resolution
 accepts at most 128 IDs in one bounded request for signed metadata and
 viewer-scoped membership. This also resolves members omitted from a capped roster. Missing/forged metadata
 cannot grant a preview; read/capacity failures remain visible rather than becoming
@@ -372,12 +377,12 @@ which it is true when it arrived, kept while the event waits, so watches do not
 change who a mention wakes; they still hear the rest. A channel leaves the
 agents-only set once a lookup of the viewer's own succeeds, not when it starts:
 an exact lookup marked `viewerLookup` (a name search, a label lookup, a mounted
-link, a search read, or any `session.channels.resolve` call, which only the
-viewer's own surfaces make) reports through `resolved`, and so does a mounted link
+link, a search read, or a `session.channels.resolve` call with its default viewer lookup) reports through `resolved`, and so does a mounted link
 to a channel already known, which needs no lookup: links hold their demand
 even when readable. Rechecks, such as preview
 revalidation after an access-revoked CLOSED or a member-added confirmation,
-leave it as it was.
+leave it as it was. Watch admission calls `session.channels.resolve` with
+`viewerLookup: false`, preserving agent-only provenance instead of promoting the channel into viewer mention traffic.
 Shared composers and reactions remain unavailable for nonmembers; message helpers
 and workflows do not acquire write eligibility from public metadata. The relay
 remains the final write authority, including low-level outbox intent.
@@ -423,7 +428,8 @@ If the directory fails, an in-flight provisional lookup can still supply rows
 before the error; a stalled lookup then waits for its existing transport timeout.
 Names match by
 the joined-channel rule (`matchRank`: exact, prefix, word start, substring,
-word runs, then letters in order), so `buzz community` finds `buzz-community`.
+word runs, then every typed word in any order), so `buzz community` finds
+`buzz-community`.
 The best eight are resolved through the same exact `resolve` path as message
 hits; the page itself never grants access. So
 `channels.get(id)` returns a `readOnly` summary and `channels.list()` stays
@@ -1241,11 +1247,14 @@ outcomes retain their exact signed event and are never transparently re-signed.
 The relay WebSocket keeps retrying transient disconnects and authentication
 timeouts while its session is active. Its exponential delay starts at 250–500ms
 and caps at 15–30s, with jitter on each attempt. A full minute authenticated
-resets that backoff; a brief successful authentication does not. After a close with
-code 1012 (Service Restart) or 1001 (Going Away), as a rolling deploy sends to every
-client at once, the first attempt instead waits a uniform random time up to 10 s
-(more once repeated bounces have grown the backoff past that), so a fleet the relay
-closed at once does not return at once. Authentication rejection
+resets that backoff; a brief successful authentication does not. When a socket that
+had authenticated drops, whether through a deploy's 1012 (Service Restart) or 1001
+(Going Away) close or an abnormal drop, the first attempt instead waits a uniform
+random time up to 10 s (more once repeated bounces have grown the backoff past that),
+so a fleet the relay dropped at once does not return at once. A socket that never
+opened keeps the fast backoff. While that reconnect is scheduled, the background
+recovery retry leaves it alone and retries only failed reads; wake, network, focus,
+sign-in and the Retry button reconnect right away. Authentication rejection
 or signing failure keeps its error visible and reconnects on a slow timer, 60 s
 doubling to 10 minutes, because access or a locked signer can change later; a
 signer that does not match the viewer stays terminal. A route the relay CLOSED

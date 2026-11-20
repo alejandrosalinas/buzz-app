@@ -3,6 +3,8 @@ import { Context } from "@deepseek-ai/cordis";
 import { PluginRuntime } from "../../plugins/runtime";
 import { PagesService } from "../pages/service";
 import { PanelsService } from "./service";
+import { PanelWorkspace, usePanelTabTitle } from "./PanelWorkspace";
+import { usePluginPanelSplit } from "./usePanelSplit";
 import { ConversationService } from "../conversation/service";
 import { SettingsCardsService } from "../settings/service";
 import { ShortcutsService } from "../shortcuts/service";
@@ -340,4 +342,36 @@ it("opens a requested target only through a page showing its channel", async () 
   expect(seen).toHaveLength(2);
   stop();
   expect(panels.requestOpen(request)).toBe(false);
+});
+
+it("injects the host workspace and hooks into installed plugins", async () => {
+  const root = new Context();
+  const runtime = new PluginRuntime(root, async () => ({
+    inject: ["panels"],
+    apply(ctx) {
+      expect(ctx.panels.ui).toBe(panels.ui);
+      expect(ctx.panels.ui.Workspace).toBe(PanelWorkspace);
+      expect(ctx.panels.ui.useSplit).toBe(usePluginPanelSplit);
+      ctx.panels.register({
+        id: "reader",
+        title: "Reader",
+        matches: () => true,
+        component: () => null,
+      });
+    },
+  }));
+  const panels = new PanelsService(root);
+  try {
+    expect(panels.useTabTitle).toBe(usePanelTabTitle);
+    runtime.reconcile([{ ...plugin("example.reader"), source: "external" }]);
+    await flush();
+    expect(panels.snapshot()).toHaveLength(1);
+    runtime.reconcile([]);
+    await flush();
+    expect(panels.snapshot()).toHaveLength(0);
+    expect(panels.ui.Workspace).toBe(PanelWorkspace);
+  } finally {
+    await runtime.dispose();
+    await root.fiber.dispose();
+  }
 });

@@ -739,3 +739,40 @@ it("describes the inherited Pi model without nesting a Pi default label", async 
   expect(option).toHaveAccessibleDescription("Currently Claude X");
   expect(option).not.toHaveTextContent("Pi default");
 });
+
+it("blocks an unsupported proposal effort and lets the owner clear it", async () => {
+  const { SettingsTab } = createTabs({
+    setup: new PiSetup(fakePi()),
+    runtime: fakeRuntime(),
+  });
+  const save = vi.fn(async () => {});
+  const user = userEvent.setup();
+  render(
+    <SettingsTab
+      agent={{
+        ...AGENT,
+        config: { ...AGENT.config, model: "claude-x", effort: "max" },
+      }}
+      save={save}
+      settingsHost={{ proposedModelOrEffort: true, pendingSave: save }}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "Claude X",
+    ),
+  );
+  const submit = screen.getByRole("button", { name: "Save" });
+  await user.click(submit);
+  expect(
+    await screen.findByText(/Choose a thinking level this Pi model supports/),
+  ).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+  await user.click(
+    screen.getByRole("button", { name: "Clear model and thinking overrides" }),
+  );
+  await user.click(submit);
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ model: "", effort: "" }),
+  );
+});

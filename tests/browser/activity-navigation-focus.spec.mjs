@@ -189,3 +189,42 @@ for (const destination of ["reply", "off-window root"]) {
     await expect(row).toBeFocused();
   });
 }
+
+test("hover turns an activity row's unread dot into Mark as read, in the dot's place", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const row = page.locator('button[data-channel-id="alpha"]');
+  const popup = page.getByRole("dialog", { name: "Activity in Alpha" });
+  await row.hover();
+  await expect(popup).toBeVisible();
+  const item = popup.getByRole("button", { name: /^Open unread thread / });
+  const markRead = popup.getByRole("button", {
+    name: /Mark thread from .+ as read/,
+  });
+  const dot = popup.locator("[data-activity-unread]");
+  const time = item.locator("strong + span");
+  await expect(markRead).toHaveCount(1);
+  await expect(dot).toHaveCSS("opacity", "1");
+  await expect(markRead.locator("xpath=..")).toHaveCSS("opacity", "0");
+  const center = async (locator) => {
+    const { x, y, width, height } = await locator.boundingBox();
+    return { x: x + width / 2, y: y + height / 2 };
+  };
+  const [actionCenter, dotCenter] = [await center(markRead), await center(dot)];
+  expect(Math.abs(actionCenter.x - dotCenter.x)).toBeLessThan(1);
+  expect(Math.abs(actionCenter.y - dotCenter.y)).toBeLessThan(1);
+  // The action's hover fill clears the timestamp, which stays.
+  const [action, stamp] = [
+    await markRead.boundingBox(),
+    await time.boundingBox(),
+  ];
+  expect(stamp.x + stamp.width).toBeLessThanOrEqual(action.x);
+  await item.hover();
+  await expect(markRead.locator("xpath=..")).toHaveCSS("opacity", "1");
+  await expect(dot).toHaveCSS("opacity", "0");
+  await expect(time).toHaveCSS("opacity", "1");
+  await markRead.click();
+  await expect(markRead).toHaveCount(0);
+});

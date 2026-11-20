@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { canMessageAgent } from "../../features/agents/choices";
+import { newMessageTarget } from "../../features/channel-navigation/routes";
+import {
+  directMessageWith,
+  messagePerson,
+} from "../../features/direct-messages/message-person";
 import type { Navigation } from "../../features/navigation/controller";
 import type { PageNavigation } from "../../features/navigation/service";
 import { useRelayConnection } from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
 import { Button } from "../../shared/design-system/ui/Button";
 
-/** Open the existing direct conversation without sending a message. */
+/** Open your DM with the agent, or a draft to them, without sending a message. */
 export function AgentMessageButton({
   pubkey,
   relay,
@@ -62,15 +67,10 @@ export function AgentMessageButton({
       if (refresh) await session.agentChoices.refresh();
       controller.signal.throwIfAborted();
       if (relay.snapshot().session !== session) return;
-      const existing = session.channels
-        .list()
-        .channels.some(
-          (channel) =>
-            channel.channelType === "dm" &&
-            !channel.archived &&
-            channel.participants?.length === 1 &&
-            channel.participants[0] === pubkey,
-        );
+      const existing = directMessageWith(
+        session.channels.list().channels,
+        pubkey,
+      );
       const choices = session.agentChoices.snapshot();
       if (
         !existing &&
@@ -84,8 +84,9 @@ export function AgentMessageButton({
               ? "Agent details are still loading. Try again."
               : "This agent is unavailable in this community. Refresh its details and try again."),
         );
-      const channelId = await connection.session.directMessages.open(
-        [pubkey],
+      const destination = await messagePerson(
+        session,
+        pubkey,
         controller.signal,
       );
       if (
@@ -96,12 +97,17 @@ export function AgentMessageButton({
         navigator.snapshot().entry.target.kind === "settings"
       )
         return;
-      await navigator.open({
-        version: 1,
-        kind: "conversation",
-        channelId,
-        scope: { viewer, communityOrigin: origin },
-      });
+      const scope = { viewer, communityOrigin: origin };
+      await navigator.open(
+        "channelId" in destination
+          ? {
+              version: 1,
+              kind: "conversation",
+              channelId: destination.channelId,
+              scope,
+            }
+          : newMessageTarget(scope, destination.draftTo),
+      );
     } catch (reason) {
       if (!controller.signal.aborted)
         setError(

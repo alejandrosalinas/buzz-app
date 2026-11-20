@@ -1,18 +1,17 @@
-import { Service, type Context } from "@deepseek-ai/cordis";
+import type { Context } from "@deepseek-ai/cordis";
 import { createElement, type ComponentType } from "react";
 import type { Browser, BrowserViewProps } from "./api";
 import { BrowserHostView } from "./BrowserHostView";
 import { createBrowserPlatform, type BrowserPlatform } from "./platform";
 import { BrowserSessions } from "./sessions";
 
-export class BrowserService extends Service implements Browser {
+export class BrowserService implements Browser {
   readonly View: ComponentType<BrowserViewProps>;
 
   constructor(
     ctx: Context,
     private readonly platform: BrowserPlatform = createBrowserPlatform(),
   ) {
-    super(ctx, "browser");
     const sessions = new BrowserSessions(this.platform);
     this.View = (props) =>
       createElement(BrowserHostView, {
@@ -20,6 +19,7 @@ export class BrowserService extends Service implements Browser {
         platform: this.platform,
         sessions,
       });
+    ctx.provide("browser", this);
   }
   get available() {
     return this.platform.available;

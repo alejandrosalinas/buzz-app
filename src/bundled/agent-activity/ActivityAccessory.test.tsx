@@ -854,6 +854,118 @@ function hosted(running: boolean | Promise<boolean> = true) {
   };
 }
 
+it("notes a finished local request that ran without its gateway, and nothing for one that didn't", () => {
+  const local = createLocalAgentActivity();
+  const f = fixture(local);
+  const view = render(<ActivityAccessory {...f.props} />);
+  const begin = () =>
+    local.begin({
+      scope: "test",
+      channelId: "c",
+      threadRootId: root,
+      messageId: root,
+      agent: A,
+    });
+  try {
+    act(() => {
+      const work = begin();
+      work.started();
+      work.finish({ ok: true });
+    });
+    expect(screen.queryByText(/Ran without/)).not.toBeInTheDocument();
+    act(() => {
+      const work = begin();
+      work.notice(
+        "Ran without the agent gateway: Buzz couldn't reach the gateway.",
+      );
+      work.started();
+      work.finish({ ok: true });
+    });
+    expect(
+      screen.getByText(
+        "Ran without the agent gateway: Buzz couldn't reach the gateway.",
+      ),
+    ).toBeInTheDocument();
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});
+
+it("keeps a fallback turn's notice when a later message supersedes it, without calling it stopped", () => {
+  const local = createLocalAgentActivity();
+  const f = fixture(local);
+  const view = render(<ActivityAccessory {...f.props} />);
+  const NOTICE =
+    "Ran without the agent gateway: Buzz couldn't reach the gateway.";
+  try {
+    act(() => {
+      const work = local.begin({
+        scope: "test",
+        channelId: "c",
+        threadRootId: root,
+        messageId: root,
+        agent: A,
+      });
+      work.notice(NOTICE);
+      work.started();
+      work.supersede();
+    });
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText(/stopped/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /activity history: Blossom, Continued on a later message/,
+      }),
+    ).toBeInTheDocument();
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});
+
+it("keeps a fallback turn's outcome beside its notice when it is stopped or fails", () => {
+  const local = createLocalAgentActivity();
+  const f = fixture(local);
+  const view = render(<ActivityAccessory {...f.props} />);
+  const begin = () =>
+    local.begin({
+      scope: "test",
+      channelId: "c",
+      threadRootId: root,
+      messageId: root,
+      agent: A,
+    });
+  const NOTICE =
+    "Ran without the agent gateway: Buzz couldn't reach the gateway.";
+  try {
+    act(() => {
+      const work = begin();
+      work.notice(NOTICE);
+      work.started();
+      work.finish({ ok: true, stopped: true });
+    });
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
+    expect(screen.getByText(`· ${NOTICE}`)).toBeInTheDocument();
+    act(() => {
+      const work = begin();
+      work.notice(NOTICE);
+      work.started();
+      work.finish({ ok: false, error: "Provider refused the model" });
+    });
+    expect(screen.getByText("Couldn’t finish")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /activity history: Blossom/ }),
+    );
+    expect(
+      screen.getByText(`Provider refused the model · ${NOTICE}`),
+    ).toBeInTheDocument();
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});
+
 it.each(["waiting", "working"])(
   "stops a local request that is %s through its harness, then notes it stopped",
   async (state) => {

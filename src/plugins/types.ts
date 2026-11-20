@@ -37,7 +37,12 @@ export type ManagementAction =
   | "disable-update-checks";
 
 export type ManagedState = "missing" | "current" | "outdated" | "other";
-export type ManagedGitEntry = {
+/** Version 2 policies only; absent means "recommend" and "review". */
+export type ManagedModes = {
+  install?: "recommend" | "automatic" | "manual";
+  update?: "review" | "automatic";
+};
+export type ManagedGitEntry = ManagedModes & {
   id: string;
   repository: string;
   reference: string;
@@ -46,7 +51,7 @@ export type ManagedGitEntry = {
   state: ManagedState;
 };
 /** A single plugin artifact pinned by SHA-256, for people without Git access. */
-export type ManagedUrlEntry = {
+export type ManagedUrlEntry = ManagedModes & {
   id: string;
   url: string;
   sha256: string;
@@ -65,7 +70,17 @@ export type ManagedPlugins =
       source: string;
       plugins: ManagedEntry[];
       problems: string[];
+      /** The build's policy signer signed it; only then do automatic modes apply. */
+      signed?: true;
+      /** What Buzz installed or updated on its own while the app has run. */
+      automatic?: ManagedChange[];
     };
+export type ManagedChange = {
+  id: string;
+  name: string;
+  revision: string;
+  action: "installed" | "updated";
+};
 
 // Reading configuration either succeeds or provides a recovery path.
 // Pausing external code is a launch option, not part of the saved catalog.

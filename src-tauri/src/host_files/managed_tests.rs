@@ -6,6 +6,13 @@ use tauri::{
     Manager as _,
 };
 
+// Capture the actual command future on a test-owned runtime for abort/paused-time
+// coverage, without changing the production command or inventing a cancel IPC.
+type CommandControl = (
+    tokio::runtime::Handle,
+    std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+);
+
 pub(crate) struct Fixture {
     pub(crate) temp: tempfile::TempDir,
     pub(crate) app: tauri::App<MockRuntime>,
@@ -15,6 +22,21 @@ pub(crate) struct Fixture {
 }
 impl Fixture {
     pub(crate) fn new(managed: bool, files: bool) -> Self {
+        Self::configured(
+            managed,
+            files,
+            crate::identity::IdentityHost::fixture(),
+            ManagedFiles::default(),
+            None,
+        )
+    }
+    fn configured(
+        managed: bool,
+        files: bool,
+        identity: crate::identity::IdentityHost,
+        registry: ManagedFiles,
+        control: Option<CommandControl>,
+    ) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let base = dunce::canonicalize(temp.path()).unwrap();
         let manager =
@@ -45,7 +67,39 @@ impl Fixture {
         let app = mock_builder()
             .manage(PluginManager(Ok(manager.clone())))
             .manage(crate::host_process::HostProcesses::default())
-            .invoke_handler(crate::commands())
+            .manage(registry)
+            .manage(identity)
+            .invoke_handler(move |invoke| {
+                if let Some((runtime, task)) = &control {
+                    if invoke.message.command() == "plugin_host_save_bytes" {
+                        use tauri::ipc::CommandArg as _;
+                        let job = runtime.spawn(async move {
+                            let request =
+                                tauri::ipc::Request::from_command(tauri::ipc::CommandItem {
+                                    plugin: None,
+                                    name: "plugin_host_save_bytes",
+                                    key: "request",
+                                    message: &invoke.message,
+                                    acl: &invoke.acl,
+                                })
+                                .unwrap();
+                            let app = invoke.message.webview().app_handle().clone();
+                            let result = plugin_host_save_bytes(
+                                app.clone(),
+                                app.state::<PluginManager>(),
+                                request,
+                            )
+                            .await;
+                            invoke
+                                .resolver
+                                .respond(result.map_err(tauri::ipc::InvokeError::from));
+                        });
+                        *task.lock().unwrap() = Some(job);
+                        return true;
+                    }
+                }
+                crate::commands()(invoke)
+            })
             .build(context)
             .unwrap();
         let view = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -66,12 +120,12 @@ impl Fixture {
             .unwrap()
             .join("plugin-artifacts")
     }
-    pub(crate) fn ipc(
+    fn start_ipc(
         &self,
         command: &str,
         body: tauri::ipc::InvokeBody,
         headers: reqwest::header::HeaderMap,
-    ) -> Result<tauri::ipc::InvokeResponseBody, String> {
+    ) -> std::sync::mpsc::Receiver<tauri::ipc::InvokeResponse> {
         let (reply, result) = std::sync::mpsc::sync_channel(1);
         self.view.as_ref().clone().on_message(
             tauri::webview::InvokeRequest {
@@ -87,6 +141,15 @@ impl Fixture {
                 let _ = reply.send(response);
             }),
         );
+        result
+    }
+    pub(crate) fn ipc(
+        &self,
+        command: &str,
+        body: tauri::ipc::InvokeBody,
+        headers: reqwest::header::HeaderMap,
+    ) -> Result<tauri::ipc::InvokeResponseBody, String> {
+        let result = self.start_ipc(command, body, headers);
         match result
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("native fixture IPC watchdog")
@@ -96,7 +159,15 @@ impl Fixture {
         }
     }
     pub(crate) fn save(&self, bytes: &[u8], hash: &str) -> Result<serde_json::Value, String> {
-        let headers = reqwest::header::HeaderMap::from_iter([
+        self.save_policy(bytes, hash, false)
+    }
+    pub(crate) fn save_policy(
+        &self,
+        bytes: &[u8],
+        hash: &str,
+        release: bool,
+    ) -> Result<serde_json::Value, String> {
+        let mut headers = reqwest::header::HeaderMap::from_iter([
             (
                 reqwest::header::HeaderName::from_static("x-buzz-plugin-id"),
                 "example.bytes".parse().unwrap(),
@@ -110,6 +181,9 @@ impl Fixture {
                 hash.parse().unwrap(),
             ),
         ]);
+        if release {
+            headers.insert("x-buzz-release-after-send", "1".parse().unwrap());
+        }
         self.ipc(
             "plugin_host_save_bytes",
             tauri::ipc::InvokeBody::Raw(bytes.to_vec()),
@@ -238,26 +312,30 @@ fn invalid_input_hash_mismatch_and_deadline_leave_no_published_file() {
         .unwrap_err()
         .contains("mismatch"));
     assert_eq!(std::fs::read_dir(f.root()).unwrap().count(), 1); // Only ownership lock.
-    let result = save_managed(
-        &f.root(),
-        b"data",
-        &hash,
-        std::time::Instant::now(),
-        &f.manager,
-        "example.bytes",
-        &f.revision,
-    );
+    let result = save_managed(ManagedSave {
+        root: &f.root(),
+        bytes: b"data",
+        hash: &hash,
+        deadline: std::time::Instant::now(),
+        manager: &f.manager,
+        id: "example.bytes",
+        revision: &f.revision,
+        registry: None,
+        consent: None,
+    });
     assert!(result.err().unwrap().contains("expired"));
     assert_eq!(std::fs::read_dir(f.root()).unwrap().count(), 1);
-    assert!(save_managed(
-        &f.root(),
-        b"data",
-        &hash,
-        std::time::Instant::now() + SAVE_WINDOW,
-        &f.manager,
-        "example.bytes",
-        "stale"
-    )
+    assert!(save_managed(ManagedSave {
+        root: &f.root(),
+        bytes: b"data",
+        hash: &hash,
+        deadline: std::time::Instant::now() + SAVE_WINDOW,
+        manager: &f.manager,
+        id: "example.bytes",
+        revision: "stale",
+        registry: None,
+        consent: None,
+    })
     .is_err());
 }
 
@@ -528,6 +606,8 @@ fn save_failure_at(boundary: SaveBoundary) {
                 manager: &manager,
                 id: "example.bytes",
                 revision: &revision,
+                registry: None,
+                consent: None,
             },
             |file, bytes| {
                 if boundary == SaveBoundary::BeforeWrite {
@@ -689,7 +769,7 @@ fn own_managed_delete_refuses_other_plugins_legacy_paths_and_active_reads() {
         )
         .unwrap_err();
     assert!(error.contains("not owned"));
-    assert!(delete_managed(&f.root(), path, &f.manager, "example.bytes", "stale").is_err());
+    assert!(delete_managed(&f.root(), path, &f.manager, "example.bytes", "stale", None).is_err());
 
     assert!(remove(
         f.temp.path().join("outside").to_str().unwrap(),
@@ -847,11 +927,16 @@ fn process_attachment_reader_blocks_delete_until_output_and_killed_child_complet
         .await
         .unwrap();
         // cat is held on stdin; its actual monitor owns the admitted reader lease.
-        assert!(
-            delete_managed(&f.root(), path, &f.manager, "example.bytes", &f.revision)
-                .unwrap_err()
-                .contains("in use")
-        );
+        assert!(delete_managed(
+            &f.root(),
+            path,
+            &f.manager,
+            "example.bytes",
+            &f.revision,
+            None
+        )
+        .unwrap_err()
+        .contains("in use"));
         crate::host_process::plugin_host_process_write(
             f.app.state(),
             "example.bytes".into(),
@@ -878,7 +963,15 @@ fn process_attachment_reader_blocks_delete_until_output_and_killed_child_complet
                 break;
             }
         }
-        delete_managed(&f.root(), path, &f.manager, "example.bytes", &f.revision).unwrap();
+        delete_managed(
+            &f.root(),
+            path,
+            &f.manager,
+            "example.bytes",
+            &f.revision,
+            None,
+        )
+        .unwrap();
     });
 }
 
@@ -922,6 +1015,8 @@ fn managed_deletes_queue_behind_a_held_save_and_each_other() {
                 manager: &manager,
                 id: "example.bytes",
                 revision: &revision,
+                registry: None,
+                consent: None,
             },
             |file, bytes| {
                 file.write_all(bytes)?;
@@ -1005,4 +1100,884 @@ fn queued_managed_delete_timeout_never_dispatches_or_reports_unknown_outcome() {
             assert!(!dispatched.load(std::sync::atomic::Ordering::SeqCst));
             assert_eq!(BYTE_WAITERS.available_permits(), 16);
         });
+}
+
+#[test]
+fn host_release_reader_admission_refuses_while_exclusion_is_held() {
+    let _serial = commands();
+    let exclusion = FileReadExclusion::new().unwrap();
+    let (send, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        send.send(FileReadLease::new().map(|lease| {
+            drop(lease);
+        }))
+        .unwrap();
+    });
+    let refused = result.recv_timeout(std::time::Duration::from_secs(1));
+    drop(exclusion);
+    worker.join().unwrap();
+    assert!(refused.is_ok(), "read admission blocked on exclusion");
+    assert_eq!(
+        refused.unwrap().unwrap_err(),
+        "File reads are busy; try again later"
+    );
+}
+
+#[test]
+fn host_release_raw_save_requires_strict_flag_and_native_ack() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let bytes = b"temporary";
+    let headers = |value: &str| {
+        reqwest::header::HeaderMap::from_iter([
+            (
+                reqwest::header::HeaderName::from_static("x-buzz-plugin-id"),
+                "example.bytes".parse().unwrap(),
+            ),
+            (
+                reqwest::header::HeaderName::from_static("x-buzz-plugin-revision"),
+                f.revision.parse().unwrap(),
+            ),
+            (
+                reqwest::header::HeaderName::from_static("x-buzz-sha256"),
+                digest(bytes).parse().unwrap(),
+            ),
+            (
+                reqwest::header::HeaderName::from_static("x-buzz-release-after-send"),
+                value.parse().unwrap(),
+            ),
+        ])
+    };
+    assert!(f
+        .ipc(
+            "plugin_host_save_bytes",
+            tauri::ipc::InvokeBody::Raw(bytes.to_vec()),
+            headers("true")
+        )
+        .is_err());
+    let saved: serde_json::Value = f
+        .ipc(
+            "plugin_host_save_bytes",
+            tauri::ipc::InvokeBody::Raw(bytes.to_vec()),
+            headers("1"),
+        )
+        .unwrap()
+        .deserialize()
+        .unwrap();
+    assert_eq!(saved["releaseAfterSend"], true);
+}
+
+#[cfg(unix)]
+#[test]
+fn host_release_confirmed_attachment_reclaims_only_native_consented_exact_file() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let bytes = b"temporary";
+    let hash = digest(bytes);
+    let saved = f.save_policy(bytes, &hash, true).unwrap();
+    let sibling = f.save(bytes, &hash).unwrap();
+    let path = saved["path"].as_str().unwrap();
+    let owner =
+        tauri::async_runtime::block_on(f.app.state::<crate::identity::IdentityHost>().viewer())
+            .unwrap();
+    let candidate = serde_json::json!({"path":path, "sha256":hash, "size":bytes.len(), "url":"https://example.test/media"});
+    let signed = serde_json::json!({"kind":9,"tags":[["imeta", "url https://example.test/media", format!("x {hash}"),format!("size {}", bytes.len())]]});
+    tauri::async_runtime::block_on(release_after_send(
+        f.app.state::<ManagedFiles>().inner().clone(),
+        f.root(),
+        owner,
+        signed,
+        Some(serde_json::json!([candidate])),
+    ));
+    assert!(
+        !Path::new(path).exists(),
+        "confirmed matching source must release"
+    );
+    assert!(
+        Path::new(sibling["path"].as_str().unwrap()).exists(),
+        "ordinary saves never adopt consent"
+    );
+}
+
+struct ReleaseGate(Option<std::sync::mpsc::Sender<()>>);
+impl Drop for ReleaseGate {
+    fn drop(&mut self) {
+        if let Some(release) = self.0.take() {
+            let _ = release.send(());
+        }
+    }
+}
+fn managed_gate() -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+    ReleaseGate,
+    std::sync::mpsc::Receiver<()>,
+) {
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, allowed) = std::sync::mpsc::channel();
+    (entered, ready, ReleaseGate(Some(release)), allowed)
+}
+async fn wait_for_managed_gate(
+    ready: tokio::sync::oneshot::Receiver<()>,
+) -> Result<(), &'static str> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+        .await
+        .map_err(|_| "managed gate was not entered before watchdog")?
+        .map_err(|_| "managed gate closed before entry")
+}
+
+fn start_release_save(f: &Fixture) -> std::sync::mpsc::Receiver<tauri::ipc::InvokeResponse> {
+    let headers = reqwest::header::HeaderMap::from_iter([
+        (
+            reqwest::header::HeaderName::from_static("x-buzz-plugin-id"),
+            "example.bytes".parse().unwrap(),
+        ),
+        (
+            reqwest::header::HeaderName::from_static("x-buzz-plugin-revision"),
+            f.revision.parse().unwrap(),
+        ),
+        (
+            reqwest::header::HeaderName::from_static("x-buzz-sha256"),
+            digest(b"fenced").parse().unwrap(),
+        ),
+        (
+            reqwest::header::HeaderName::from_static("x-buzz-release-after-send"),
+            "1".parse().unwrap(),
+        ),
+    ]);
+    f.start_ipc(
+        "plugin_host_save_bytes",
+        tauri::ipc::InvokeBody::Raw(b"fenced".to_vec()),
+        headers,
+    )
+}
+
+#[test]
+fn host_release_actual_command_timeout_and_abort_fence_dispatched_save() {
+    let _serial = commands();
+    for abort in [false, true] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let registry = ManagedFiles::default();
+            let task = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let identity = crate::identity::IdentityHost::fixture();
+            let f = Fixture::configured(
+                true,
+                false,
+                identity,
+                registry.clone(),
+                Some((tokio::runtime::Handle::current(), task.clone())),
+            );
+            let (entered, ready, release, allowed) = managed_gate();
+            registry.1.lock().unwrap().save = Some((entered, allowed));
+            let response = start_release_save(&f);
+            wait_for_managed_gate(ready).await.unwrap();
+            let job = task.lock().unwrap().take().unwrap();
+            assert_eq!(BYTE_WORK.available_permits(), 0);
+            if abort {
+                job.abort();
+                assert!(job.await.unwrap_err().is_cancelled());
+            } else {
+                tokio::time::pause();
+                tokio::time::advance(SAVE_WINDOW + std::time::Duration::from_secs(1)).await;
+                job.await.unwrap();
+                tokio::time::resume();
+                assert!(matches!(
+                    response.try_recv().unwrap(),
+                    tauri::ipc::InvokeResponse::Err(_)
+                ));
+            }
+            assert!(registry.0.lock().unwrap().is_empty());
+            assert_eq!(
+                BYTE_WORK.available_permits(),
+                0,
+                "cancelled waiter must not release actual writer admission"
+            );
+            drop(release);
+            let permit = byte_admission(tokio::time::Instant::now() + SAVE_WINDOW)
+                .await
+                .unwrap();
+            assert!(registry.0.lock().unwrap().is_empty());
+            assert_eq!(
+                std::fs::read_dir(f.root()).unwrap().count(),
+                1,
+                "precommit cancellation rolls back file"
+            );
+            drop(permit);
+        });
+    }
+}
+
+#[test]
+fn host_release_identity_close_while_queued_or_at_commit_refuses_without_reassignment() {
+    let _serial = commands();
+    for queued in [true, false] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let registry = ManagedFiles::default();
+            let identity = crate::identity::IdentityHost::fixture();
+            let task = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let f = Fixture::configured(
+                true,
+                false,
+                identity.clone(),
+                registry.clone(),
+                Some((tokio::runtime::Handle::current(), task.clone())),
+            );
+            let held = if queued {
+                Some(BYTE_WORK.acquire().await.unwrap())
+            } else {
+                None
+            };
+            let (entered, ready, release, allowed) = managed_gate();
+            if queued {
+                registry.1.lock().unwrap().captured = Some(entered);
+            } else {
+                registry.1.lock().unwrap().save = Some((entered, allowed));
+            }
+            let response = start_release_save(&f);
+            wait_for_managed_gate(ready).await.unwrap();
+            identity.close();
+            drop(held);
+            drop(release);
+            let job = task.lock().unwrap().take().unwrap();
+            job.await.unwrap();
+            assert!(matches!(
+                response.try_recv().unwrap(),
+                tauri::ipc::InvokeResponse::Err(_)
+            ));
+            let permit = byte_admission(tokio::time::Instant::now() + SAVE_WINDOW)
+                .await
+                .unwrap();
+            assert!(registry.0.lock().unwrap().is_empty());
+            assert_eq!(std::fs::read_dir(f.root()).unwrap().count(), 1);
+            drop(permit);
+            let ordinary = f.start_ipc(
+                "plugin_host_save_bytes",
+                tauri::ipc::InvokeBody::Raw(b"ordinary".to_vec()),
+                reqwest::header::HeaderMap::from_iter([
+                    (
+                        reqwest::header::HeaderName::from_static("x-buzz-plugin-id"),
+                        "example.bytes".parse().unwrap(),
+                    ),
+                    (
+                        reqwest::header::HeaderName::from_static("x-buzz-plugin-revision"),
+                        f.revision.parse().unwrap(),
+                    ),
+                    (
+                        reqwest::header::HeaderName::from_static("x-buzz-sha256"),
+                        digest(b"ordinary").parse().unwrap(),
+                    ),
+                ]),
+            );
+            let job = task.lock().unwrap().take().unwrap();
+            job.await.unwrap();
+            assert!(
+                matches!(
+                    ordinary.try_recv().unwrap(),
+                    tauri::ipc::InvokeResponse::Ok(_)
+                ),
+                "ordinary saves remain identity independent"
+            );
+        });
+    }
+}
+
+pub(crate) fn release_completion(registry: &ManagedFiles) -> tokio::sync::oneshot::Receiver<()> {
+    let (released, complete) = tokio::sync::oneshot::channel();
+    registry.1.lock().unwrap().released = Some(released);
+    complete
+}
+
+pub(crate) fn release_fixture_data(
+    f: &Fixture,
+    bytes: &[u8],
+) -> (serde_json::Value, serde_json::Value, String) {
+    let hash = digest(bytes);
+    let saved = f.save_policy(bytes, &hash, true).unwrap();
+    let hints = serde_json::json!([{"path":saved["path"],"sha256":hash,"size":bytes.len(),"url":"https://example.test/media"}]);
+    let event = serde_json::json!({"kind":9,"tags":[["imeta","url https://example.test/media",format!("x {hash}"),format!("size {}",bytes.len())]]});
+    let owner =
+        tauri::async_runtime::block_on(f.app.state::<crate::identity::IdentityHost>().viewer())
+            .unwrap();
+    (hints, event, owner)
+}
+
+#[test]
+fn host_release_deadline_starts_before_first_poll_and_cancelled_queue_never_unlinks() {
+    let _serial = commands();
+    for cancel in [false, true] {
+        let f = Fixture::new(true, false);
+        let registry = f.app.state::<ManagedFiles>().inner().clone();
+        let (hints, event, owner) = release_fixture_data(&f, b"queued source");
+        let path = PathBuf::from(hints[0]["path"].as_str().unwrap());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let held = BYTE_WORK.acquire().await.unwrap();
+            let cleanup = release_after_send(registry, f.root(), owner, event, Some(hints));
+            if cancel {
+                let task = tokio::spawn(cleanup);
+                // On this current-thread runtime, let cleanup reach its blocked
+                // admission await, then observe its bounded waiter reservation.
+                tokio::task::yield_now().await;
+                assert_eq!(BYTE_WAITERS.available_permits(), 15);
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            } else {
+                tokio::time::pause();
+                tokio::time::advance(SAVE_WINDOW + std::time::Duration::from_secs(1)).await;
+                // An expired attempt must finish on its first poll, without
+                // letting paused time auto-advance through a reset deadline.
+                let mut cleanup = Box::pin(cleanup);
+                assert!(
+                    matches!(
+                        futures_util::poll!(&mut cleanup),
+                        std::task::Poll::Ready(())
+                    ),
+                    "expired cleanup must return immediately without a fresh budget"
+                );
+                tokio::time::resume();
+            }
+            assert_eq!(BYTE_WAITERS.available_permits(), 16);
+            assert!(path.exists());
+            drop(held);
+            let settled = byte_admission(tokio::time::Instant::now() + SAVE_WINDOW)
+                .await
+                .unwrap();
+            assert!(
+                path.exists(),
+                "expired/cancelled queued work must not dispatch later"
+            );
+            drop(settled);
+        });
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn host_release_reclaims_more_than_sixteen_sequential_saves_and_byte_capacity() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let registry = f.app.state::<ManagedFiles>().inner().clone();
+    for _ in 0..20 {
+        let (hints, event, owner) = release_fixture_data(&f, b"one send");
+        let path = hints[0]["path"].as_str().unwrap().to_owned();
+        tauri::async_runtime::block_on(release_after_send(
+            registry.clone(),
+            f.root(),
+            owner,
+            event,
+            Some(hints),
+        ));
+        assert!(!Path::new(&path).exists());
+        assert!(registry.0.lock().unwrap().is_empty());
+    }
+    let bytes = vec![7; MAX_SAVE_BYTES];
+    let mut batch = vec![];
+    let mut event = serde_json::json!({"kind":9,"tags":[]});
+    let mut owner = String::new();
+    for _ in 0..4 {
+        let (hints, signed, key) = release_fixture_data(&f, &bytes);
+        batch.push(hints[0].clone());
+        event["tags"]
+            .as_array_mut()
+            .unwrap()
+            .push(signed["tags"][0].clone());
+        owner = key;
+    }
+    assert!(f.save(b"over capacity", &digest(b"over capacity")).is_err());
+    tauri::async_runtime::block_on(release_after_send(
+        registry.clone(),
+        f.root(),
+        owner,
+        event,
+        Some(serde_json::json!(batch)),
+    ));
+    assert!(registry.0.lock().unwrap().is_empty());
+    f.save(&bytes, &digest(&bytes)).unwrap();
+}
+
+#[test]
+fn host_release_refusal_and_restart_retain_until_explicit_sweep_and_prune() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let registry = f.app.state::<ManagedFiles>().inner().clone();
+    let (hints, event, owner) = release_fixture_data(&f, b"retained");
+    let path = PathBuf::from(hints[0]["path"].as_str().unwrap());
+    let lease = FileReadLease::new().unwrap();
+    tauri::async_runtime::block_on(release_after_send(
+        registry.clone(),
+        f.root(),
+        owner.clone(),
+        event.clone(),
+        Some(hints.clone()),
+    ));
+    assert!(path.exists());
+    drop(lease);
+    tauri::async_runtime::block_on(release_after_send(
+        ManagedFiles::default(),
+        f.root(),
+        owner,
+        event,
+        Some(hints),
+    ));
+    assert!(path.exists(), "restart map must not adopt consent");
+    let expiry = artifact_expiry(path.file_name().unwrap().to_str().unwrap()).unwrap();
+    // Immediate retention above and explicit sweep/prune below; no clock is advanced.
+    assert!(path.exists());
+    assert_eq!(registry.0.lock().unwrap().len(), 1);
+    let lock = managed_lock(&f.root()).unwrap();
+    managed_capacity(&f.root(), expiry + 1, 1).unwrap();
+    registry.prune(&f.root()).unwrap();
+    drop(lock);
+    assert!(!path.exists());
+    assert!(registry.0.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn host_release_stalled_hash_has_one_budget_and_prompt_direct_and_process_read_refusal() {
+    let _serial = commands();
+    for count in [1, ROOT_FILES] {
+        let f = Fixture::new(true, true);
+        let registry = f.app.state::<ManagedFiles>().inner().clone();
+        let mut candidates = vec![];
+        let mut signed = serde_json::json!({"kind":9,"tags":[]});
+        let mut owner = String::new();
+        for _ in 0..count {
+            let (hints, event, key) = release_fixture_data(&f, b"hash gate");
+            candidates.push(hints[0].clone());
+            signed["tags"]
+                .as_array_mut()
+                .unwrap()
+                .push(event["tags"][0].clone());
+            owner = key;
+        }
+        let path = candidates[0]["path"].as_str().unwrap().to_owned();
+        let root = f.root();
+        let (entered, ready, release, allowed) = managed_gate();
+        registry.1.lock().unwrap().hash = Some((entered, allowed));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let cleanup = tokio::spawn(release_after_send(registry.clone(), root, owner, signed, Some(serde_json::json!(candidates))));
+            wait_for_managed_gate(ready).await.unwrap();
+            let direct = plugin_host_read_file(f.app.state::<PluginManager>(), "example.bytes".into(), f.revision.clone(), path.clone(), None);
+            assert!(matches!(futures_util::poll!(Box::pin(direct)), std::task::Poll::Ready(Err(error)) if error == "File reads are busy; try again later"));
+            for process in ["read", "read-protected"] {
+                let reader = crate::host_process::plugin_host_process_spawn(
+                    f.app.handle().clone(), f.app.state::<PluginManager>(), f.app.state::<crate::host_process::HostProcesses>(),
+                    "example.bytes".into(), f.revision.clone(), process.into(), vec![path.clone()], None, None,
+                    tauri::ipc::Channel::new(|_| panic!("refused process emitted output")), None, None, None, None, None,
+                );
+                assert!(matches!(futures_util::poll!(Box::pin(reader)), std::task::Poll::Ready(Err(error)) if error == "File reads are busy; try again later"));
+            }
+            tokio::time::pause();
+            let timer = tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_secs(1)).await; });
+            tokio::time::advance(SAVE_WINDOW + std::time::Duration::from_secs(1)).await;
+            timer.await.unwrap();
+            cleanup.await.unwrap();
+            tokio::time::resume();
+            assert!(Path::new(&path).exists());
+            assert_eq!(BYTE_WORK.available_permits(), 0);
+            assert!(FileReadExclusion::new().is_err(), "actual hash still owns exclusion after waiter timeout");
+            let mut writer = Box::pin(byte_admission(tokio::time::Instant::now() + SAVE_WINDOW));
+            assert!(matches!(futures_util::poll!(&mut writer), std::task::Poll::Pending));
+            drop(release);
+            let permit = writer.await.unwrap();
+            assert!(!Path::new(&path).exists());
+            // Undispatched later candidates stop at the same elapsed budget.
+            if count > 1 { assert_eq!(registry.0.lock().unwrap().len(), count - 1); }
+            drop(permit);
+            assert!(FileReadLease::new().is_ok());
+        });
+    }
+}
+
+#[test]
+fn host_release_rejects_forged_owner_content_paths_metadata_and_replaced_files() {
+    let _serial = commands();
+    let cases = [
+        "owner",
+        "hash",
+        "size",
+        "url",
+        "split-imeta",
+        "kind",
+        "outside",
+        "alias",
+        "relative",
+        "unknown-field",
+        "oversized",
+        "replaced",
+        "content",
+        "hardlink",
+        "symlink",
+        "nonprivate",
+    ];
+    for case in cases {
+        let f = Fixture::new(true, false);
+        let registry = f.app.state::<ManagedFiles>().inner().clone();
+        let (mut hints, mut signed, mut owner) = release_fixture_data(&f, b"private source");
+        let path = PathBuf::from(hints[0]["path"].as_str().unwrap());
+        let mut held_original = None;
+        match case {
+            "owner" => owner = "b".repeat(64),
+            "hash" => hints[0]["sha256"] = "0".repeat(64).into(),
+            "size" => hints[0]["size"] = 1.into(),
+            "url" => hints[0]["url"] = "https://different.test/media".into(),
+            "split-imeta" => {
+                signed["tags"] = serde_json::json!([
+                    ["imeta", "url https://example.test/media"],
+                    [
+                        "imeta",
+                        format!("x {}", digest(b"private source")),
+                        "size 14"
+                    ]
+                ])
+            }
+            "kind" => signed["kind"] = 1.into(),
+            "outside" => hints[0]["path"] = f.temp.path().join("outside").to_str().unwrap().into(),
+            "alias" => {
+                hints[0]["path"] = format!(
+                    "{}/../plugin-artifacts/{}",
+                    f.root().display(),
+                    path.file_name().unwrap().to_str().unwrap()
+                )
+                .into()
+            }
+            "relative" => hints[0]["path"] = path.file_name().unwrap().to_str().unwrap().into(),
+            "unknown-field" => hints[0]["owner"] = owner.clone().into(),
+            "oversized" => hints = serde_json::json!(vec![hints[0].clone(); ROOT_FILES + 1]),
+            "replaced" => {
+                held_original = Some(std::fs::File::open(&path).unwrap());
+                std::fs::remove_file(&path).unwrap();
+                use std::io::Write as _;
+                private_options()
+                    .create_new(true)
+                    .open(&path)
+                    .unwrap()
+                    .write_all(b"private source")
+                    .unwrap();
+            }
+            "content" => std::fs::write(&path, b"changed source").unwrap(),
+            #[cfg(unix)]
+            "hardlink" => std::fs::hard_link(&path, f.temp.path().join("alias")).unwrap(),
+            #[cfg(unix)]
+            "symlink" => {
+                std::fs::rename(&path, f.temp.path().join("original")).unwrap();
+                std::os::unix::fs::symlink(f.temp.path().join("original"), &path).unwrap();
+            }
+            #[cfg(unix)]
+            "nonprivate" => {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            _ => continue,
+        }
+        tauri::async_runtime::block_on(release_after_send(
+            registry.clone(),
+            f.root(),
+            owner,
+            signed,
+            Some(hints),
+        ));
+        assert!(path.exists(), "{case} must not authorize deletion");
+        assert_eq!(
+            registry.0.lock().unwrap().len(),
+            1,
+            "{case} must not discard consent"
+        );
+        drop(held_original);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn host_release_committed_consent_survives_saver_disable_and_later_identity_close() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let registry = f.app.state::<ManagedFiles>().inner().clone();
+    let (hints, event, owner) = release_fixture_data(&f, b"committed");
+    let path = hints[0]["path"].as_str().unwrap().to_owned();
+    f.manager.change("disable", "example.bytes").unwrap();
+    f.app.state::<crate::identity::IdentityHost>().close();
+    tauri::async_runtime::block_on(release_after_send(
+        registry,
+        f.root(),
+        owner,
+        event,
+        Some(hints),
+    ));
+    assert!(
+        !Path::new(&path).exists(),
+        "committed owner is not current UI identity or runtime plugin grant"
+    );
+}
+
+#[test]
+fn host_release_parallel_reader_counter_never_refuses_without_cleanup_exclusion() {
+    let _serial = commands();
+    let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let mut jobs = vec![];
+    for _ in 0..8 {
+        let start = start.clone();
+        jobs.push(std::thread::spawn(move || {
+            start.wait();
+            for _ in 0..10_000 {
+                let first = FileReadLease::new()
+                    .expect("ordinary read contention is not cleanup exclusion");
+                let second = FileReadLease::new().expect("parallel readers must coexist");
+                drop(first);
+                drop(second);
+            }
+        }));
+    }
+    let results: Vec<_> = jobs.into_iter().map(|job| job.join()).collect();
+    assert!(results.iter().all(Result::is_ok));
+}
+
+#[test]
+fn host_release_reader_and_exclusion_races_are_mutually_exclusive_and_unwind_safe() {
+    let _serial = commands();
+    for reader_wins in [true, false] {
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, allowed) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            if reader_wins {
+                let _lease = FileReadLease::new().unwrap();
+                entered.send(()).unwrap();
+                allowed.recv().unwrap();
+            } else {
+                let _exclusion = FileReadExclusion::new().unwrap();
+                entered.send(()).unwrap();
+                allowed.recv().unwrap();
+            }
+        });
+        ready.recv().unwrap();
+        if reader_wins {
+            assert!(FileReadExclusion::new().is_err());
+        } else {
+            assert!(FileReadLease::new().is_err());
+        }
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(FILE_READS.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+    for reader in [true, false] {
+        let panic = std::panic::catch_unwind(|| {
+            if reader {
+                let _lease = FileReadLease::new().unwrap();
+                panic!("reader unwind");
+            } else {
+                let _exclusion = FileReadExclusion::new().unwrap();
+                panic!("writer unwind");
+            }
+        });
+        assert!(panic.is_err());
+        assert_eq!(FILE_READS.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(FileReadExclusion::new().is_ok());
+        assert!(FileReadLease::new().is_ok());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn host_release_duplicate_parallel_and_public_delete_paths_are_single_use() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let registry = f.app.state::<ManagedFiles>().inner().clone();
+    let (hints, signed, owner) = release_fixture_data(&f, b"once");
+    let path = hints[0]["path"].as_str().unwrap().to_owned();
+    let duplicates = serde_json::json!([hints[0].clone(), hints[0].clone()]);
+    assert_eq!(
+        confirmed_candidates(&signed, Some(duplicates.clone())).len(),
+        1
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let first = release_after_send(
+            registry.clone(),
+            f.root(),
+            owner.clone(),
+            signed.clone(),
+            Some(duplicates),
+        );
+        let second = release_after_send(
+            registry.clone(),
+            f.root(),
+            owner.clone(),
+            signed.clone(),
+            Some(hints.clone()),
+        );
+        tokio::join!(first, second);
+        assert!(!Path::new(&path).exists());
+        assert!(read(&path, None).unwrap_err().contains("No such file"));
+        assert!(registry.0.lock().unwrap().is_empty());
+        assert!(
+            delete_managed(
+                &f.root(),
+                &path,
+                &f.manager,
+                "example.bytes",
+                &f.revision,
+                Some(&registry)
+            )
+            .is_err(),
+            "public missing-file behavior unchanged"
+        );
+    });
+    let (hints, signed, owner) = release_fixture_data(&f, b"public first");
+    let path = hints[0]["path"].as_str().unwrap();
+    delete_managed(
+        &f.root(),
+        path,
+        &f.manager,
+        "example.bytes",
+        &f.revision,
+        Some(&registry),
+    )
+    .unwrap();
+    assert!(registry.0.lock().unwrap().is_empty());
+    tauri::async_runtime::block_on(release_after_send(
+        registry,
+        f.root(),
+        owner,
+        signed,
+        Some(hints),
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn host_release_missing_consent_prunes_on_save_and_one_bad_candidate_keeps_later_safe_work() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let registry = f.app.state::<ManagedFiles>().inner().clone();
+    let (mut first, signed, owner) = release_fixture_data(&f, b"matching");
+    let first_path = first[0]["path"].as_str().unwrap().to_owned();
+    std::fs::remove_file(&first_path).unwrap();
+    let (second, _, _) = release_fixture_data(&f, b"matching");
+    assert_eq!(
+        registry.0.lock().unwrap().len(),
+        1,
+        "new save prunes missing record"
+    );
+    first[0]["path"] = first_path.into();
+    let batch = serde_json::json!([first[0].clone(), second[0].clone()]);
+    tauri::async_runtime::block_on(release_after_send(
+        registry.clone(),
+        f.root(),
+        owner,
+        signed,
+        Some(batch),
+    ));
+    assert!(!Path::new(second[0]["path"].as_str().unwrap()).exists());
+    assert!(registry.0.lock().unwrap().is_empty());
+}
+
+#[test]
+fn host_release_identity_and_consent_busy_refuse_without_true_ack_or_adoption() {
+    let _serial = commands();
+    let f = Fixture::new(true, false);
+    let registry = f.app.state::<ManagedFiles>().inner().clone();
+    let identity = f
+        .app
+        .state::<crate::identity::IdentityHost>()
+        .inner()
+        .clone();
+    let owner = tauri::async_runtime::block_on(identity.viewer()).unwrap();
+    let eligibility = SaveEligibility::default();
+    let consent = SaveConsent {
+        identity,
+        owner,
+        registry: registry.clone(),
+        eligibility: eligibility.0.clone(),
+    };
+    let held_map = registry.0.lock().unwrap();
+    let result = save_managed(ManagedSave {
+        root: &f.root(),
+        bytes: b"busy",
+        hash: &digest(b"busy"),
+        deadline: std::time::Instant::now() + SAVE_WINDOW,
+        manager: &f.manager,
+        id: "example.bytes",
+        revision: &f.revision,
+        registry: None,
+        consent: Some(&consent),
+    });
+    assert!(result.is_err());
+    assert!(held_map.is_empty());
+    drop(held_map);
+    assert_eq!(std::fs::read_dir(f.root()).unwrap().count(), 1);
+    let closed = Fixture::configured(
+        true,
+        false,
+        crate::identity::IdentityHost::fixture_without_key(false),
+        ManagedFiles::default(),
+        None,
+    );
+    assert!(closed
+        .save_policy(b"closed", &digest(b"closed"), true)
+        .is_err());
+    assert!(
+        !closed.root().exists(),
+        "unavailable initial identity refuses before creation"
+    );
+    assert!(closed.save(b"ordinary", &digest(b"ordinary")).is_ok());
+}
+
+#[test]
+fn host_release_lost_renderer_waiter_is_not_native_command_cancellation() {
+    let _serial = commands();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let registry = ManagedFiles::default();
+        let task = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let f = Fixture::configured(
+            true,
+            false,
+            crate::identity::IdentityHost::fixture(),
+            registry.clone(),
+            Some((tokio::runtime::Handle::current(), task.clone())),
+        );
+        let (entered, ready, release, allowed) = managed_gate();
+        registry.1.lock().unwrap().save = Some((entered, allowed));
+        let reply = start_release_save(&f);
+        wait_for_managed_gate(ready).await.unwrap();
+        drop(reply); // The native future remains alive: no cancel IPC exists.
+        drop(release);
+        let job = task.lock().unwrap().take().unwrap();
+        job.await.unwrap();
+        assert_eq!(
+            registry.0.lock().unwrap().len(),
+            1,
+            "lost renderer reply can still commit native consent"
+        );
+        let path = registry.0.lock().unwrap().keys().next().unwrap().clone();
+        assert!(path.exists());
+        f.app.state::<crate::identity::IdentityHost>().close();
+        assert_eq!(
+            registry.0.lock().unwrap().len(),
+            1,
+            "later identity close does not erase or reassign committed consent"
+        );
+    });
 }

@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23e5f6d8be 100644
+index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..0fcb2ea0432847dac77ef6b950139cc3abb4ffa0 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -499,7 +499,7 @@ function getDefaultSwipeDirections(position) {
@@ -109,16 +109,19 @@ index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23
 -                    });
 +                    // Preserve a destination intentionally focused by a toast action.
 +                    if (document.activeElement === document.body || listRef.current?.contains(document.activeElement)) {
-+                        lastFocusedElementRef.current.focus({ preventScroll: true });
++                        lastFocusedElementRef.current.focus?.({ preventScroll: true });
 +                    }
                      lastFocusedElementRef.current = null;
                      isFocusWithinRef.current = false;
                  }
-@@ -1176,17 +1199,19 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
+@@ -1176,17 +1199,22 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
                  ...assignOffset(offset, mobileOffset)
              },
              onBlur: (event)=>{
-+                if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
++                if (!event.currentTarget.contains(event.relatedTarget)) {
++                    setFocused(false);
++                    if (!hovered && !interacting) setExpanded(false);
++                }
                  if (isFocusWithinRef.current && !event.currentTarget.contains(event.relatedTarget)) {
                      isFocusWithinRef.current = false;
 -                    if (lastFocusedElementRef.current) {
@@ -130,7 +133,7 @@ index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23
 +                    lastFocusedElementRef.current = null;
 +                    // Tab, pointer and action-driven focus moves already have a destination.
 +                    if (previous && (!event.relatedTarget || event.relatedTarget === document.body)) {
-+                        previous.focus({ preventScroll: true });
++                        previous.focus?.({ preventScroll: true });
                      }
                  }
              },
@@ -139,7 +142,7 @@ index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23
                  const isNotDismissible = event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
                  if (isNotDismissible) return;
                  if (!isFocusWithinRef.current) {
-@@ -1194,9 +1219,10 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
+@@ -1194,9 +1222,10 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
                      lastFocusedElementRef.current = event.relatedTarget;
                  }
              },
@@ -152,7 +155,7 @@ index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23
                  // Avoid setting expanded to false when interacting with a toast, e.g. swiping
                  if (!interacting) {
                      setExpanded(false);
-@@ -1208,7 +1234,8 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
+@@ -1208,7 +1237,8 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
                  if (isNotDismissible) return;
                  setInteracting(true);
              },
@@ -162,7 +165,7 @@ index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23
          }, filteredToasts.filter((toast)=>!toast.position && index === 0 || toast.position === position).map((toast, index)=>{
              var _toastOptions_duration, _toastOptions_closeButton;
              return /*#__PURE__*/ React__default.default.createElement(Toast, {
-@@ -1223,7 +1250,7 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
+@@ -1223,7 +1253,7 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
                  invert: invert,
                  visibleToasts: visibleToasts,
                  closeButton: (_toastOptions_closeButton = toastOptions == null ? void 0 : toastOptions.closeButton) != null ? _toastOptions_closeButton : closeButton,
@@ -171,8 +174,17 @@ index 394dbc2272f43b84642b0f9d5cc7eb1eacb0ffb3..1e1ecb9f67b51a9929e1a9cd866eaa23
                  position: position,
                  style: toastOptions == null ? void 0 : toastOptions.style,
                  unstyled: toastOptions == null ? void 0 : toastOptions.unstyled,
+@@ -1237,7 +1267,7 @@ const Toaster = /*#__PURE__*/ React__default.default.forwardRef(function Toaster
+                 setHeights: setHeights,
+                 expandByDefault: expand,
+                 gap: gap,
+-                expanded: expanded,
++                expanded: expanded || focused,
+                 swipeDirections: props.swipeDirections
+             });
+         }));
 diff --git a/dist/index.mjs b/dist/index.mjs
-index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe3002d550d5 100644
+index c124f821a68f7070647a5a04441d0caa53689662..27f2fb1bed2607477a790e5d7c182b6c897af1a0 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -492,7 +492,7 @@ function getDefaultSwipeDirections(position) {
@@ -282,16 +294,19 @@ index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe30
 -                    });
 +                    // Preserve a destination intentionally focused by a toast action.
 +                    if (document.activeElement === document.body || listRef.current?.contains(document.activeElement)) {
-+                        lastFocusedElementRef.current.focus({ preventScroll: true });
++                        lastFocusedElementRef.current.focus?.({ preventScroll: true });
 +                    }
                      lastFocusedElementRef.current = null;
                      isFocusWithinRef.current = false;
                  }
-@@ -1169,17 +1192,19 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
+@@ -1169,17 +1192,22 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
                  ...assignOffset(offset, mobileOffset)
              },
              onBlur: (event)=>{
-+                if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
++                if (!event.currentTarget.contains(event.relatedTarget)) {
++                    setFocused(false);
++                    if (!hovered && !interacting) setExpanded(false);
++                }
                  if (isFocusWithinRef.current && !event.currentTarget.contains(event.relatedTarget)) {
                      isFocusWithinRef.current = false;
 -                    if (lastFocusedElementRef.current) {
@@ -303,7 +318,7 @@ index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe30
 +                    lastFocusedElementRef.current = null;
 +                    // Tab, pointer and action-driven focus moves already have a destination.
 +                    if (previous && (!event.relatedTarget || event.relatedTarget === document.body)) {
-+                        previous.focus({ preventScroll: true });
++                        previous.focus?.({ preventScroll: true });
                      }
                  }
              },
@@ -312,7 +327,7 @@ index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe30
                  const isNotDismissible = event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
                  if (isNotDismissible) return;
                  if (!isFocusWithinRef.current) {
-@@ -1187,9 +1212,10 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
+@@ -1187,9 +1215,10 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
                      lastFocusedElementRef.current = event.relatedTarget;
                  }
              },
@@ -325,7 +340,7 @@ index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe30
                  // Avoid setting expanded to false when interacting with a toast, e.g. swiping
                  if (!interacting) {
                      setExpanded(false);
-@@ -1201,7 +1227,8 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
+@@ -1201,7 +1230,8 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
                  if (isNotDismissible) return;
                  setInteracting(true);
              },
@@ -335,7 +350,7 @@ index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe30
          }, filteredToasts.filter((toast)=>!toast.position && index === 0 || toast.position === position).map((toast, index)=>{
              var _toastOptions_duration, _toastOptions_closeButton;
              return /*#__PURE__*/ React.createElement(Toast, {
-@@ -1216,7 +1243,7 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
+@@ -1216,7 +1246,7 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
                  invert: invert,
                  visibleToasts: visibleToasts,
                  closeButton: (_toastOptions_closeButton = toastOptions == null ? void 0 : toastOptions.closeButton) != null ? _toastOptions_closeButton : closeButton,
@@ -344,3 +359,12 @@ index c124f821a68f7070647a5a04441d0caa53689662..48fd47e34323712cb9253721645bfe30
                  position: position,
                  style: toastOptions == null ? void 0 : toastOptions.style,
                  unstyled: toastOptions == null ? void 0 : toastOptions.unstyled,
+@@ -1230,7 +1260,7 @@ const Toaster = /*#__PURE__*/ React.forwardRef(function Toaster(props, ref) {
+                 setHeights: setHeights,
+                 expandByDefault: expand,
+                 gap: gap,
+-                expanded: expanded,
++                expanded: expanded || focused,
+                 swipeDirections: props.swipeDirections
+             });
+         }));

@@ -44,11 +44,11 @@ const NO_ADD_EMOJI = {
   subscribe: () => () => {},
 };
 
-// Slack-sized: inline-emoji glyphs in small-control cells, resolved from the
-// tokens so text-size preferences scale them. Fallbacks are their 1rem values.
-const EMOJI_SIZE = "--size-emoji-inline";
-const EMOJI_SLOT = "--size-control-sm";
-const MAX_PER_LINE = 9;
+// Picker-sized glyphs in control-sized cells, resolved from the tokens so
+// text-size preferences scale them. Fallbacks are their 1rem values.
+const EMOJI_SIZE = "--size-emoji-picker";
+const EMOJI_SLOT = "--size-control";
+const MAX_PER_LINE = 8;
 const PICKER_COLUMN_CHROME = 44;
 // Two balanced scrollbar lanes plus the gaps between fixed-size slots.
 const PICKER_CHROME = 72;
@@ -108,9 +108,19 @@ export function EmojiPicker({
       perLine: 0,
       availableWidth: 0,
       scale: 1,
-      emojiSize: 22,
-      slot: 32,
+      emojiSize: 28,
+      slot: 40,
     });
+  // The category bar spans the popup, so its room is the popup's width, not
+  // the grid's: wider cells must not hide it in a pane where it still fits.
+  const popupWidth = Math.min(
+    availableWidth,
+    perLine * slot + PICKER_CHROME * scale + 2,
+  );
+  const spacious = spaciousGrid(
+    popupWidth - PICKER_COLUMN_CHROME * scale,
+    scale * 16,
+  );
   const [error, setError] = useState<string>();
   const [attempt, retry] = useState(0);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -169,8 +179,8 @@ export function EmojiPicker({
     const root = document.documentElement;
     const resize = () => {
       const scale = rootFontSize(document) / 16;
-      const emojiSize = tokenPx(document, EMOJI_SIZE, 22 * scale);
-      const slot = tokenPx(document, EMOJI_SLOT, 32 * scale);
+      const emojiSize = tokenPx(document, EMOJI_SIZE, 28 * scale);
+      const slot = tokenPx(document, EMOJI_SLOT, 40 * scale);
       setLayout({
         scale,
         emojiSize,
@@ -287,6 +297,7 @@ export function EmojiPicker({
           perLine,
           emojiSize,
           emojiButtonSize: slot,
+          navigation: spacious,
           search: search.current,
           searchSelection,
           searchChange: (value) => {
@@ -337,6 +348,7 @@ export function EmojiPicker({
     perLine,
     emojiSize,
     slot,
+    spacious,
     tab,
     host,
     colorMode,
@@ -346,7 +358,7 @@ export function EmojiPicker({
     openAddEmoji &&
     createPortal(
       <span slot={PREVIEW_ACTION_SLOT}>
-        {!spaciousGrid(perLine * slot, scale * 16) ? (
+        {!spacious ? (
           <IconButton
             size="sm"
             variant="ghost"
@@ -562,10 +574,7 @@ export function EmojiPicker({
         id={externalTrigger?.id}
         aria-label="Emoji picker"
         style={{
-          width: Math.min(
-            availableWidth,
-            perLine * slot + PICKER_CHROME * scale + 2,
-          ),
+          width: popupWidth,
           overflow: "hidden",
         }}
         finalFocus={

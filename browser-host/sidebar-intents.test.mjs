@@ -23,7 +23,7 @@ it("keeps broker-only envelope checks before shared sidebar policy", () => {
     null,
     false,
     [],
-    { id: "x", name: "Work" },
+    { id: "__proto__", name: "Work" },
     { id: "11111111-1111-1111-1111-111111111111", name: "Work", extra: true },
   ])
     expect(() =>

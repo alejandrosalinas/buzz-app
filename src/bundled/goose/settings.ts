@@ -12,7 +12,7 @@ export const syncedSettingsSchema = {
   model: "string",
   provider: "string",
   effort: "string",
-  scope: ["thread", "channel"],
+  scope: ["thread", "channel", "community"],
 } as const satisfies SettingsSchema;
 
 export const syncedSettings = (config: Config) =>

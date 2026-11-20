@@ -353,7 +353,17 @@ test("joined sidebar and workspace surface, real link panel and compact communit
   near(dock.y, main.y);
   near(dock.height, main.height);
   near(dock.x - main.x - main.width, 1);
-  near(dock.x + dock.width, page.viewportSize().width - gap - 1);
+  const halfSpace = await page.locator(".shell-content").evaluate((element) => {
+    const rootSize = Number.parseFloat(
+      getComputedStyle(document.documentElement).fontSize,
+    );
+    return (
+      Number.parseFloat(
+        getComputedStyle(element).getPropertyValue("--space-half"),
+      ) * rootSize
+    );
+  });
+  near(dock.x + dock.width, page.viewportSize().width - (gap - halfSpace) - 1);
   await expect(composer).toHaveJSProperty("value", "Layout draft");
   await expect(composer).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath("joined-one-panel.png") });

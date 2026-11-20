@@ -793,7 +793,7 @@ test("empty compose, keyboard selection, pagination, removal effects, retry, the
   expect(app.errors.unexplained()).toEqual([]);
 });
 
-test("profile Message opens a fresh DM and restores a hidden one", async ({
+test("profile Message drafts a new DM and restores a hidden one", async ({
   page,
   app,
 }) => {
@@ -824,7 +824,38 @@ test("profile Message opens a fresh DM and restores a hidden one", async ({
     await profile.getByRole("button", { name: "Message", exact: true }).click();
   };
   await expect(sidebarDm).toHaveCount(0);
+  // Without a DM, Message drafts one: Avery sees nothing until a send.
   await openProfileMessage();
+  await expect(
+    page.getByRole("region", { name: "New message", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Remove Avery Chen" }),
+  ).toBeVisible();
+  await expect(sidebarDm).toHaveCount(0);
+  expect(app.commands).toHaveLength(0);
+  // Back to the draft keeps a recipient chosen since, not the person it was
+  // opened from.
+  await page.getByRole("button", { name: "Remove Avery Chen" }).click();
+  await page.getByRole("option", { name: "Person 03", exact: true }).click();
+  // A written draft makes the visit a Back stop.
+  await page
+    .getByRole("textbox", { name: "Message Person 03", exact: true })
+    .fill("Hi Avery");
+  await general.click();
+  await page.goBack();
+  await expect(
+    page.getByRole("button", { name: "Remove Person 03" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Remove Avery Chen" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Remove Person 03" }).click();
+  await page.getByRole("option", { name: "Avery Chen", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "Message Avery Chen", exact: true }),
+  ).toHaveText("Hi Avery");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(sidebarDm).toBeVisible();
   await expect(
     page.getByRole("textbox", { name: "Message #Avery Chen" }),

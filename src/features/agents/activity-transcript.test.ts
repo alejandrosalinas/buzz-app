@@ -561,6 +561,15 @@ it("splits prompt sections and keeps unterminated framing as text", () => {
   ]);
 });
 
+it("keeps the wrapper of a replaced base section inside the base text", () => {
+  const base =
+    'Opening lines.\n\n## Etiquette\n<owner-section id="etiquette">\nBe kind.\n</owner-section>\n\n## Audience\n\nText.';
+  expect(promptSections(base)).toEqual([{ tag: "text", body: base }]);
+  expect(promptSections(`<base>\n${base}\n</base>`)).toEqual([
+    { tag: "base", body: base },
+  ]);
+});
+
 it("reads an event sent as an exact record, in its own or a steer's section", () => {
   const event = {
     id: "e".repeat(64),

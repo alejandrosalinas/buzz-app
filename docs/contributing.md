@@ -804,17 +804,20 @@ across cached, parallel jobs rather than running the entire recipe several times
 [Three documented WebKit cases remain local-only](browser-testing.md#ci-coverage-and-local-only-webkit-checks);
 the complete correctness suite still runs with `pnpm test` / `just scan`:
 
-- **JavaScript:** eight runners, each with Biome, one TypeScript check and a frontend
-  build. Vitest splits all test files across the runners, with two workers each;
+- **JavaScript:** one runner runs Biome, one TypeScript check and a frontend build.
+  Vitest splits all test files across eight runners, with two workers each;
   every shard must succeed. Timing artifacts include the shard number.
 - **Rust and tool integration:** workspace formatting, Clippy, all Rust tests and
   doctests (including Tauri), and every Node integration test. The CLI integration
   tests build Rust and install scaffold dependencies; they are intentionally CI-only
   rather than part of pre-push.
 - **Browser measurements:** Chromium then WebKit, serially on an isolated runner.
-  It also runs all [perf scenarios](performance.md) once in Chromium, and the
-  broker's 100,000-channel scale check in `browser-host/relay-broker-live.test.mjs`
+  It also runs the broker's 100,000-channel scale check in
+  `browser-host/relay-broker-live.test.mjs`
   alone, with `BUZZ_BROKER_SCALE` set; the JavaScript shards skip that test.
+- **Perf suite smoke check:** all [perf scenarios](performance.md) once in Chromium,
+  serially on a separate isolated runner, in parallel with browser measurements.
+  Its success is also required by `CI required`.
 - **Browser journeys:** twenty-nine runners (eleven Chromium and eighteen WebKit
   file-level shards), each with two workers. They start alongside measurements on separate
   runners; `CI required` still requires both lanes. A separate required Ubuntu
@@ -826,11 +829,12 @@ the complete correctness suite still runs with `pnpm test` / `just scan`:
   non-CI journeys retain the locked Cargo build. Each browser test uses its own
   mutable fixture home. No measurements are repeated on shards and no retries
   hide failures.
-- Both browser lanes use the version-matched, digest-pinned
+- Browser measurements, journeys and the perf smoke lane use the version-matched,
+  digest-pinned
   [Playwright Docker image](https://playwright.dev/docs/docker), which supplies
   browsers and Linux libraries without per-job apt provisioning. Follow the
   [CI container guidance](https://playwright.dev/docs/ci#via-containers).
-  Update both image references and digests when upgrading `@playwright/test`.
+  Update all image references and digests when upgrading `@playwright/test`.
   Setup verifies installed Playwright against image metadata and launches the
   selected engine (both for measurements) before tests; it never downloads a
   missing browser. Hermit pins Node/pnpm through explicit `./bin/` entry points

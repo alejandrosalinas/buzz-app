@@ -1,5 +1,18 @@
 @reference "../../shared/styles/globals.css";
 
+/* Match native selection while a message menu owns keyboard focus. Gate the
+   rule to its visible lifetime, as Find on screen does for its highlights. */
+:root[data-message-highlight] ::highlight(buzz-message-highlight) {
+  background-color: var(--selection-fill, var(--surface-text-selection));
+  color: var(--selection-text, var(--text-on-selection));
+}
+@media (forced-colors: active) {
+  :root[data-message-highlight] ::highlight(buzz-message-highlight) {
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}
+
 /* Reusable conversation components; plugins own placement and surrounding layout. */
 .thread {
   position: relative;
@@ -31,7 +44,7 @@
   /* Keep fractional last rows reachable despite integer scroll extents. */
   --history-bottom-inset: var(--space-half);
   padding-bottom: var(--history-bottom-inset);
-  /* The vendored Virtua patch (interruptMomentum in patches/virtua@0.53.5.patch)
+  /* The vendored Virtua patch (interruptMomentum in patches/virtua@0.54.2.patch)
      flips this scroller to overflow-y: hidden !important on every nonzero size
      correction on Mac WebKit. With classic, space-taking scrollbars that frame
      removes the scrollbar, widens the content box, re-wraps rows above the
@@ -314,6 +327,9 @@ html[data-keyboard-navigation] .authorLink:focus-visible {
   align-items: center;
   gap: var(--space-1);
   margin: var(--space-1h) 0 0;
+  /* Reactions and reply summaries are controls, not conversation text;
+     a copy states reaction counts from the group's data-copy-text. */
+  user-select: none;
 }
 .reactions[data-populated],
 .reactionFallback {
@@ -927,6 +943,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   flex: none;
   width: var(--space-5);
   height: var(--space-5);
+  -webkit-user-select: none;
   user-select: none;
 }
 .dayCalendar > * {
@@ -984,6 +1001,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   font-weight: var(--type-weight-regular);
   padding: var(--space-1);
   padding-right: var(--space-1h);
+  user-select: none;
 }
 /* Compact summaries keep their 24px participants but drop the control's
    spare block padding. */
@@ -1977,6 +1995,7 @@ html[data-keyboard-navigation] .membership .membershipName:focus-visible {
   scroll-margin-inline-end: var(--space-3);
   /* Controls are not conversation text: a selection that spans rows passes
      through this bar, and engines copy button labels the user never saw. */
+  -webkit-user-select: none;
   user-select: none;
   @apply popover-surface;
   --floating-radius: var(--radius-control);
@@ -2032,9 +2051,14 @@ html[data-keyboard-navigation] .membership .membershipName:focus-visible {
 @media (hover: hover) and (pointer: fine) and (
     prefers-reduced-motion: no-preference
   ) {
-  html:not([data-keyboard-navigation]) .messageActions[popover]:popover-open {
+  .messageActions[popover]:popover-open {
     animation: message-actions-in calc(var(--duration-state) / 2)
       var(--easing-enter);
+  }
+  /* Keyboard reveal is immediate. Only the duration differs, so a pointer
+     press that ends keyboard navigation cannot restart an open bar's entry. */
+  html[data-keyboard-navigation] .messageActions[popover]:popover-open {
+    animation-duration: 0s;
   }
 }
 @keyframes message-actions-in {
@@ -2834,6 +2858,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 
 .jumpToLatest {
   align-items: flex-end;
+  user-select: none;
   position: sticky;
   z-index: 2;
   /* Anchor the bottom edge, leaving space-3 for the shadow at any text size. */
@@ -2906,6 +2931,9 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 /* Content hugs short messages while rich content can use the available width. */
 .messageBubble {
   position: relative;
+  /* Like the Markdown boxes inside it: no WebKit selection fill in the
+     bubble's padding or beside short lines, only behind selected text. */
+  translate: 0 0;
   --message-link: var(--text-message-link);
   --message-inset: var(--space-2);
   --message-radius: calc(
@@ -3016,6 +3044,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 
 /* Keep sent and received avatars close to their message in every layout. */
 .messageAvatar {
+  -webkit-user-select: none;
   user-select: none;
   position: absolute;
   bottom: 0;
@@ -3045,6 +3074,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   width: max-content;
   color: var(--text-subtle);
   font-variant-numeric: tabular-nums;
+  -webkit-user-select: none;
   user-select: none;
 }
 .message[data-viewer-message] .messageAvatar {
@@ -3055,7 +3085,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   margin: 0;
 }
 /* Links take the bubble's paired link ink; mentions keep their own tint. */
-.messageBubble .text a:not([data-solo-link]) {
+.messageBubble .text a {
   --link-text: var(--message-link);
   --link-hover: transparent;
   --link-focus: currentColor;
@@ -3103,9 +3133,6 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
 .messageAttachments > * {
   max-width: 100%;
   margin-block: 0;
-}
-.messageAttachments[data-solo-cards] + .messageBubble {
-  margin-top: var(--space-half);
 }
 .messageAttachments .imageUnavailable {
   border-radius: calc(var(--radius-panel) - var(--space-2));
@@ -3273,8 +3300,13 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   opacity: 0;
   pointer-events: none;
 }
+/* Standalone :focus-within: compounded with :is() or :not(), WebKit
+   restyles the whole document on every focus change. */
 :where(html[data-message-density="compact"])
-  .message:is(:hover, :focus-within, [data-actions-revealed])
+  .message:is(:hover, [data-actions-revealed])
+  .continuationTime,
+:where(html[data-message-density="compact"])
+  .message:focus-within
   .continuationTime {
   opacity: 1;
   pointer-events: auto;
@@ -3711,26 +3743,39 @@ html[data-keyboard-navigation] .message:focus-visible::after {
 [data-attachment-drop-zone] {
   position: relative;
 }
+/* A tint and a border mark the pane as the drop target without hiding it:
+   the drag can still rest on a thread summary to open it. The border runs
+   along the pane's edge, outside its header's controls, and the label sits in
+   a badge at the top, clear of the composer however narrow the pane, and
+   below the pane's header where the zone includes one. */
 .fileDropOverlay {
   position: absolute;
-  inset: var(--space-2);
+  inset: 0;
   z-index: 5;
   display: grid;
-  place-items: center;
-  align-content: center;
-  gap: var(--space-2);
-  padding: var(--space-4);
+  place-items: start center;
+  padding: var(--space-3);
   border: 2px dashed var(--border-focus);
   border-radius: var(--radius-panel);
-  background: var(--surface-panel);
+  background: var(--affordance-backdrop-hover);
+  pointer-events: none;
+}
+[data-attachment-drop-zone]:has([class~="panel-header"]) > .fileDropOverlay {
+  padding-block-start: calc(var(--size-panel-header) + var(--space-3));
+}
+.fileDropBadge {
+  @apply glass-secondary;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1h);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-capsule);
   color: var(--text-standard);
   font-size: var(--text-label);
   font-weight: var(--text-label--font-weight);
   line-height: var(--text-label--line-height);
   letter-spacing: var(--text-label--letter-spacing);
-  text-align: center;
-  opacity: 0.95;
-  pointer-events: none;
 }
 
 .draftMediaSlide {
@@ -3752,6 +3797,7 @@ html[data-keyboard-navigation] .message:focus-visible::after {
 /* Keyboard users can read a grouped message's time without opening a popup. */
 .keyboardMessageTime {
   display: none;
+  -webkit-user-select: none;
   user-select: none;
 }
 html[data-keyboard-navigation]
@@ -3797,25 +3843,6 @@ html[data-keyboard-navigation]
   gap: var(--space-1);
   min-width: 0;
 }
-.composerSoloCards {
-  container-type: inline-size;
-  container-name: message-row;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-}
-.composerSoloCard {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.composerSoloCardContent {
-  min-width: 0;
-  max-width: calc(100% - var(--size-control));
-}
-
 html[data-keyboard-navigation] .activityExpansion {
   transition: none;
 }
@@ -4033,6 +4060,21 @@ html[data-keyboard-navigation] .activityExpansion {
   padding: calc(var(--space-1) + var(--space-half) / 2)
     calc(var(--space-1h) + var(--space-half) / 2);
 }
+/* Compact removes the bubble inset. A collapsed activity disclosure ("Stopped",
+   or a standalone failure reply inside its notice) has no trigger inset, so its
+   outlined box takes the activity bubble's inset. */
+:where(html[data-message-density="compact"])
+  .message[data-agent-response-preview]
+  .messageBubble:has(
+    > .standaloneActivity > .activityGroupHeader:not([data-expanded]),
+    > .standaloneActivity
+      > [data-message-notice]
+      > .standaloneActivity
+      > .activityGroupHeader:not([data-expanded])
+  ) {
+  padding: calc(var(--space-1) + var(--space-half) / 2)
+    calc(var(--space-1h) + var(--space-half) / 2);
+}
 
 .activityBubbleControls {
   display: flex;
@@ -4069,7 +4111,11 @@ html[data-keyboard-navigation] .activityExpansion {
   gap: var(--space-2);
 }
 .messageBubble:has(
-  > .standaloneActivity > .activityGroupHeader[data-expanded]
+  > .standaloneActivity > .activityGroupHeader[data-expanded],
+  > .standaloneActivity
+    > [data-message-notice]
+    > .standaloneActivity
+    > .activityGroupHeader[data-expanded]
 ) {
   padding: var(--space-4);
 }
@@ -4086,6 +4132,218 @@ html[data-keyboard-navigation] .activityExpansion {
 .agentNote {
   margin: var(--space-1h) 0 0;
   color: var(--text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  letter-spacing: var(--text-caption--letter-spacing);
+}
+
+/* A relayed line spans the row in the message's own columns: the agent's
+   avatar centered on the avatar column, its text where bubbles start. */
+.relayedRow,
+.relayedRun {
+  --relayed-text-start: calc(var(--size-control-sm) + var(--space-3));
+  --relayed-avatar-offset: var(--space-1);
+  --relayed-avatar-center: calc(
+    var(--relayed-text-start) -
+    var(--relayed-avatar-offset) -
+    var(--size-control-sm) /
+    2
+  );
+  width: min(100%, var(--timeline-measure));
+  margin-inline: auto;
+  padding-block: var(--space-2) var(--space-half);
+}
+.relayedRow:is([data-layout="thread"], [data-layout="continuation"]),
+.relayedRun[data-layout="thread"] {
+  --relayed-text-start: calc(var(--size-control-sm) + var(--space-2));
+}
+:where(html[data-message-density="compact"]) :is(.relayedRow, .relayedRun) {
+  --relayed-text-start: calc(var(--size-control-sm) + var(--space-5));
+  --relayed-avatar-offset: calc(var(--space-2) + var(--space-half));
+}
+.relayedRunItems .relayedRow {
+  padding-block: 0;
+}
+/* Their line already names the one chat they all came from. */
+.relayedRunItems[data-same-source] [data-relayed-source] {
+  display: none;
+}
+.relayedEntry {
+  border-radius: var(--radius-chip);
+}
+.relayedHeader {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1h);
+  min-inline-size: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1)
+    var(--relayed-text-start);
+  border-radius: var(--radius-chip);
+  color: var(--text-subtle);
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm--line-height);
+  white-space: nowrap;
+}
+/* Three senders' stack is wider than the avatar lane: the text starts past
+   its last avatar's artwork, half the 44px stack, with a 4px gap. */
+.relayedHeader[data-senders="3"] {
+  padding-inline-start: max(
+    var(--relayed-text-start),
+    calc(
+      var(--relayed-avatar-center) +
+      var(--space-5) +
+      var(--space-half) +
+      var(--space-1)
+    )
+  );
+}
+.relayedHeader:hover {
+  background: var(--affordance-subtle-hover);
+}
+/* A relayed line and a fold's line stay filled; lines inside an opened fold
+   fill only while open or while their thread is, and a jump to a line shows
+   its highlight through it. */
+.relayedRun > .relayedHeader:not(:hover),
+.relayedHeader[data-open]:not(:hover),
+.relayedEntry:where([data-thread-open]):not(.messageHighlight)
+  > .relayedHeader:not(:hover),
+.relayedEntry:not(.relayedRunItems .relayedEntry, .messageHighlight)
+  > .relayedHeader:not(:hover) {
+  background: var(--affordance-subtle);
+}
+html[data-keyboard-navigation]
+  .relayedHeader:has(> .relayedTrigger:focus-visible) {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+/* The line's button covers it; the source chat link stays above it. */
+.relayedTrigger {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  cursor: pointer;
+}
+.relayedAvatar {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: var(--relayed-avatar-center);
+  /* A definite row and no line box of its own keep the avatar 16px square and
+     on the line's center; a stack's ringed avatars overflow it evenly. */
+  display: grid;
+  grid-template-rows: var(--space-4);
+  place-items: center;
+  min-inline-size: var(--space-4);
+  block-size: var(--space-4);
+  line-height: 0;
+  translate: -50% -50%;
+  pointer-events: none;
+}
+/* A narrow row gives up the preview first, then the name and chat. */
+.relayedName,
+.relayedChat {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.relayedName {
+  color: var(--text-standard);
+  font-weight: var(--type-weight-semibold);
+}
+.relayedSubtle {
+  flex: none;
+}
+.relayedChat {
+  position: relative;
+  z-index: 1;
+  /* The link's hover padding overhangs it; this box takes the overhang, so a
+     chat name that fits is not clipped into an ellipsis. */
+  margin-inline: calc(-1 * var(--space-half));
+  color: var(--text-standard);
+}
+.relayedHeader > .relayedChat > * {
+  margin-inline: 0;
+}
+.relayedPreview {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Sized like the time in a message's byline. */
+.relayedTime {
+  @apply text-caption;
+  flex: none;
+}
+/* A fold's count belongs to its preview, so the two stay together: the
+   preview takes only the room left, up to its own width, and gives it all up
+   before the chat name truncates. */
+.relayedRun > .relayedHeader > .relayedPreview {
+  max-inline-size: max-content;
+}
+/* A narrow conversation keeps the avatar, the chat and the message: the name
+   and "from" go. An opened fold's lines keep naming each sender. */
+@container messages (max-width: 30rem) {
+  .relayedHeader > [data-relayed-from],
+  .relayedHeader > .relayedName:not(.relayedRunItems .relayedName) {
+    display: none;
+  }
+}
+.relayedRun > .relayedHeader > .relayedTime {
+  margin-inline-start: auto;
+}
+/* Points right while closed and down while open, as other disclosures do. */
+.relayedCaret {
+  flex: none;
+  inline-size: var(--space-3);
+  block-size: var(--space-3);
+}
+.relayedHeader[data-open] > .relayedCaret {
+  rotate: 90deg;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-keyboard-navigation]) .relayedCaret {
+    transition: rotate var(--duration-fast) var(--easing-enter);
+  }
+}
+/* Base UI measures the opened text. */
+.relayedPanel {
+  height: var(--collapsible-panel-height);
+  overflow: clip;
+}
+.relayedPanel:is([data-starting-style], [data-ending-style]) {
+  height: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-keyboard-navigation]) .relayedPanel {
+    transition: height var(--duration-state) var(--easing-enter);
+  }
+}
+/* The opened text hangs from the avatar on a thread rule. */
+.relayedBody {
+  position: relative;
+  padding: var(--space-3) var(--space-2) var(--space-1)
+    var(--relayed-text-start);
+}
+.relayedBody::before {
+  content: "";
+  position: absolute;
+  inset-block: var(--space-1) 0;
+  inset-inline-start: var(--relayed-avatar-center);
+  inline-size: 1px;
+  background: var(--border-message-thread);
+}
+.relayedBody .message:where([data-layout="continuation"]) {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+.relayedFooter {
+  margin: var(--space-2) 0 0;
+  color: var(--text-subtle);
   font-size: var(--text-caption);
   line-height: var(--text-caption--line-height);
   letter-spacing: var(--text-caption--letter-spacing);

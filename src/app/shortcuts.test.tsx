@@ -55,16 +55,19 @@ function harness(platform = "Win32") {
   const shortcuts = new ShortcutsService(ctx, window, bindings);
   const appearance = createAppearance(window);
   const openSettings = vi.fn();
+  const reload = vi.fn();
   const remove = registerAppShortcuts(
     shortcuts,
     appearance,
     openSettings,
     true,
+    reload,
   );
   return {
     ctx,
     shortcuts,
     openSettings,
+    reload,
     bindings,
     remove,
     async dispose() {
@@ -796,3 +799,29 @@ it.each(["menu", "popover"] as const)(
     }
   },
 );
+
+it("⌘R reloads communities in place and ⇧⌘R reloads the page", async () => {
+  const h = harness("MacIntel");
+  const pageReload = vi.fn();
+  vi.spyOn(window, "location", "get").mockReturnValue({
+    ...window.location,
+    reload: pageReload,
+  });
+  try {
+    press(document.body, { key: "r", ctrlKey: false, metaKey: true });
+    expect(h.reload).toHaveBeenCalledOnce();
+    expect(pageReload).not.toHaveBeenCalled();
+
+    press(document.body, {
+      key: "R",
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(pageReload).toHaveBeenCalledOnce();
+    expect(h.reload).toHaveBeenCalledOnce();
+  } finally {
+    vi.restoreAllMocks();
+    await h.dispose();
+  }
+});

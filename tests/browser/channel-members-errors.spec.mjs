@@ -20,6 +20,8 @@ test.use({
   sessionMembers: {
     [channelId]: members.map((name) => getPublicKey(keyFor(name))),
   },
+  // Send message opens only an existing DM; without one it drafts and cannot fail.
+  dmMembers: { "dm-sam-02": [getPublicKey(keyFor("Sam 02"))] },
 });
 
 // Browser-only: whether the dialog body keeps hidden scroll overflow, and
@@ -98,9 +100,11 @@ test("member action errors stay in view above a long roster", async ({
   await expect(refusal).toBeInViewport({ ratio: 1 });
   await expect(search).toBeInViewport({ ratio: 1 });
 
-  await list
-    .getByRole("listitem")
-    .filter({ hasText: "Sam 02" })
+  // Search results order Sam 02 on either page; page to the row.
+  const sam = list.getByRole("listitem").filter({ hasText: "Sam 02" });
+  if (!(await sam.count()))
+    await list.getByRole("button", { name: "Next", exact: true }).click();
+  await sam
     .getByRole("button", { name: "Actions for Sam 02", exact: true })
     .click();
   await page.getByRole("menuitem", { name: /^Send message/ }).click();

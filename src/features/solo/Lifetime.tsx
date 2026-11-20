@@ -167,6 +167,8 @@ export function useLifetime({
                 ttlSeconds: ttl,
               },
               active,
+              undefined,
+              nameChanged ? session.channels : undefined,
             );
           }
         }

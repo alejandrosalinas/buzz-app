@@ -98,17 +98,20 @@ export function ChatInstructions({
   onWorkspaceChange,
   raw,
   onRawChange,
+  instructionScope = "chat",
 }: {
   workspace: Workspace;
   onWorkspaceChange(value: Workspace): void;
   raw: string | undefined;
   onRawChange(value: string): void;
+  instructionScope?: "chat" | "workspace";
 }) {
   return raw === undefined ? (
     <WorkspaceFields
       value={workspace}
       onChange={onWorkspaceChange}
       instructionRows={10}
+      instructionScope={instructionScope}
     />
   ) : (
     <Field

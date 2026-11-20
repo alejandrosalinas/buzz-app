@@ -33,7 +33,7 @@ function unseen(element) {
 }
 
 // Anything focusable has to be visible while it has focus. Tabbing through
-// each sidebar tab reaches every control, whichever component draws it and
+// the unified sidebar reaches every control, whichever component draws it and
 // however it hides at rest, so a control revealed by a rule that can't match
 // fails here.
 test("every control Tab reaches in the sidebar is visible while focused", async ({
@@ -43,35 +43,40 @@ test("every control Tab reaches in the sidebar is visible while focused", async 
   await page.goto(app.origin);
   await openPage(page, "Messages");
   const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+  await expect(
+    sidebar.getByRole("tablist", { name: "Navigation scope" }),
+  ).toHaveCount(0);
+  await page.mouse.move(0, 0);
+  await sidebar
+    .getByRole("navigation", { name: "Pages" })
+    .getByRole("button")
+    .first()
+    .focus();
   let quiet = 0;
-  for (const tab of ["All", "Team", "Solo"]) {
-    await sidebar.getByRole("tab", { name: tab, exact: true }).click();
-    await page.mouse.move(0, 0);
-    const seen = new Set();
-    for (let stop = 0; stop < 400; stop += 1) {
-      await page.keyboard.press("Tab");
-      const focus = await page.evaluate(() => {
-        const element = document.activeElement;
-        const aside = element?.closest('aside[aria-label="Sidebar"]');
-        if (!aside) return null;
-        return {
-          key: [...aside.querySelectorAll("*")].indexOf(element),
-          label:
-            element.getAttribute("aria-label") ||
-            element.textContent.trim().slice(0, 40),
-          quiet: !!element.closest("[data-navigation-reveal]"),
-        };
-      });
-      // Focus left the sidebar, or wrapped back to where it started.
-      if (!focus || seen.has(focus.key)) break;
-      seen.add(focus.key);
-      if (focus.quiet) quiet += 1;
-      await expect
-        .poll(() => page.locator(":focus").evaluate(unseen), {
-          message: `${tab}: focused "${focus.label}" can't be seen`,
-        })
-        .toBe("");
-    }
+  const seen = new Set();
+  for (let stop = 0; stop < 400; stop += 1) {
+    await page.keyboard.press("Tab");
+    const focus = await page.evaluate(() => {
+      const element = document.activeElement;
+      const aside = element?.closest('aside[aria-label="Sidebar"]');
+      if (!aside) return null;
+      return {
+        key: [...aside.querySelectorAll("*")].indexOf(element),
+        label:
+          element.getAttribute("aria-label") ||
+          element.textContent.trim().slice(0, 40),
+        quiet: !!element.closest("[data-navigation-reveal]"),
+      };
+    });
+    // Focus left the sidebar, or wrapped back to where it started.
+    if (!focus || seen.has(focus.key)) break;
+    seen.add(focus.key);
+    if (focus.quiet) quiet += 1;
+    await expect
+      .poll(() => page.locator(":focus").evaluate(unseen), {
+        message: `Focused "${focus.label}" can't be seen`,
+      })
+      .toBe("");
   }
   // Heading actions that hide at rest were among the stops.
   expect(quiet).toBeGreaterThan(0);
@@ -85,8 +90,8 @@ test("closing a heading's dialog with the mouse leaves its menu button visible",
   await openPage(page, "Messages");
   const more = page.getByRole("button", { name: "More actions for Work" });
   await more.click();
-  await page.getByRole("menuitem", { name: "Rename section" }).click();
-  const dialog = page.getByRole("dialog", { name: "Rename section" });
+  await page.getByRole("menuitem", { name: "Workspace settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Workspace settings" });
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
   await page.mouse.move(0, 0);

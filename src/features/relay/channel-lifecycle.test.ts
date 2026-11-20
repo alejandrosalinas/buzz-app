@@ -318,6 +318,40 @@ describe("bounded visibility recovery", () => {
     h.owner.dispose();
   });
 
+  it.each([false, true])(
+    "coalesces trailing requests into one strong follow-up (clear while pending: %s)",
+    async (clear) => {
+      const h = harness();
+      const gate = deferred<RelayEvent[]>();
+      h.read.mockImplementationOnce(() => gate.promise);
+      const first = h.owner.capability.refreshVisibility();
+      await vi.advanceTimersByTimeAsync(0);
+      const trailing = h.owner.capability.refreshVisibility(undefined, {
+        trailing: true,
+      });
+      expect(
+        h.owner.capability.refreshVisibility(undefined, {
+          trailing: true,
+          strong: true,
+        }),
+      ).toBe(trailing);
+      if (clear) h.owner.clear();
+      gate.resolve([]);
+      await first;
+      await trailing;
+      const strongReads = () =>
+        h.read.mock.calls.filter(
+          ([filters]) => filters[0]?.consistency === "strong",
+        ).length;
+      // A clear retires the pending trailing read and its strong flag.
+      expect(h.read).toHaveBeenCalledTimes(clear ? 1 : 2);
+      expect(strongReads()).toBe(clear ? 0 : 1);
+      await h.owner.capability.refreshVisibility();
+      expect(strongReads()).toBe(clear ? 0 : 1);
+      h.owner.dispose();
+    },
+  );
+
   it.each(["caller", "cancel", "clear", "dispose"] as const)(
     "%s cancels backoff without a terminal error or another read",
     async (action) => {

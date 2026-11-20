@@ -45,15 +45,13 @@ appTest(
     await expect(
       section.locator('[data-plugin-row="decorated"] [data-channel-id="beta"]'),
     ).toBeVisible();
-    await page
-      .getByRole("button", { name: "More actions for Channels" })
-      .click();
+    await page.getByRole("button", { name: "More actions for Team" }).click();
     await page.getByRole("menuitem", { name: "Sort", exact: true }).click();
     await expect(
       page.getByRole("menuitemradio", { name: "Reverse name" }),
     ).toBeVisible();
     await animationsSettled(
-      page.getByRole("menu", { name: "Sort Channels", exact: true }),
+      page.getByRole("menu", { name: "Sort Team", exact: true }),
       { subtree: true },
     );
     await page.screenshot({
@@ -119,7 +117,7 @@ appTest.describe("ordinary Solo rows", () => {
     async ({ page, app }, info) => {
       await page.goto(app.origin);
       await openPage(page, "Messages");
-      const row = page.locator('[data-solo-channel-id="beta"]');
+      const row = page.locator('[data-solo-destination-id="beta"]');
       await expect(row).toBeVisible();
       await openSettings(page);
       await selectSettingsSection(page, "Manage plugins");
@@ -129,7 +127,7 @@ appTest.describe("ordinary Solo rows", () => {
         .locator('[data-plugin-row="decorated"]')
         .filter({ has: row });
       await expect(decorated).toBeVisible();
-      const actions = decorated.getByRole("button", {
+      const actions = page.getByRole("menu", {
         name: "Actions for Beta",
         exact: true,
       });
@@ -142,8 +140,10 @@ appTest.describe("ordinary Solo rows", () => {
       ).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(row).toBeFocused();
-      await actions.click();
-      await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+      await row.click({ button: "right" });
+      await actions
+        .getByRole("menuitem", { name: "Rename", exact: true })
+        .click();
       await expect(
         page.getByRole("textbox", { name: "Chat name", exact: true }),
       ).toHaveValue("Beta");
@@ -166,11 +166,13 @@ appTest.describe("ordinary Solo rows", () => {
         if ((await toggle.getAttribute("aria-label"))?.startsWith("Show"))
           await toggle.click();
         await expect(row).toBeVisible();
-        await row.hover();
+        await row.click({ button: "right" });
         await expect(actions).toBeVisible();
         await page.screenshot({
           path: info.outputPath(`solo-plugin-row-${width}-${mode}.png`),
         });
+        await page.keyboard.press("Escape");
+        await expect(row).toBeFocused();
       }
       await openSettings(page);
       await selectSettingsSection(page, "Manage plugins");

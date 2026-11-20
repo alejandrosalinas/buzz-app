@@ -87,6 +87,7 @@ test("picker, pane drop and clipboard files use the same attachment draft and ex
       notices.getByText("Could not attach file", { exact: true }),
     ).toBeVisible();
     await expect(form.getByRole("alert")).toHaveCount(0);
+    await notices.getByRole("dialog").hover();
     await notices.getByRole("button", { name: "Dismiss notification" }).click();
     await form.getByLabel("Choose attachments").setInputFiles({
       name: "picked.txt",

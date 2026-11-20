@@ -1,0 +1,1 @@
+Your commits use the git identity of the person running you by default. Change it when a repository or that person needs a different author. Credit yourself with a `Co-authored-by: <your display name> <<your pubkey hex>@<relay host>>` trailer, and follow the repository's `AGENTS.md` for sign-off rules.

@@ -12,6 +12,7 @@ import { MESH_AGENT_PRESETS, type MeshAgentPreset } from "./meshAgentPresets";
 export function MeshHelpers({ agents }: { agents: Agents }) {
   const state = useSyncExternalStore(agents.subscribe, agents.snapshot);
   const title = useId();
+  const disclosure = useId();
   const busy = useRef(false);
   const [pending, setPending] = useState<string>();
   const [created, setCreated] = useState("");
@@ -66,8 +67,13 @@ export function MeshHelpers({ agents }: { agents: Agents }) {
     <section aria-labelledby={title} className="grid gap-3">
       <InlineHeader
         id={title}
-        title="Helpers"
-        subtitle="Create a helper, then add it to a conversation. Members serving its model can read the prompts and conversation history sent to them. Find your helpers in Agents."
+        title="Tools"
+        subtitle={
+          <span id={disclosure}>
+            Members serving a tool’s model can read its prompts and conversation
+            history.
+          </span>
+        }
       />
       <SettingsGroup>
         {[...MESH_AGENT_PRESETS, null].map((preset) => {
@@ -82,6 +88,7 @@ export function MeshHelpers({ agents }: { agents: Agents }) {
               trailing={
                 <Button
                   size="sm"
+                  aria-describedby={disclosure}
                   disabled={
                     !type ||
                     state.status !== "ready" ||

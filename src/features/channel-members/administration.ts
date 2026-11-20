@@ -1,7 +1,7 @@
 import { getEventHash } from "nostr-tools";
 import type { RelayReader } from "../relay/reader";
 import { retryRead } from "../relay/read-retry";
-import type { RelayWriter } from "../relay/transport";
+import type { ReadTransport } from "../relay/transport";
 import { newer, type RelayEvent } from "../relay/events";
 import { attestedOwner } from "../agents/owner-attestation";
 import { foldProfiles } from "../relay/profiles";
@@ -10,6 +10,8 @@ import { lifecycleChannelId } from "../relay/channel-lifecycle-protocol";
 import {
   authorizeMemberChange,
   canRemoveMember,
+  canSetMemberRole,
+  isEditableMemberRole,
   memberAdministrationTemplate,
   memberAuthority,
   memberChangeConfirmed,
@@ -34,6 +36,7 @@ const empty: MemberAdministrationState = Object.freeze({
   authority: Object.freeze({
     roles: Object.freeze({}),
     canManage: false,
+    canManageSolo: false,
     canRemove: false,
     canRemoveOwnedAgent: false,
     system: false,
@@ -52,7 +55,7 @@ export function createMemberAdministration({
   acceptDiscovery,
 }: {
   reader?: RelayReader | undefined;
-  writer?: RelayWriter | undefined;
+  writer?: ReadTransport["memberAdministration"];
   viewer: string;
   relayAuthor: string;
   canAccess(id: string): boolean;
@@ -93,7 +96,13 @@ export function createMemberAdministration({
     assertAccess(id);
     return {
       events,
-      authority: memberAuthority(events, id, viewer, relayAuthor),
+      authority: memberAuthority(
+        events,
+        id,
+        viewer,
+        relayAuthor,
+        writer?.soloMemberRoleUpdates === true,
+      ),
     };
   }
   async function perform(
@@ -242,10 +251,47 @@ export function createMemberAdministration({
                 !event || !!foldProfiles([event]).get(change.pubkey)?.isAgent;
               if (agent) throw new Error(transferRefusal);
             }
-            authorizeMemberChange(authority, viewer, change, owner, agent);
+            const soloRoleUpdate =
+              authority.canManageSolo && isEditableMemberRole(change.role);
+            let targetOwner = owner;
+            if (
+              soloRoleUpdate &&
+              !canSetMemberRole(
+                authority,
+                viewer,
+                change.pubkey,
+                change.role,
+              ) &&
+              canSetMemberRole(
+                authority,
+                viewer,
+                change.pubkey,
+                change.role,
+                viewer,
+              )
+            ) {
+              // Promotions require fresh ownership proof on both preflights.
+              const event = await profile();
+              targetOwner = event && (await attestedOwner(event));
+              signal.throwIfAborted();
+              assertAccess(id);
+            }
+            authorizeMemberChange(
+              authority,
+              viewer,
+              change,
+              targetOwner,
+              agent,
+            );
+            return soloRoleUpdate;
           };
-          await authorize();
-          const template = memberAdministrationTemplate(id, viewer, change);
+          const soloRoleUpdate = await authorize();
+          const template = memberAdministrationTemplate(
+            id,
+            viewer,
+            change,
+            soloRoleUpdate,
+          );
           validateMemberAdministrationTemplate(template, viewer);
           const signed = await writer.sign(structuredClone(template), signal);
           signal.throwIfAborted();
@@ -258,7 +304,10 @@ export function createMemberAdministration({
             getEventHash(signed) !== signed.id
           )
             throw new Error("Signer changed the member administration command");
-          await authorize();
+          if ((await authorize()) !== soloRoleUpdate)
+            throw new Error(
+              "Chat type changed. Refresh members and roles before trying again.",
+            );
           signal.throwIfAborted();
           if (active?.() === false)
             throw new DOMException("Member change cancelled", "AbortError");

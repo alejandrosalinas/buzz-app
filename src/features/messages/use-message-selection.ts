@@ -13,11 +13,13 @@ export function useMessageSelection(
   list: RefObject<HTMLElement | null>,
   rows: readonly ChannelMessage[],
   session: RelaySession,
+  conversationId: string | undefined,
 ) {
   const editScope = useMessageEditScope();
   const actions = useMessageKeyActions(session);
-  const latest = useRef(rows);
-  latest.current = rows;
+  // Action availability changes with outbox state, not the list's lifetime.
+  const latest = useRef({ rows, actions, conversationId });
+  latest.current = { rows, actions, conversationId };
   useLayoutEffect(() => {
     const element = list.current;
     if (!element) return;
@@ -26,6 +28,7 @@ export function useMessageSelection(
     // quote into the channel's, as focusTarget() would fall back to, and a
     // quote never rewrites a sent message that is being edited.
     const quoteTarget = () => {
+      if (latest.current.conversationId !== conversationId) return null;
       const input = editScope?.input.current as ComposerInputElement | null;
       return input?.isConnected &&
         !input.disabled &&
@@ -35,10 +38,11 @@ export function useMessageSelection(
         : null;
     };
     const unregister = registerMessageList(element, {
+      scope: session.scope,
       row: (id) =>
-        latest.current.find((row) => row.id === id && !row.membership),
+        latest.current.rows.find((row) => row.id === id && !row.membership),
       newest: () =>
-        latest.current.reduce<ChannelMessage | undefined>(
+        latest.current.rows.reduce<ChannelMessage | undefined>(
           (newest, row) =>
             !row.membership && (!newest || compareMessages(row, newest) > 0)
               ? row
@@ -48,19 +52,20 @@ export function useMessageSelection(
       canEdit: (row) =>
         !!editScope?.current && !!lastEditableMessage(session, [row]),
       edit: (row) => editScope?.current?.(row),
-      canDelete: (row) => !!actions?.canDelete(row),
-      remove: (row) => actions?.remove(row),
-      canMarkUnread: (row) => !!actions?.canMarkUnread(row),
-      markUnread: (row) => actions?.markUnread(row),
+      canDelete: (row) => !!latest.current.actions?.canDelete(row),
+      remove: (row) => latest.current.actions?.remove(row),
+      canMarkUnread: (row) => !!latest.current.actions?.canMarkUnread(row),
+      markUnread: (row) => latest.current.actions?.markUnread(row),
       composer: () => editScope?.focusTarget() ?? null,
       canQuote: () => !!quoteTarget(),
-      quote: (html) => !!quoteTarget()?.insertQuote(html),
+      quote: (html, sourceLinks) =>
+        !!quoteTarget()?.insertQuote(html, sourceLinks),
     });
     return () => {
       unregister();
       if (editScope?.list.current === element) editScope.list.current = null;
     };
-  }, [list, editScope, session, actions]);
+  }, [list, editScope, session, conversationId]);
 }
 
 /** For lists that render their own edit scope provider. */
@@ -68,7 +73,13 @@ export function MessageSelection(props: {
   list: RefObject<HTMLElement | null>;
   rows: readonly ChannelMessage[];
   session: RelaySession;
+  conversationId: string | undefined;
 }) {
-  useMessageSelection(props.list, props.rows, props.session);
+  useMessageSelection(
+    props.list,
+    props.rows,
+    props.session,
+    props.conversationId,
+  );
   return null;
 }

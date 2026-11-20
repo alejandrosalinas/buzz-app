@@ -19,7 +19,7 @@ pub async fn mesh_compute_widget_open<R: tauri::Runtime>(
         window.show().map_err(|e| e.to_string())?;
         return window.set_focus().map_err(|e| e.to_string());
     }
-    WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         &app,
         "compute-widget",
         WebviewUrl::App("compute-widget.html".into()),
@@ -29,12 +29,41 @@ pub async fn mesh_compute_widget_open<R: tauri::Runtime>(
     .min_inner_size(96.0, 96.0)
     .max_inner_size(320.0, 320.0)
     .resizable(true)
-    // Opaque: a transparent window needs Tauri's app-wide macOS private API.
-    .decorations(false)
-    .always_on_top(true)
-    .build()
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    // Keep the webview opaque. On macOS, the native frame supplies rounded
+    // clipping without enabling Tauri's app-wide private API.
+    .decorations(cfg!(target_os = "macos"))
+    .always_on_top(true);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .visible(false);
+    let window = builder.build().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    window
+        .with_webview(|webview| {
+            use objc2_app_kit::{NSWindow, NSWindowButton};
+            use objc2_foundation::NSSize;
+            // Tauri runs this closure on the UI thread with a live native window.
+            let native: &NSWindow = unsafe { &*webview.ns_window().cast() };
+            native.setContentAspectRatio(NSSize::new(1.0, 1.0));
+            for kind in [
+                NSWindowButton::CloseButton,
+                NSWindowButton::MiniaturizeButton,
+                NSWindowButton::ZoomButton,
+            ] {
+                if let Some(button) = native.standardWindowButton(kind) {
+                    button.setHidden(true);
+                }
+            }
+            // Show only after hiding the titlebar controls, preserving the
+            // compact widget without a flash of native window buttons.
+            native.makeKeyAndOrderFront(None);
+        })
+        .map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+    Ok(())
 }
 
 #[tauri::command]

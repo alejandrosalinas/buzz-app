@@ -32,6 +32,7 @@ import { TypingIndicator } from "../messages/TypingIndicator";
 
 const a = "a".repeat(64),
   b = "b".repeat(64);
+const noInbox = { status: "ready", items: [], freshness: "observed" };
 const stops: (() => void)[] = [];
 // jsdom lacks scrollIntoView; mention and search highlights reveal their rows.
 beforeEach(() => {
@@ -140,6 +141,8 @@ function fixture() {
         subscribe(listener),
       subscribeActivity: (_id: string, listener: () => void) =>
         subscribe(listener),
+      inbox: () => noInbox,
+      subscribeInbox: subscribe,
     },
     sidebarPreferences: { snapshot: () => ({ status: "ready" }), subscribe },
     typing: { snapshot: () => publicTyping, subscribe },
@@ -455,6 +458,7 @@ it("scopes search DM labels and message authors to their own conversation", asyn
       onQueryChange={() => {}}
       input={createRef()}
       pages={[]}
+      openNewMessage={() => {}}
       openConversation={() => {}}
     />,
   );

@@ -14,9 +14,13 @@ export function FileDropOverlay({
     composer.current;
   return zone
     ? createPortal(
+        // The frame leaves the pane readable, so a thread summary under the
+        // drag can still be found and seen to spring open.
         <div className={styles.fileDropOverlay} role="status">
-          <CloudUploadIcon size={32} />
-          <span>Drop files into this conversation</span>
+          <span className={styles.fileDropBadge}>
+            <CloudUploadIcon size={16} />
+            Drop files into this conversation
+          </span>
         </div>,
         zone,
       )

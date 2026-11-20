@@ -396,15 +396,19 @@ it("reclaims superseded plugin bindings without losing unavailable choices", () 
   expect(retained).not.toHaveProperty("section:group1");
   expect(retained).not.toHaveProperty("section:group2");
   expect(current).toEqual(before);
+  const maximumChoices = Object.fromEntries(
+    Array.from({ length: 205 }, (_, i) => [`section:group${i}`, reg(mode)]),
+  );
   expect(() =>
     editSidebarSortRecord(
       {
         ...current,
         groups: {},
+        pluginSort: { v: 1, g: maximumChoices },
         meta: {
           v: 1,
           g: Object.fromEntries(
-            Object.keys(choices).map((key) => [key, reg(null)]),
+            Object.keys(maximumChoices).map((key) => [key, reg(null)]),
           ),
         },
       },

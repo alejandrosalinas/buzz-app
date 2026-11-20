@@ -35,12 +35,12 @@ export function WorkspaceControl({
   // A region's chat is filed by its region, when the region offers that.
   const filed = useRegionWorkspace(session, channelId);
   const [snapshot, setSnapshot] = useState(() =>
-    session.soloPreferences.snapshot(),
+    session.sidebarPreferences.snapshot(),
   );
   useEffect(() => {
-    const subscribe = session.soloPreferences.subscribe;
+    const subscribe = session.sidebarPreferences.subscribe;
     if (typeof subscribe !== "function") return;
-    return subscribe(() => setSnapshot(session.soloPreferences.snapshot()));
+    return subscribe(() => setSnapshot(session.sidebarPreferences.snapshot()));
   }, [session]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -69,7 +69,7 @@ export function WorkspaceControl({
     void (
       filed
         ? filed.file(next || undefined)
-        : session.soloPreferences.assign(channelId, next || undefined)
+        : session.sidebarPreferences.assign(channelId, next || undefined)
     )
       .catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : String(reason)),
@@ -89,8 +89,8 @@ export function WorkspaceControl({
         <MenuTrigger
           disabled={
             disabled ||
-            snapshot.status === "idle" ||
-            snapshot.status === "loading"
+            (!snapshot.data &&
+              (snapshot.status === "idle" || snapshot.status === "loading"))
           }
           render={(props) => (
             <Button
@@ -129,7 +129,7 @@ export function WorkspaceControl({
             ))}
           </MenuRadioGroup>
           {snapshot.status === "error" && (
-            <MenuItem onClick={() => void session.soloPreferences.refresh()}>
+            <MenuItem onClick={() => void session.sidebarPreferences.refresh()}>
               Retry workspaces
             </MenuItem>
           )}

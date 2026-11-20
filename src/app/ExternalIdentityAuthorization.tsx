@@ -91,7 +91,7 @@ export function ExternalIdentityAuthorization({ viewer }: { viewer: string }) {
     <div className="mt-8">
       <InlineHeader
         title="Authorize external identity"
-        subtitle="For an application such as Nexus that keeps its own agent key. Only authorize a public key you recognize: this ownership proof has no time or event-kind limits."
+        subtitle="Use this for an application that keeps its own agent key. Only authorize a public key you recognize. This ownership proof has no time or event-kind limits."
       />
       <SettingsGroup layout="form">
         <form

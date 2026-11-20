@@ -204,6 +204,10 @@ if (nestedWindow && nestedParent && nestedChild) {
   );
   replies.splice(293, 1, child);
 }
+// A visit to the nested child itself, as a link to that reply opens it.
+const exactChild = new URLSearchParams(location.search).has("exactChild")
+  ? replies[293]?.id
+  : undefined;
 const exactReaction = signed(viewer, {
   kind: 7,
   content: "👍",
@@ -254,8 +258,12 @@ let repairGate = false;
 let failRepair = false;
 const rejected = new Set<string>();
 let releaseOlderPage: (() => void) | undefined;
-let holdOlderPage = false;
-let failOlderPages = 0;
+// The thread reads the page that holds the parent of a loaded reply on its own,
+// so a journey that holds or fails that read says so before the thread opens.
+let holdOlderPage = new URLSearchParams(location.search).has("holdOlderPage");
+let failOlderPages = Number(
+  new URLSearchParams(location.search).get("failOlderPages") ?? 0,
+);
 let failLegacyContinuation = new URLSearchParams(location.search).has(
   "failLegacyContinuation",
 );
@@ -693,7 +701,8 @@ function Fixture() {
             scope={scope}
             channelId={channelId}
             channelName={channelId}
-            messageId={root.id}
+            messageId={exactChild ?? root.id}
+            revealSelected={exactChild !== undefined}
             close={() => select(0)}
             parent={threadParent}
             onOpenLink={(url) => {

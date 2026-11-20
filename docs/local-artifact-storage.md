@@ -43,6 +43,48 @@ transactions. Restart a query after a notification when rows can move between pa
 Notifications follow commit and reach other windows through BroadcastChannel.
 They contain no saved content. Subscribe before the first read, then read again.
 
+## Changed-entry hints
+
+New hosts also expose optional `collection.subscribeChanges(listener)`. Feature
+detect it for older hosts. Each hint is `{ ids: readonly string[] }` or
+`{ reset: true }`. A hint only invalidates local reads. It supplies no content,
+access proof, revision order, or relay synchronization. Re-read each ID with
+`get`, including IDs no longer present in the consumer's index. Remove its old
+index state when the entry is absent or no longer qualifies. Check availability
+before using shared content.
+
+The feed covers committed shared revisions, availability changes, imports, and
+device preferences. IDs are deduplicated within a batch. Unchanged writes,
+import markers, checkpoints, and refresh errors produce no changed-entry hint.
+An aborted transaction produces none. The original `subscribe` still reports
+those metadata commits so error and progress consumers retain their behavior.
+All open handles for the same viewer, relay, plugin, and collection receive
+hints, including handles in other windows. Notifications may merge; they are
+not a durable log or one callback per commit.
+
+The host bounds a hint and its queued IDs to 512 IDs and 16,384 string code units.
+Overflow produces `reset`. Purge, index upgrades, legacy or unknown broadcasts,
+and unreadable messages also reset the index. Old handles reject reads after a
+schema change or purge; close and reopen them. The host resets live consumers
+when their document becomes visible or returns from the back-forward cache.
+These events cover browser suspension; a consumer must still rebuild whenever
+it reopens, resubscribes, or cannot establish delivery continuity.
+
+Build an index with this ordering:
+
+1. Subscribe before the first paged read. Capture the current community generation.
+2. Buffer changed IDs while scanning. Bound this buffer too; overflow restarts the scan.
+3. After the final page, drain the buffered IDs through bounded `get` calls.
+   Serialize reads for an ID, or discard older completions with a generation guard.
+4. Publish only after the scan and buffered reads settle. Keep the subscription
+   active and apply later IDs with the same ordering guard.
+5. A reset invalidates both the index and in-flight reads. Restart the scan.
+   Discard all completions from a closed handle or an old community generation.
+
+Subscribe alone does not send an initial snapshot. An older host without this
+method needs the consumer's existing fallback. Adding a subscription starts no
+relay reads and does not open another collection.
+
 ## Device data
 
 `preferences.update(id, change)` reads the latest preference, calls the synchronous

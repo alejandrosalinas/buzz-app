@@ -475,3 +475,274 @@ it("disconnect during a coalesced cache clear does not reconnect", async () => {
   expect(data.snapshot().status).toBe("disconnected");
   expect(connections).toHaveLength(1);
 });
+it.each([
+  ["at once", false],
+  ["after its first attempt times out", true],
+])(
+  "reload reads a fresh saved head from the relay again %s",
+  async (_, timesOut) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = keypair();
+    const { data, connections, source, restored } = setup({ relay });
+    const author = keypair();
+    await restored();
+    connections[0]?.resolve(source);
+    await vi.waitFor(() =>
+      expect(data.snapshot()).toMatchObject({ status: "ready" }),
+    );
+    expect(data.snapshot().cached).toBeUndefined();
+    const before = data.snapshot();
+    // The saved head is fresh, so the live session showed it without asking.
+    expect(before.session.channels.window("alpha").rows[0]?.content).toBe(
+      "Saved history",
+    );
+    const headQuery = vi.mocked(source.query);
+    headQuery.mockImplementation(async (filters) =>
+      filters.some((f) => f.kinds?.includes(39002))
+        ? [
+            roster(relay, "alpha", [source.viewer]),
+            metadata(relay, "alpha", "Alpha"),
+          ]
+        : filters.some((f) => f["#h"]?.includes("alpha"))
+          ? [
+              message(author, "alpha", "Relay reply", 30),
+              bounds(relay, "alpha", "head", {
+                has_more: false,
+                next_cursor: null,
+              }),
+            ]
+          : [],
+    );
+
+    data.reload();
+    expect(data.snapshot()).toMatchObject({
+      status: "connecting",
+      reloading: true,
+    });
+    await vi.waitFor(() => expect(connections).toHaveLength(2));
+    expect(data.snapshot().restoring).toBeUndefined();
+    expect(data.snapshot().generation).toBeGreaterThan(before.generation);
+    if (timesOut) {
+      await vi.advanceTimersByTimeAsync(8_001);
+      expect(data.snapshot()).toMatchObject({
+        status: "error",
+        retrying: true,
+        reloading: true,
+      });
+      // Its automatic retry is still the reload.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(data.snapshot()).toMatchObject({
+        status: "connecting",
+        reloading: true,
+      });
+      await vi.waitFor(() => expect(connections).toHaveLength(3));
+    }
+    connections.at(-1)?.resolve(source);
+    await vi.waitFor(() =>
+      expect(
+        data.snapshot().session.channels.window("alpha").rows[0]?.content,
+      ).toBe("Relay reply"),
+    );
+    expect(data.snapshot()).toMatchObject({ status: "ready" });
+    expect(data.snapshot().reloading).toBeUndefined();
+    expect(data.snapshot().session).not.toBe(before.session);
+  },
+);
+it("reload keeps its state through a denial until disconnected, and does nothing once disconnected", async () => {
+  const { data, connections, source, restored } = setup();
+  await restored();
+  connections[0]?.resolve(source);
+  await vi.waitFor(() => expect(data.snapshot().status).toBe("ready"));
+  data.reload();
+  await vi.waitFor(() => expect(connections).toHaveLength(2));
+  connections.at(-1)?.reject(new ReadError("denied", "Removed"));
+  await vi.waitFor(() =>
+    expect(data.snapshot()).toMatchObject({
+      status: "error",
+      denied: true,
+      reloading: true,
+    }),
+  );
+  data.disconnect();
+  expect(data.snapshot().reloading).toBeUndefined();
+  const count = connections.length;
+  data.reload();
+  expect(data.snapshot().status).toBe("disconnected");
+  expect(connections).toHaveLength(count);
+});
+it("reload keeps a channel to reopen through a second reload before its roster answers", async () => {
+  const relay = keypair();
+  const { data, connections, source, restored } = setup({ relay });
+  await restored();
+  connections[0]?.resolve(source);
+  await vi.waitFor(() => expect(data.snapshot().status).toBe("ready"));
+  const query = vi.mocked(source.query);
+  const rosterRead = (filters: readonly import("./events").ReadFilter[]) =>
+    filters.some((f) => f.kinds?.includes(39002));
+  const fallback = async (filters: readonly import("./events").ReadFilter[]) =>
+    rosterRead(filters)
+      ? [
+          roster(relay, "alpha", [source.viewer]),
+          metadata(relay, "alpha", "Alpha"),
+          roster(relay, "beta", [source.viewer]),
+          metadata(relay, "beta", "Beta"),
+        ]
+      : filters.some((f) => f["#h"]?.includes("beta"))
+        ? [
+            bounds(relay, "beta", "head", {
+              has_more: false,
+              next_cursor: null,
+            }),
+          ]
+        : [];
+  query.mockImplementation(fallback);
+  const { channels } = data.snapshot().session;
+  channels.refreshList?.();
+  await vi.waitFor(() => expect(channels.get?.("beta")).toBeDefined());
+  // Beta is open in the background; alpha stays the selected channel.
+  channels.ensure("beta");
+  channels.ensure("alpha");
+  query.mockImplementation(async (filters) => {
+    if (rosterRead(filters)) return new Promise(() => {});
+    return fallback(filters);
+  });
+  data.reload();
+  await vi.waitFor(() => expect(connections).toHaveLength(2));
+  connections.at(-1)?.resolve(source);
+  await vi.waitFor(() => expect(data.snapshot().status).toBe("ready"));
+  expect(data.snapshot().session.channels.list().status).toBe("loading");
+  // Another reload before the roster answers still carries beta.
+  query.mockImplementation(fallback);
+  data.reload();
+  await vi.waitFor(() => expect(connections).toHaveLength(3));
+  connections.at(-1)?.resolve(source);
+  await vi.waitFor(() =>
+    expect(data.snapshot().session.channels.window("beta").status).toBe(
+      "ready",
+    ),
+  );
+});
+it.each([
+  ["a later roster page", "paged"],
+  ["the retry after a roster error", "failed"],
+] as const)(
+  "reload reopens a channel the new roster first authorizes in %s",
+  async (_, mode) => {
+    const relay = keypair();
+    const { data, connections, source, restored } = setup({ relay });
+    await restored();
+    connections[0]?.resolve(source);
+    await vi.waitFor(() => expect(data.snapshot().status).toBe("ready"));
+    const query = vi.mocked(source.query);
+    const rosterRead = (filters: readonly import("./events").ReadFilter[]) =>
+      filters.some((f) => f.kinds?.includes(39002));
+    const beta = [
+      roster(relay, "beta", [source.viewer], 1_600_000_000),
+      metadata(relay, "beta", "Beta", 1_600_000_000),
+    ];
+    const head = (filters: readonly import("./events").ReadFilter[]) =>
+      filters.some((f) => f["#h"]?.includes("beta"))
+        ? [
+            bounds(relay, "beta", "head", {
+              has_more: false,
+              next_cursor: null,
+            }),
+          ]
+        : [];
+    query.mockImplementation(async (filters) =>
+      rosterRead(filters)
+        ? [
+            roster(relay, "alpha", [source.viewer]),
+            roster(relay, "gamma", [source.viewer]),
+            ...beta,
+          ]
+        : head(filters),
+    );
+    const { channels } = data.snapshot().session;
+    channels.refreshList?.();
+    await vi.waitFor(() => expect(channels.get?.("gamma")).toBeDefined());
+    channels.ensure("gamma");
+    channels.ensure("beta");
+    channels.ensure("alpha");
+    // A full first page with beta's and gamma's metadata but not their
+    // rosters, so both stay closed until a later page or a retry: it brings
+    // beta's roster, and no longer lists gamma.
+    const firstPage = [
+      metadata(relay, "beta", "Beta", 1_600_000_000),
+      metadata(relay, "gamma", "Gamma", 1_600_000_000),
+      ...Array.from({ length: 500 }, (_, index) =>
+        roster(
+          relay,
+          `filler-${index}`,
+          [source.viewer],
+          1_700_000_000 - index,
+        ),
+      ),
+    ];
+    let failed = false;
+    let release = () => {};
+    const later = new Promise<void>((resolve) => (release = resolve));
+    query.mockImplementation(async (filters) => {
+      if (!rosterRead(filters)) return head(filters);
+      if (!filters.some((f) => f.until !== undefined)) return firstPage;
+      if (mode === "failed" && !failed) {
+        failed = true;
+        throw new ReadError("unavailable", "Down");
+      }
+      await later;
+      return beta;
+    });
+    const reloadCalls = query.mock.calls.length;
+    data.reload();
+    await vi.waitFor(() => expect(connections).toHaveLength(2));
+    connections.at(-1)?.resolve(source);
+    const next = () => data.snapshot().session.channels;
+    await vi.waitFor(() => expect(next().get?.("filler-0")).toBeDefined());
+    expect(next().window("beta").status).toBe("idle");
+    if (mode === "failed") {
+      await vi.waitFor(() => expect(next().list().status).toBe("error"));
+      next().ensureList();
+    }
+    release();
+    // Reopened, it reads its head from the new session.
+    await vi.waitFor(() =>
+      expect(
+        query.mock.calls
+          .slice(reloadCalls)
+          .some(([filters]) => filters.some((f) => f["#h"]?.includes("beta"))),
+      ).toBe(true),
+    );
+    // The complete roster left gamma out, so a later reload does not carry
+    // it, even once gamma is the viewer's again.
+    await vi.waitFor(() => expect(next().list().rosterAsOf).toBeDefined());
+    query.mockImplementation(async (filters) =>
+      rosterRead(filters)
+        ? [roster(relay, "gamma", [source.viewer]), ...beta]
+        : filters.some((f) => f["#h"]?.includes("gamma"))
+          ? [
+              bounds(relay, "gamma", "head", {
+                has_more: false,
+                next_cursor: null,
+              }),
+            ]
+          : head(filters),
+    );
+    const secondCalls = query.mock.calls.length;
+    data.reload();
+    await vi.waitFor(() => expect(connections).toHaveLength(3));
+    connections.at(-1)?.resolve(source);
+    await vi.waitFor(() => expect(next().get?.("gamma")).toBeDefined());
+    await vi.waitFor(() =>
+      expect(
+        query.mock.calls
+          .slice(secondCalls)
+          .some(([filters]) => filters.some((f) => f["#h"]?.includes("beta"))),
+      ).toBe(true),
+    );
+    expect(
+      query.mock.calls
+        .slice(secondCalls)
+        .some(([filters]) => filters.some((f) => f["#h"]?.includes("gamma"))),
+    ).toBe(false);
+  },
+);

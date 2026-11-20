@@ -3,6 +3,7 @@ import {
   parseEntityLink,
   type EntityRoute,
 } from "../repos/routes";
+import { newMessageTarget } from "../channel-navigation/new-message-route";
 import {
   parseGitPluginSource,
   parseUrlPluginSource,
@@ -19,6 +20,7 @@ type BuzzLink =
   | { format: "plugin-install"; source: PluginLinkSource }
   | { format: "settings"; section?: string; provider?: string }
   | { format: "agent-card"; card: string }
+  | { format: "new-message"; to: string }
   | { format: "removed" }
   | { format: "entity"; route: EntityRoute }
   | {
@@ -192,6 +194,16 @@ export function parseBuzzLink(href: string): BuzzLink | null {
         ? { format: "agent-card", card }
         : null;
     }
+    // `buzz://dm/new?to=<pubkey>`: a New message draft addressed to them.
+    if (url.hostname === "dm") {
+      const to = url.searchParams.getAll("to");
+      const pubkey = to[0] ?? "";
+      return url.pathname === "/new" &&
+        to.length === 1 &&
+        /^[0-9a-f]{64}$/.test(pubkey)
+        ? { format: "new-message", to: pubkey }
+        : null;
+    }
     if (
       url.hostname === "project" &&
       (url.pathname === "" || url.pathname === "/")
@@ -288,6 +300,7 @@ export function buzzLinkTarget(href: string, scope: NavigationScope) {
   if (link.format === "settings") return settingsTarget(link);
   if (link.format === "entity") return entityTarget(link.route, scope);
   if (link.format === "agent-card") return agentCardTarget(link.card, scope);
+  if (link.format === "new-message") return newMessageTarget(scope, link.to);
   if (link.format === "removed")
     return {
       version: 1,

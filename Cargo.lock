@@ -1155,6 +1155,8 @@ dependencies = [
  "mesh-llm-host-runtime",
  "mesh-llm-system",
  "nostr",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "reqwest",
  "serde",
  "serde_json",
@@ -1201,6 +1203,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "buzz-webkit-reaper-test"
+version = "0.0.0"
+dependencies = [
+ "block2 0.6.2",
+ "cc",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-web-kit 0.3.2",
+ "tauri",
+ "tempfile",
+]
+
+[[package]]
 name = "buzzodz-plugins"
 version = "0.1.0"
 dependencies = [
@@ -1215,6 +1231,7 @@ dependencies = [
  "image",
  "libc",
  "nostr",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",

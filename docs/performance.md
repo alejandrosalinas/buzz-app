@@ -9,7 +9,7 @@ bin/pnpm perf --scenario channel-open --repeat 5 --cpu 4 --out results.json
 ```
 
 `--scenario all` is the default. A case name runs only that case; a group
-(`channel-open`, `scroll-paging`, `thread` or `thread-scroll`) runs every case whose
+(`channel-open`, `scroll-paging`, `thread`, `thread-scroll` or `background-traffic`) runs every case whose
 name it prefixes, so `scroll-paging-fast` excludes its variants. `--cpu` sets
 Chromium's CPU slowdown factor (1 means unthrottled); it does not throttle network
 or the fixture server. `--browser webkit` runs the `thread-scroll` cases in WebKit
@@ -17,7 +17,7 @@ or the fixture server. `--browser webkit` runs the `thread-scroll` cases in WebK
 `--repeat` defaults to 5. Every sample gets fresh browser storage, signed
 histories and server state; a production frontend build is shared by the worker.
 One worker runs serially with no retries. Required CI runs every case once in
-**Browser measurements** without timing thresholds. Locally, use `pnpm perf`;
+**Perf suite smoke check**, on its own isolated runner, without timing thresholds. Locally, use `pnpm perf`;
 `pnpm test` / `just scan` do not run these cases.
 
 The existing browser fixture owns the production React/services/IndexedDB/Virtua
@@ -266,6 +266,12 @@ work-completion checks, not new timing counters. The workload covers populated
 thread mounting and panel reflow, not video playback, gallery interaction,
 expanding nested replies or live agent streaming.
 
+`thread-unread-open-60` and `thread-unread-open-200` open a strict-window thread
+of 60 or 200 replies that are all unread. The reader pages older to the first
+unread reply before it reveals the thread. The production broker answers each
+older page after a modeled 150ms round trip. They report `firstRowsMs` and
+`olderReads`.
+
 ## Thread scrolling
 
 `--scenario thread-scroll` measures the long-thread workload behind the
@@ -362,6 +368,43 @@ one session (2026-11-05). Each change that moves these numbers adds its row.
 | Closed action bars skip the glass | 50 ms | 44 | 94 | 9 | 133 ms |
 | Thread rows isolated in the scroller | 30 ms | 10 | 44 | 6 | 67 ms |
 
+## Background traffic
+
+```sh
+bin/pnpm perf --scenario background-traffic --repeat 3 --cpu 4
+```
+
+The viewer reads `alpha` while peers post into 30 other joined channels, one
+message every 200ms for 30 seconds, over the live stream. Nothing on screen
+needs to change, so the work per message is what staying current costs: live
+admission, store and unread updates, and whatever React renders because of them.
+
+| Case | Workload |
+| --- | --- |
+| `background-traffic` | 32 joined channels |
+| `background-traffic-large-sidebar` | The same traffic with the large-sidebar fixture: 128 DMs and 1,001 participants |
+
+Each sample settles for 5 seconds after setup, records 8 seconds with no
+traffic, then the traffic, then 2 seconds of drain. CPU throttling covers the
+idle and traffic windows. The JS heap, DOM node and listener gauges are read after
+a forced GC before the idle window and after the drain. The sample then opens the
+last channel posted to and requires its last message, so a run whose events never
+reached the client fails.
+
+| Metric | Meaning |
+| --- | --- |
+| `idleTaskMsPerSec` | `TaskDuration` per second with no traffic |
+| `trafficTaskMsPerSec` | `TaskDuration` per second across traffic and drain |
+| `taskMsPerMessage`, `scriptMsPerMessage`, `styleMsPerMessage`, `layoutMsPerMessage` | The traffic window's counter divided by messages sent, without subtracting idle work |
+| `heapGrowthKBPerMessage` | After-GC `JSHeapUsedSize` growth divided by messages sent |
+| `nodesDelta`, `listenersDelta` | After-GC change in DOM nodes and JS event listeners |
+
+The browser build verifies signatures in JavaScript, which the desktop app does
+natively, so per-message script time is higher here than in the app. The fixture
+sends chat messages only; agent activity, presence and typing traffic are not
+modeled. Heap growth over 30 seconds does not show whether the heap later levels
+off.
+
 ## Results and iteration
 
 JSON contains raw per-frame geometry, work evidence, all samples and per-metric
@@ -391,5 +434,5 @@ HTTP interception (which disables HTTP cache) and preloaded fonts. Channel and
 scrolling workloads use text; the rich thread workload adds local media and
 multiple authors.
 It does not measure production network latency, native hosting or WebKit outside
-thread scrolling, long-session memory growth or application startup. Add those as explicit workloads
+thread scrolling, memory growth over hours or application startup. Add those as explicit workloads
 when needed rather than changing the meaning of existing samples.

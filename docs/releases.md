@@ -58,7 +58,10 @@ Authenticode-signed Windows releases or evidence of completed desktop acceptance
 
 Previews build from three triggers:
 
-- **Daily**, from `main`'s head (09:37 UTC).
+- **Daily**, from `main`'s head (09:37 UTC). Sunday's run first deletes `main`'s
+  release, Rust CI and pnpm caches, then rebuilds them from scratch alongside a
+  full CI run, because a cache restored by prefix and saved under a new key only
+  grows.
 - **After each stable release.** When **Desktop stable release** succeeds for a
   `vX.Y.Z` tag, the workflow builds `main`'s head, which includes that release.
   Betas start no preview.
@@ -438,8 +441,8 @@ To update Goose, verify every target archive against the exact release identity:
 ```sh
 gh attestation verify <archive> --repo aaif-goose/goose \
   --signer-workflow aaif-goose/goose/.github/workflows/release.yml \
-  --source-ref refs/tags/v1.59.2 \
-  --source-digest 9da692fde8ac69ec385b5e7d68b92cc7101a509a \
+  --source-ref refs/tags/v1.60.1 \
+  --source-digest b4e789ef5fd0243415243d7dfd9113c91b517c3c \
   --cert-oidc-issuer https://token.actions.githubusercontent.com \
   --deny-self-hosted-runners
 ```
@@ -462,7 +465,7 @@ packaged signing/installers.
 The candidate is known to fail the MCP credential non-persistence check: the
 client HTTP URL and bearer header are stored in session data and export.
 An isolated canary probe reproduced this in both the old source-built 1.56.0
-executable and v1.57.0; upstream #12908 was closed unmerged, so v1.59.2 does
+executable and v1.57.0; upstream #12908 was closed unmerged, so v1.60.1 does
 not include it either. This
 remains a separate existing acceptance failure, not a distribution regression.
 

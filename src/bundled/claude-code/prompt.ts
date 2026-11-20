@@ -1,37 +1,31 @@
 // Prompts in the shared record format, so a Claude agent here reads the same
 // sections and follows the same base prompt as a harness agent.
-import {
-  BUZZ_PROMPT,
-  TOP_LEVEL_PROMPT,
-  CHANNEL_LEVEL_PROMPT,
-} from "../../buzz-mcp/prompt";
+import { TOP_LEVEL_PROMPT, CHANNEL_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
 import type { EventData } from "../../features/relay/events";
 import { messageAuthor } from "../../features/relay/fold";
-import {
-  basePromptFor,
-  mentionSection,
-} from "../../features/agent-harness/base-prompt";
+import { mentionSection } from "../../features/agent-harness/base-prompt";
 import { coreMemorySection } from "../../features/agent-harness/core-memory";
 import {
   type ConversationWake,
   wakeSection,
 } from "../../features/agent-harness/plugin-wake";
+import type { SectionChoices } from "../../features/agent-harness/sections/choices";
+import { composeBase } from "../../features/agent-harness/sections/compose";
 import {
   type AuthorNames,
+  CONTENT_LIMIT,
+  contentFields,
   eventBody,
   quoted,
   withNames,
 } from "../../features/agent-harness/turn-records";
-import channelModel from "./session_model_channel.md?raw";
-import threadModel from "./session_model_thread.md?raw";
 import channelHandoff from "./session_handoff_channel.md?raw";
 import threadHandoff from "./session_handoff_thread.md?raw";
 
-export type Scope = "thread" | "channel";
+export type Scope =
+  import("../../features/agent-harness/session-scope").SessionScope;
 /** Messages of thread context shown with a turn, newest kept. */
 export const CONTEXT_LIMIT = 12;
-/** Characters of each context message shown. */
-const CONTENT_LIMIT = 4000;
 
 const section = (tag: string, body: string, attributes = "") =>
   `<${tag}${attributes}>\n${body.trim()}\n</${tag}>`;
@@ -54,10 +48,14 @@ export function systemPrompt(
     memory?: string | null;
     /** Its recent notes, as `recentNotesSection` gives them. */
     notes?: string;
+    /** The choices for the base prompt's sections, from the agent's handle. */
+    sections?: SectionChoices | undefined;
   }>,
 ) {
-  const model = input.scope === "thread" ? threadModel : channelModel;
-  const base = [basePromptFor(input.workspace), BUZZ_PROMPT, model];
+  const base = composeBase(
+    { scope: input.scope, ownFolder: input.workspace },
+    input.sections,
+  );
   return [
     input.agent
       ? section(
@@ -65,7 +63,7 @@ export function systemPrompt(
           `You are ${input.agent.name} (pubkey ${input.agent.pubkey}).`,
         )
       : "",
-    section("base", base.map((part) => part.trim()).join("\n\n")),
+    section("base", base.text),
     section("workspace", `Current working directory: ${input.cwd}`),
     input.repositories ?? "",
     input.instructions?.trim()
@@ -125,14 +123,17 @@ export function turnPrompt(input: TurnInput) {
   // A session shared by a channel's threads (or a DM's) cannot tell which
   // thread a reply is for, so it names the thread itself.
   const root = thread?.rootId ?? event.id;
-  const shared = channel.dm || input.scope === "channel";
-  const reply = input.topLevel
-    ? `IMPORTANT: ${input.channelLevel ? CHANNEL_LEVEL_PROMPT : TOP_LEVEL_PROMPT}`
-    : shared
-      ? `IMPORTANT: For ordinary replies in this turn, pass \`reply: "${root}"\` to \`send\` so the conversation stays threaded. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, leave out \`reply\`.`
-      : thread
-        ? "IMPORTANT: `send` replies in this thread by default, so the conversation stays threaded. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`. If the requested destination is ambiguous, ask before sending."
-        : "IMPORTANT: This is a new top-level message. `send` replies in its thread by default — the triggering message is the thread root. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`.";
+  const shared = channel.dm || input.scope !== "thread";
+  const reply =
+    input.scope === "community"
+      ? `IMPORTANT: Pass each reply's channel as \`channel\` to \`send\`. ${input.wake ? "Leave out the request field for this wake." : "Pass the triggering message ID as `request`."} For this request use channel "${channel.id}". ${input.topLevel ? "Leave out the reply field to post at the top level." : `Use "${root}" as the reply field to post in its thread.`} You can answer one request and continue working on another.`
+      : input.topLevel
+        ? `IMPORTANT: ${input.channelLevel ? CHANNEL_LEVEL_PROMPT : TOP_LEVEL_PROMPT} Pass the channel explicitly to \`send\` when handling multiple requests.`
+        : shared
+          ? `IMPORTANT: For ordinary replies in this turn, pass \`reply: "${root}"\` to \`send\` so the conversation stays threaded. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass \`channel\` explicitly and leave out \`reply\`.`
+          : thread
+            ? "IMPORTANT: `send` replies in this thread by default, so the conversation stays threaded. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`. If the requested destination is ambiguous, ask before sending."
+            : "IMPORTANT: This is a new top-level message. `send` replies in its thread by default — the triggering message is the thread root. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`.";
   const fetch = input.topLevel
     ? "Use `read` for recent messages if needed."
     : shared
@@ -151,7 +152,9 @@ export function turnPrompt(input: TurnInput) {
   const lines = channel.dm
     ? [
         "Scope: dm",
-        "Session scope: dm conversation",
+        input.scope === "community"
+          ? "Session scope: community"
+          : "Session scope: dm conversation",
         `Channel: ${channelLabel}`,
       ]
     : !input.topLevel && (thread || input.scope === "thread")
@@ -166,7 +169,7 @@ export function turnPrompt(input: TurnInput) {
         ]
       : [
           "Scope: channel",
-          "Session scope: channel",
+          `Session scope: ${input.scope === "community" ? "community" : "channel"}`,
           `Channel: ${channelLabel}`,
         ];
   const parts: string[] = [];
@@ -188,7 +191,7 @@ export function turnPrompt(input: TurnInput) {
                 id: message.id,
                 pubkey,
                 created_at: message.created_at,
-                content: message.content.slice(0, CONTENT_LIMIT),
+                ...contentFields(message.content, message.tags),
               },
               input.names?.(pubkey),
             );

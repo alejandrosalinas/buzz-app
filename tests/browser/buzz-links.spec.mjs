@@ -744,10 +744,12 @@ test.describe("links to channels the reader hasn't joined", () => {
     await expect(preview.getByText("open", { exact: true })).toBeVisible();
     await expect(preview).toHaveAttribute("href", href);
     const secret = "5ec2e700-0000-4000-8000-000000000001";
+    const secretMessage = `buzz://message?channel=${secret}&id=${"a".repeat(64)}`;
+    const secretThread = `${secretMessage}&thread=${"b".repeat(64)}`;
     const message = app.append(
       "primary",
       "alpha",
-      `See <buzz://channel/${app.openChannelId}>, <buzz://channel/${secret}> and [#launch-plans](buzz://channel/${secret}).`,
+      `See <buzz://channel/${app.openChannelId}>, <buzz://channel/${secret}> and [#launch-plans](buzz://channel/${secret}). Also [the plan](${secretMessage}) and [its thread](${secretThread}).`,
     );
     const row = page.locator(
       `[data-channel-timeline] [data-message-id="${message.id}"]`,
@@ -770,7 +772,64 @@ test.describe("links to channels the reader hasn't joined", () => {
       exact: true,
     });
     await expect(authored).toHaveAttribute("title", /aren’t a member/);
+    // A message or thread link into the withheld channel keeps its text and
+    // its href, and goes nowhere either.
+    const messageLinks = [
+      row.getByRole("link", { name: "the plan", exact: true }),
+      row.getByRole("link", { name: "its thread", exact: true }),
+    ];
+    for (const link of messageLinks)
+      await expect(link).toHaveAttribute("aria-disabled", "true");
+    await expect(messageLinks[0]).toHaveAttribute("href", secretMessage);
+    await expect(messageLinks[1]).toHaveAttribute("href", secretThread);
     await virtuaIdle(page);
+    // A withheld link goes nowhere, so the pointer changes nothing about it.
+    for (const link of [locked, authored, ...messageLinks]) {
+      await link.hover();
+      const look = await link.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        const pointed = document.elementFromPoint(
+          box.left + box.width / 2,
+          box.top + box.height / 2,
+        );
+        return {
+          cursor: pointed && getComputedStyle(pointed).cursor,
+          line: style.textDecorationLine,
+          thickness: style.textDecorationThickness,
+          background: style.backgroundColor,
+        };
+      });
+      expect(look).toEqual({
+        cursor: "default",
+        line: "underline",
+        thickness: "1px",
+        background: "rgba(0, 0, 0, 0)",
+      });
+    }
+    // Its preview only says why: it is no second link to a destination that
+    // can't open, and a click leaves the reader here.
+    await messageLinks[0].hover();
+    const withheldCard = page.getByLabel("Message preview", { exact: true });
+    await expect(withheldCard).toContainText("aren’t a member");
+    await expect(withheldCard).not.toContainText("Open link");
+    await expect(withheldCard).toHaveAttribute("role", "tooltip");
+    await expect(withheldCard).not.toHaveAttribute("href", /./);
+    await expect(withheldCard).not.toHaveAttribute("tabindex", /./);
+    expect(
+      await withheldCard.evaluate(
+        (element) => getComputedStyle(element).cursor,
+      ),
+    ).not.toBe("pointer");
+    // `aria-disabled` reads as not enabled, so the click is forced.
+    for (const link of messageLinks) {
+      await link.click({ force: true });
+      await link.click({ button: "middle", force: true });
+    }
+    await expect(row).toBeVisible();
+    await expect(
+      page.getByText("This Buzz link couldn’t be opened here."),
+    ).toHaveCount(0);
     await named.hover();
     const card = page.getByLabel("Channel preview", { exact: true });
     await expect(card).toContainText("Public channel · Not joined");

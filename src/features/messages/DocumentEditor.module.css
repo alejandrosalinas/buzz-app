@@ -1,0 +1,62 @@
+@reference "../../shared/styles/globals.css";
+
+.stack {
+  --document-toolbar-space: calc(
+    var(--size-control-sm) +
+    var(--space-8) +
+    var(--space-2)
+  );
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.toolbarAnchor {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  block-size: 0;
+}
+.stack > .toolbarAnchor {
+  position: sticky;
+  inset-block-end: var(--space-2);
+  margin-block-end: var(--space-2);
+  z-index: var(--layer-popover);
+}
+.editorToolbar {
+  @apply popover-surface;
+  --floating-radius: var(--radius-row);
+  position: absolute;
+  inset-block-end: 0;
+  inline-size: max-content;
+  max-inline-size: 100%;
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  padding: var(--floating-inset);
+}
+.editorBody [role="textbox"] {
+  max-height: none;
+  overflow: visible;
+}
+.editorBody [role="textbox"] :where(h1, h2, h3, h4, h5, h6) {
+  margin: var(--space-4) 0 var(--space-1h);
+}
+.sourceEditor {
+  flex: 1;
+  min-width: 0;
+}
+.sourceEditor > .editorBody,
+.sourceEditor > .editorBody > div:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sourceEditor textarea {
+  flex: 1;
+  resize: none;
+}
+.stack[data-formatting] > .editorBody {
+  /* Let the last line scroll past the bar, including at enlarged text sizes. */
+  padding-block-end: var(--document-toolbar-space);
+}

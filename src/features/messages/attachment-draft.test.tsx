@@ -17,6 +17,7 @@ import {
   useAttachmentDraft,
   attachmentDraft,
   transferAttachmentDraft,
+  subscribeAttachmentDraftCounts,
 } from "./attachment-draft";
 
 function deferred<T>() {
@@ -503,6 +504,48 @@ it("adds a copied snapshot without reupload, deduplicates and permits removal", 
   assert.exists(item);
   act(() => draft.result.current.store.remove(item.id));
   expect(draft.result.current.items).toHaveLength(0);
+});
+
+it("keeps uploaded files across a reload, but not a file still uploading", async () => {
+  const saved = ["reload", "draft:one:files"] as const;
+  const open = () => {
+    const h = fixture();
+    return {
+      ...h,
+      draft: renderHook(() =>
+        useAttachmentDraft(h.session, "reload:draft:one", "one", false, saved),
+      ),
+    };
+  };
+  const before = open();
+  act(() =>
+    before.draft.result.current.store.add([file("done.png"), file("big.mov")]),
+  );
+  await waitFor(() => expect(before.calls).toHaveLength(1));
+  const descriptor = { ...uploaded("done.png"), type: "image/png" };
+  await act(async () => before.calls[0]?.result.resolve(descriptor));
+  await waitFor(() => expect(before.calls).toHaveLength(2));
+  before.draft.unmount();
+
+  const after = open();
+  expect(after.draft.result.current.items).toMatchObject([
+    { status: "ready", uploaded: descriptor },
+  ]);
+  expect(
+    await after.draft.result.current.store.prepareForSend(
+      new AbortController().signal,
+    ),
+  ).toEqual([descriptor]);
+  expect(after.upload).not.toHaveBeenCalled();
+  const item = after.draft.result.current.items[0];
+  assert.exists(item);
+  const counted = vi.fn();
+  subscribeAttachmentDraftCounts(after.session, counted);
+  act(() => after.draft.result.current.store.remove(item.id));
+  expect(counted).toHaveBeenCalled();
+  after.draft.unmount();
+  expect(open().draft.result.current.items).toEqual([]);
+  localStorage.clear();
 });
 
 it("Send transfers the eager queue once and cancellation freezes active and queued attachments", async () => {

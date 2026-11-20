@@ -9,6 +9,7 @@ import {
   fireEvent,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { webcrypto } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createRelaySession,
@@ -17,6 +18,11 @@ import {
 import type { Agents } from "../../features/agents/service";
 import type { AgentChoicesSnapshot } from "../../features/agents/choices";
 import { channelTemplates } from "../../features/channel-templates/local";
+import {
+  projectTemplateId,
+  workspaceCanvas,
+} from "../../features/solo/workspace";
+import type { KitEntry } from "../../features/channel-templates/model";
 import { CreateChannelDialog } from "./CreateChannelDialog";
 
 let store = createRelaySession(null);
@@ -29,10 +35,80 @@ const setupProps = () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   localStorage.clear();
   store.dispose();
   store = createRelaySession(null);
 });
+
+it.each([false, true])(
+  "shares standalone workspace instructions unless unticked (%s)",
+  async (share) => {
+    vi.stubGlobal("crypto", webcrypto);
+    const user = userEvent.setup();
+    const id = await projectTemplateId("work");
+    const entry: KitEntry = {
+      eventId: "head",
+      createdAt: 1,
+      record: {
+        version: 1,
+        community: "https://relay.example.org",
+        deleted: false,
+        value: {
+          type: "template",
+          id,
+          name: "Work defaults",
+          description: "",
+          teamIds: [],
+          agents: [],
+          canvas: workspaceCanvas({
+            folders: ["/local/project"],
+            worktree: { location: "/local/worktrees", baseBranch: "main" },
+            canvas: "Release checklist",
+          }),
+        },
+      },
+    };
+    const session = {
+      ...store.session,
+      channelKit: {
+        ...store.session.channelKit,
+        available: true,
+        snapshot: () => ({ status: "ready" as const, entries: [entry] }),
+        refresh: async () => {},
+      },
+    };
+    const onCreate = vi.fn(async () => {});
+    render(
+      <CreateChannelDialog
+        {...setupProps()}
+        session={session}
+        initialGroup="work"
+        destinations={[{ id: "work", name: "Work" }]}
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "Copy workspace instructions to the shared Canvas",
+    });
+    expect(checkbox).toBeChecked();
+    if (!share) await user.click(checkbox);
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Notes");
+    await user.click(screen.getByRole("button", { name: "Create channel" }));
+    expect(onCreate).toHaveBeenCalledExactlyOnceWith({
+      name: "Notes",
+      visibility: "open",
+      setup: {
+        agents: [],
+        groupId: "work",
+        templateId: id,
+        canvas: share ? "Release checklist" : "",
+      },
+    });
+  },
+);
 
 it("shows description immediately with Name focused and creates an ongoing open channel", async () => {
   const user = userEvent.setup();
@@ -458,7 +534,7 @@ it("discards the unsaved privacy step and draft when creation closes and reopens
 });
 
 it.each(["work", "", "starred"])(
-  "derives the title and fixed destination from the opening group %j",
+  "prefills the title and destination from the opening group %j",
   async (initialGroup) => {
     const user = userEvent.setup();
     const onCreate = vi.fn(async () => {});
@@ -480,9 +556,11 @@ it.each(["work", "", "starred"])(
           ? "Create a channel in Work"
           : "Create a channel";
     expect(screen.getByRole("dialog")).toHaveAccessibleName(title);
-    expect(
-      screen.queryByRole("combobox", { name: "Destination group" }),
-    ).not.toBeInTheDocument();
+    const workspace = screen.queryByRole("combobox", {
+      name: "Destination workspace",
+    });
+    if (initialGroup === "work") expect(workspace).toHaveTextContent("Work");
+    else expect(workspace).not.toBeInTheDocument();
     if (initialGroup === "starred")
       expect(
         screen
@@ -536,8 +614,8 @@ it.each([true, false])(
     await user.click(screen.getByRole("button", { name: "Create channel" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       groupsReady
-        ? "This group is no longer available. Close this dialog and create from another sidebar group or Channels."
-        : "Wait for saved sidebar groups to load, then try again.",
+        ? "This workspace is no longer available. Choose another workspace or Team."
+        : "Wait for saved workspaces to load, then try again.",
     );
     expect(onCreate).not.toHaveBeenCalled();
     view.rerender(

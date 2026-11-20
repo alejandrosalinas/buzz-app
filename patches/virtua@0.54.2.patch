@@ -1,0 +1,254 @@
+diff --git a/lib/index.js b/lib/index.js
+index b4a8a1f5d7065a6acb9344cd3f3a07e1c428c172..1848f5f68295f01f32484d2dd0b8f02715129c13 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -6,6 +6,10 @@ import { jsx as c } from "react/jsx-runtime";
+
+ import { flushSync as f } from "react-dom";
+
++// WebKit can restore a stale native scroll offset after an instant correction.
++// Interrupt only the corrected axis; observer-inferred idle is not native idle.
++const isMacWebKit = () => typeof navigator !== "undefined" && !y() && navigator.platform === "MacIntel" && navigator.vendor === "Apple Computer, Inc.";
++
+ var a, u = [], {min: d, max: h, abs: g, floor: $} = Math, p = (e, t, o) => h(t, d(o, e)), m = e => e.sort((e, t) => e - t), w = setTimeout, S = clearTimeout, _ = "function" == typeof queueMicrotask ? queueMicrotask : e => {
+     Promise.resolve().then(e);
+ }, v = () => {
+@@ -17,16 +21,31 @@ var a, u = [], {min: d, max: h, abs: g, floor: $} = Math, p = (e, t, o) => h(t,
+ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+     const r = e.l(), s = t.i(r);
+     t.u(o, n) && e.h(6, t.i(r) - s);
+-}, b = ({$: e, p: t, i: o, m: n, S: r, t: s, _: l, v: i, I: c}, f = 0) => {
++}, b = ({$: e, p: t, i: o, m: n, S: r, t: s, _: l, v: i, I: c, A: unmeasured}, f = 0) => {
+     let a = !!f, u = 1, $ = 0, p = 0, m = 0, w = 0, S = 0, _ = 0, v = 0, z = 0, x = null, I = [ 0, a ? h(f - 1, 0) : -1 ], b = !1;
++    // A shift compensates every resize until scroll-end, a 150ms timer from
++    // its jump's scroll event, but the rows it prepends measure in the frame
++    // after that jump. Count the rows it awaits so a late frame cannot lose them.
++    let shiftEnd = 0, shiftIdle = !1;
++    const shiftPending = () => {
++        for (let e = h(I[0], 0), t = d(I[1], shiftEnd - 1, l() - 1); e <= t; e++) if (unmeasured(e)) return !0;
++        return !1;
++    };
+     const R = /* @__PURE__ */ new Set, O = () => m - p, k = () => O() + S + w, T = (e, t) => {
+         const r = o(e), s = n(e);
+         return 1 !== v && 0 === z ? r + s <= t : r < t && r + s < t + $;
++    }, shiftAnchor = e => {
++        // A shift corrects rows above the viewport end; buffered rows
++        // wholly below it cannot move the reading position.
++        const end = k() + $;
++        let anchor = t(end);
++        for (;anchor < e && o(anchor) < end; ) anchor++;
++        return anchor;
+     }, C = e => {
+         e && (y() && 0 !== v || x && 1 === z ? S += e : w += e);
+     }, M = e => {
+         const o = l();
+-        if (2 === z) return o;
++        if (2 === z) return shiftAnchor(o);
+         if (e) return 0;
+         if (x && 1 === z) return d(x[0], o);
+         const n = k();
+@@ -44,7 +63,9 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+             let o, n;
+             if (!b || a || _) [o, n] = I; else {
+                 let r = k(), l = r + $;
+-                c() || (t = h(0, t), 1 !== v && (r -= t), 2 !== v && (l += t)), [o, n] = I = !x && (l <= 0 || r >= s()) ? [ 0, -1 ] : e(h(0, r), h(0, l)), 
++                // Direction is frozen outside native scrolling, such as after a
++                // shift until inferred idle; it cannot choose one buffered side.
++                c() || (t = h(0, t), (1 !== v || z) && (r -= t), (2 !== v || z) && (l += t)), [o, n] = I = !x && (l <= 0 || r >= s()) ? [ 0, -1 ] : e(h(0, r), h(0, l)), 
+                 x && (o = d(o, x[0]), n = h(n, x[1]));
+             }
+             return [ o, d(n, l() - 1) ];
+@@ -77,13 +98,24 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+                 }
+
+               case 2:
+-                d = 8, 0 !== v && (w += S, S = 0, d += 1), v = 0, z = 0, x = null;
++                d = 8, 0 !== v && (w += S, S = 0, d += 1), v = 0, x = null;
++                // Keep shift policy while mounted rows the shift prepended are
++                // unmeasured; the batch that measures them ends it below.
++                2 === z && shiftPending() ? shiftIdle = !0 : (z = 0, shiftEnd = 0, shiftIdle = !1);
++                // Idle releases the range a flushed jump holds. The driver has
++                // consumed any scroll event still in flight, so the jump moved
++                // nothing or a later write undid it, and raises no event of its
++                // own: its held range would outlive idle.
++                _ && (_ = 0, d |= 1);
+                 break;
+
+               case 3:
+                 if (n.length) {
+                     const e = M(c), t = o(e);
+                     r(n, $), C(o(e) - t), d = 3, f = !0;
++                    // A scroll-end deferred above lands once the shift's
++                    // measurements are in.
++                    shiftIdle && 2 === z && !shiftPending() && (z = 0, shiftEnd = 0, shiftIdle = !1);
+                 }
+                 break;
+
+@@ -94,6 +126,17 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+               case 5:
+                 if (n !== l()) {
+                     if (c) {
++                        // Rows a shift prepends measure after its jump; remember
++                        // how many so scroll-end can tell whether it awaits them.
++                        const delta = n - l();
++                        shiftEnd = (2 === z ? shiftEnd : 0) + Math.max(delta, 0), shiftIdle = !1;
++                        // A flushed jump keeps the last range until its scroll event
++                        // arrives, in the indices before this shift: move it with the
++                        // rows so the same ones stay mounted instead of churning. A
++                        // removal past the held rows would name rows above the list,
++                        // an inverted range that renders nothing for a frame; the
++                        // offset lands at the top, so hold as many rows from there.
++                        _ && (I = I[0] + delta < 0 ? [ 0, I[1] - I[0] ] : [ I[0] + delta, I[1] + delta ]);
+                         const e = s();
+                         i(n, !0), C(s() - e), z = 2;
+                     } else i(n);
+@@ -406,18 +449,24 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+         }
+     };
+ }, j = (e, t, o, n, r, s, l, i) => {
+-    let c, f, a = !1, u = !1, d = !1, h = !1;
++    let c, f, a = !1, u = !1, d = !1, h = !1, jumped = 0, jumpBase, landed;
++    // Scroll APIs can truncate fractional offsets. Reach the whole edge without
++    // quantizing interior reading positions or changing RTL normalization.
++    const edgeOffset = t => t >= e.C() + e.t() - e.o() ? Math.ceil(t) : t;
+     const g = r ? "scrollLeft" : "scrollTop", $ = r ? "left" : "top", p = e => s ? -e : e, m = () => p(n[g]), v = (e, t) => {
+         n.scrollTo({
+             [$]: e,
+             behavior: t ? "smooth" : "instant"
+         });
+     }, z = () => {
+-        a || u ? (a = !1, x()) : (d = !1, e.h(2));
++        // A flushed jump's scroll event can trail this timer by a frame. Read
++        // the native offset first so idle releases a held range only for a
++        // jump that left the offset unmoved.
++        a || u ? (a = !1, x()) : (d = !1, m() !== e.k() && e.h(1, m(), i && i()), e.h(2));
+     }, x = () => {
+         S(f), f = w(z, 150);
+     }, I = () => {
+-        a = !1, d && (h = !0), e.h(1, m(), i && i()), x();
++        jumped = 0, a = !1, d && (h = !0), e.h(1, m(), i && i()), x();
+     }, b = t => {
+         e.T() && !t.ctrlKey && (r ? t.deltaX : t.deltaY) && (a = !0);
+     }, R = () => {
+@@ -437,6 +486,9 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+         F: () => {
+             m() !== e.k() ? I() : i && e.h(7, i());
+         },
++        cancel: () => {
++            c && c();
++        },
+         D: () => {
+             o.removeEventListener("scroll", I), o.removeEventListener("wheel", b), o.removeEventListener("touchstart", R), 
+             o.removeEventListener("touchend", O), o.removeEventListener("touchcancel", O), S(f);
+@@ -444,12 +496,27 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+         K: () => {
+             const [t, o] = e.M();
+             if (t) {
+-                h && l && l(), h = !1;
+-                const r = e.k(), s = r + t, i = e.C() + e.t() - e.o();
+-                s <= 0 || s >= i || r >= i ? v(p(s)) : n.scrollBy({
+-                    [$]: p(t),
++                const before = m();
++                l && l(h), h = !1;
++                // Sizes can flush another jump before an earlier one's scroll
++                // event reaches the store. Count it, but not a browser clamp.
++                const base = e.k();
++                base !== jumpBase && (jumped = 0);
++                // An integer scroll offset floors each fractional jump. While the
++                // offset still sits where the last one landed, continue from its
++                // exact target so the remainders don't add up.
++                const native = m(), carried = Math.abs(native - landed) < 1;
++                const r = carried ? landed : base + jumped, s = r + t, i = e.C() + e.t() - e.o();
++                // WebKit's integer scrollTop can read up to 1px short of a
++                // fractional end, so a target that close takes the absolute path.
++                s <= 0 || s >= i - 1 || r >= i ? v(p(edgeOffset(s >= i - 1 ? Math.max(s, i) : s))) : n.scrollBy({
++                    [$]: p(carried ? s - native : t),
+                     behavior: "instant"
+                 }), o && (c && c(), e.o() > e.t() && e.h(1, m()));
++                jumped = e.k() === base ? Math.max(s, 0) - base : 0, jumpBase = e.k(), landed = Math.max(s, 0);
++                n.dispatchEvent(new CustomEvent("virtua-scroll-correction", {
++                    detail: { before, after: m() }
++                }));
+             }
+             return o;
+         },
+@@ -464,7 +531,7 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+                         for (let [o, n] = e.$(0); o <= n; o++) if (t.A(o)) return;
+                         f();
+                     }
+-                    e.h(8), r(p(o()), n);
++                    e.h(8), r(p(edgeOffset(o())), n);
+                 }
+             };
+             if (n && e.h(9, o()), !s) {
+@@ -478,7 +545,27 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+         }
+     };
+ }, G = (e, t, o) => {
+-    let n, r, s = v(), l = 0;
++    let n, r, s = v(), l = 0, restoreOverflow;
++    const interruptMomentum = () => {
++        // Repeated corrections in one task share the original declaration.
++        restoreOverflow && restoreOverflow();
++        const style = n.style, property = o ? "overflow-x" : "overflow-y";
++        const value = style.getPropertyValue(property), priority = style.getPropertyPriority(property);
++        style.setProperty(property, "hidden", "important");
++        const restore = () => {
++            S(timer);
++            if (style.getPropertyValue(property) === "hidden" && style.getPropertyPriority(property) === "important") {
++                value ? style.setProperty(property, value, priority) : style.removeProperty(property);
++            }
++            restoreOverflow = void 0;
++        }, timer = w(restore);
++        restoreOverflow = restore;
++    };
++    // New reader input supersedes retained imperative targets. Capture runs
++    // before a button/key handler can issue the next intentional navigation.
++    const inputEvents = [ "wheel", "touchmove", "keydown", "pointerdown" ], cancel = () => {
++        r && r.cancel();
++    };
+     const i = /* @__PURE__ */ new Map, c = /* @__PURE__ */ new WeakMap, f = J(s => {
+         const l = [], f = [];
+         for (const {target: a, contentRect: {width: u, height: d}} of s) if (a === n) (u || d) && (r.F(), 
+@@ -492,7 +579,13 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+     });
+     return {
+         U(l, i = l.parentElement) {
+-            f.j(n = i), r = j(e, t, i, i, o, o && "rtl" === getComputedStyle(i).direction, () => {
++            for (const e of inputEvents) i.addEventListener(e, cancel, {
++                capture: !0,
++                passive: !0
++            });
++            f.j(n = i), r = j(e, t, i, i, o, o && "rtl" === getComputedStyle(i).direction, momentum => {
++                if (isMacWebKit()) return interruptMomentum();
++                if (!momentum) return;
+                 const e = o ? "overflowX" : "overflowY", t = i.style, n = t[e];
+                 t[e] = "hidden", w(() => {
+                     t[e] = n;
+@@ -500,7 +593,9 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+             }), s[1](!0);
+         },
+         R() {
+-            f.D(), r && r.D(), s[1](!1), s = v();
++            cancel();
++            for (const e of inputEvents) n && n.removeEventListener(e, cancel, !0);
++            restoreOverflow && restoreOverflow(), f.D(), r && r.D(), s[1](!1), s = v();
+         },
+         Z: (e, t) => (i.set(e, t), f.j(e), () => {
+             i.delete(e), f.G(e);
+@@ -602,7 +697,8 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+         },
+         U(c, a = c.parentElement) {
+             f.j(r = a);
+-            const u = (e, t, o) => j(e, t, a, a, o, o && "rtl" === getComputedStyle(a).direction, () => {
++            const u = (e, t, o) => j(e, t, a, a, o, o && "rtl" === getComputedStyle(a).direction, momentum => {
++                if (!momentum) return;
+                 const e = o ? "overflowX" : "overflowY", t = a.style, n = t[e];
+                 t[e] = "hidden", w(() => {
+                     t[e] = n;
+@@ -1271,4 +1367,3 @@ a), x = e => h(e.t(), e.o()), I = (e, t, o, n) => {
+ });
+
+ export { ce as VGrid, ne as VList, ue as VMasonry, oe as Virtualizer, he as WindowMasonry, re as WindowVirtualizer };
+\ No newline at end of file
+-//# sourceMappingURL=index.js.map

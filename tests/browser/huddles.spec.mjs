@@ -235,6 +235,8 @@ test("connected Huddles keep compact controls beside the default window", async 
   const notifications = page.getByRole("region", { name: "App notifications" });
   await expect(notifications).toContainText("Huddle disconnected");
   await expect(capsule).toHaveCount(0);
+  // The dismiss control is revealed by hovering the notification.
+  await notifications.getByRole("dialog").hover();
   await notifications
     .getByRole("button", { name: "Dismiss Huddle error" })
     .click();
@@ -260,6 +262,8 @@ test("connected Huddles keep compact controls beside the default window", async 
   ).toHaveCount(0);
   await expect(notifications).toContainText("Huddle audio unavailable");
   await expect(capsule).toHaveCount(0);
+  // The dismiss control is revealed by hovering the notification.
+  await notifications.getByRole("dialog").hover();
   await notifications
     .getByRole("button", { name: "Dismiss Huddle error" })
     .click();

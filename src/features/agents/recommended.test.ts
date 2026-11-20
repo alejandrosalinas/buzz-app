@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  awaitRecommendation,
   CHECK_MS,
   followRecommended,
   offRecommended,
@@ -7,12 +8,14 @@ import {
   parseRecommended,
   candidatesFor,
   pickRecommended,
+  pickRecommendedSurely,
   recommendedCandidates,
   recommendedSetup,
   RETRY_MS,
   recommendedRun,
   recommendedNote,
   setRuntimeRecommendation,
+  SOURCE_MS,
   withRecommended,
 } from "./recommended";
 
@@ -286,6 +289,41 @@ it("skips a harness whose check hangs, after a bounded wait", async () => {
   }
 });
 
+it("is unsure, not skipping, when a check ahead of the pick hangs or fails", async () => {
+  vi.useFakeTimers();
+  try {
+    recommend(CODEX, GOOSE);
+    const goose = harness("goose", true);
+    const hung = {
+      id: "codex",
+      title: "Codex",
+      recommends: () => new Promise<boolean>(() => {}),
+    };
+    const picked = pickRecommendedSurely([hung, goose]);
+    await vi.advanceTimersByTimeAsync(CHECK_MS);
+    expect(await picked).toBe("unsure");
+    const failing = {
+      id: "codex",
+      title: "Codex",
+      recommends: () => Promise.reject(new Error("offline")),
+    };
+    expect(await pickRecommendedSurely([failing, goose])).toBe("unsure");
+    // A clear no moves on, as `pickRecommended` does.
+    expect(
+      await pickRecommendedSurely([harness("codex", false), goose]),
+    ).toMatchObject({ type: goose });
+    // Nothing after the pick is asked.
+    expect(
+      await pickRecommendedSurely([harness("codex", true), failing]),
+    ).toMatchObject({ type: { id: "codex" } });
+    expect(await pickRecommendedSurely([harness("goose", false)])).toBe(
+      undefined,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("finds again after RETRY_MS when a failed check cut the finding short", async () => {
   vi.useFakeTimers();
   try {
@@ -427,5 +465,112 @@ it("ignores an invalid list set at run time, keeping the last good one", () => {
   } finally {
     setRuntimeRecommendation(undefined);
     vi.unstubAllEnvs();
+  }
+});
+
+it("waits for a plugin's setup before an Automatic agent's harness pick", async () => {
+  recommend(CODEX);
+  let give!: (setup: unknown) => void;
+  const ready = awaitRecommendation(
+    () =>
+      new Promise((resolve) => {
+        give = resolve;
+      }),
+  );
+  try {
+    // Both are ready: without the wait, the build's list would pick Codex.
+    const codex = harness("codex", true);
+    const goose = harness("goose", true);
+    const picking = pickRecommendedSurely([codex, goose]);
+    await Promise.resolve();
+    expect(codex.recommends).not.toHaveBeenCalled();
+    give({ candidates: [GOOSE] });
+    await ready;
+    expect(await picking).toMatchObject({ type: goose, candidate: GOOSE });
+    expect(codex.recommends).not.toHaveBeenCalled();
+  } finally {
+    give(undefined);
+    await ready;
+    setRuntimeRecommendation(undefined);
+  }
+});
+
+it("waits for a plugin's setup, then finds and picks with it", async () => {
+  recommend(CODEX);
+  try {
+    let give!: (setup: unknown) => void;
+    const ready = awaitRecommendation(
+      () =>
+        new Promise((resolve) => {
+          give = resolve;
+        }),
+    );
+    const goose = harness("goose", true);
+    const picking = pickRecommended([goose]);
+    const offered = vi.fn(async () => true);
+    const finding = recommendedRun("goose", offered).find();
+    await Promise.resolve();
+    expect(goose.recommends).not.toHaveBeenCalled();
+    expect(offered).not.toHaveBeenCalled();
+    give({
+      recommendedBy: "Example Org",
+      description: "Org pick.",
+      candidates: [GOOSE],
+    });
+    await ready;
+    expect(recommendedSetup()).toEqual({
+      recommendedBy: "Example Org",
+      description: "Org pick.",
+      candidates: [GOOSE],
+    });
+    expect((await picking)?.candidate).toEqual(GOOSE);
+    expect(await finding).toEqual(GOOSE);
+  } finally {
+    setRuntimeRecommendation(undefined);
+  }
+});
+
+it("keeps the build's setup when a plugin gives nothing, fails, gives an invalid setup or is late", async () => {
+  recommend(CODEX);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (const answer of [
+      () => undefined,
+      () => null,
+      () => ({ candidates: [] }),
+      () => Promise.reject(new Error("offline")),
+      () => {
+        throw new Error("broken");
+      },
+      () => ({ candidates: [{ ...GOOSE, model: " secret-model " }] }),
+      () => ({ candidates: [GOOSE], secret: "field" }),
+      () => [GOOSE],
+      () => [],
+      () => "secret-text",
+    ]) {
+      await awaitRecommendation(answer);
+      expect(recommendedSetup()).toEqual({ candidates: [CODEX] });
+    }
+    expect(warn).toHaveBeenCalledTimes(7);
+    for (const [, message] of warn.mock.calls)
+      expect(String(message)).not.toMatch(/secret/);
+
+    vi.useFakeTimers();
+    let signal!: AbortSignal;
+    const late = awaitRecommendation((given) => {
+      signal = given;
+      return new Promise((resolve) =>
+        setTimeout(() => resolve({ candidates: [GOOSE] }), SOURCE_MS + 1),
+      );
+    });
+    await vi.advanceTimersByTimeAsync(SOURCE_MS);
+    await late;
+    expect(signal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(recommendedCandidates()).toEqual([CODEX]);
+  } finally {
+    vi.useRealTimers();
+    warn.mockRestore();
+    setRuntimeRecommendation(undefined);
   }
 });

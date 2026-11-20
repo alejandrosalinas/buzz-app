@@ -90,6 +90,82 @@ async function landedOnHeading(viewer: string | undefined) {
   else expect(key).toBeNull();
 }
 
+it("keeps the last confirmed Web Inspector state when native rejects a change", async () => {
+  let rejectChange!: (reason: Error) => void;
+  const pending = new Promise<boolean>((_resolve, reject) => {
+    rejectChange = reject;
+  });
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "credential_pairings_list") return [];
+    if (command === "web_inspector" && !args) return false;
+    if (command === "web_inspector") return pending;
+    throw new Error(`Unexpected command ${command}`);
+  });
+
+  render(<SecuritySettings />);
+  const control = await screen.findByRole("switch", {
+    name: "Allow Safari Web Inspector",
+  });
+  expect(control).not.toBeChecked();
+  try {
+    await userEvent.click(control);
+    expect(control).toHaveAttribute("aria-busy", "true");
+    expect(control).not.toBeChecked();
+    expect(control).toHaveFocus();
+    await userEvent.keyboard(" ");
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(
+          ([command, args]) =>
+            command === "web_inspector" && args !== undefined,
+        ),
+    ).toEqual([["web_inspector", { enabled: true }]]);
+  } finally {
+    rejectChange(new Error("Web Inspector is unavailable"));
+  }
+  expect(await screen.findByRole("alert")).toHaveTextContent("Try again");
+  expect(control).not.toBeChecked();
+  expect(control).not.toHaveAttribute("aria-busy", "true");
+  vi.mocked(invoke).mockResolvedValueOnce(true);
+  await userEvent.keyboard(" ");
+  await waitFor(() => expect(control).toBeChecked());
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("shows the confirmed Web Inspector state after returning to Security during a change", async () => {
+  let finishChange!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finishChange = resolve;
+  });
+  let inspectable = false;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "credential_pairings_list") return [];
+    if (command !== "web_inspector")
+      throw new Error(`Unexpected command ${command}`);
+    if (args) {
+      await pending;
+      inspectable = true;
+    }
+    return inspectable;
+  });
+
+  const name = "Allow Safari Web Inspector";
+  const settings = render(<SecuritySettings />);
+  try {
+    const control = await screen.findByRole("switch", { name });
+    await userEvent.click(control);
+    expect(control).toHaveAttribute("aria-busy", "true");
+    settings.unmount();
+    render(<SecuritySettings />);
+    await screen.findByText("No paired tools");
+    expect(screen.queryByRole("switch", { name })).not.toBeInTheDocument();
+  } finally {
+    await act(async () => finishChange());
+  }
+  expect(await screen.findByRole("switch", { name })).toBeChecked();
+});
+
 it("lists paired tools and revokes one after asking", async () => {
   let release = () => {};
   vi.mocked(invoke).mockImplementation((command) =>
@@ -346,14 +422,20 @@ it.each(viewers)(
 );
 
 it("shows an empty state, and a read failure", async () => {
-  vi.mocked(invoke).mockResolvedValueOnce([]);
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "credential_pairings_list") return [];
+    return null;
+  });
   render(<SecuritySettings />);
   expect(await screen.findByText("No paired tools")).toBeInTheDocument();
   expect(screen.queryByText("Authorize external identity")).toBeNull();
   cleanup();
-  vi.mocked(invoke).mockRejectedValueOnce(
-    "Paired tools could not be read from secure storage",
-  );
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "credential_pairings_list") {
+      throw "Paired tools could not be read from secure storage";
+    }
+    return null;
+  });
   render(<SecuritySettings />);
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "could not be read",

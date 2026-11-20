@@ -29,11 +29,13 @@ export function WorkspaceFields({
   onChange,
   disabled = false,
   instructionRows = 5,
+  instructionScope = "chat",
 }: {
   value: Workspace;
   disabled?: boolean;
   /** Edit surfaces with room to spare give Instructions more visible lines. */
   instructionRows?: number;
+  instructionScope?: "chat" | "workspace";
   onChange(value: Workspace): void;
 }) {
   const [picking, setPicking] = useState(false);
@@ -150,7 +152,7 @@ export function WorkspaceFields({
           onChange={(event) =>
             onChange({ ...value, canvas: event.target.value })
           }
-          placeholder="Instructions and context for agents working in this chat."
+          placeholder={`Instructions and context for agents working in this ${instructionScope}.`}
         />
       </Field>
       <div className={styles.fields}>

@@ -13,11 +13,14 @@ export type SplitButtonProps = Pick<
   menuLabel: string;
   /** The menu's items: option choices or related actions. */
   menu: ReactNode;
-  variant?: "subtle" | "outline" | "prominent";
+  /** `ghost` suits icon-only actions in dense toolbars and section headings. */
+  variant?: "subtle" | "outline" | "prominent" | "ghost";
   size?: "xs" | "sm" | "md";
   menuDisabled?: boolean | undefined;
   loading?: boolean | undefined;
   disabled?: boolean | undefined;
+  /** An icon-only action; `aria-label` names it. */
+  icon?: boolean;
 };
 
 /** An action joined to a separately named menu of options or related actions. */
@@ -30,19 +33,34 @@ export function SplitButton({
   size = "md",
   loading = false,
   disabled = false,
+  icon = false,
   ...props
 }: SplitButtonProps) {
   return (
     <div data-buzz-ui="" className="buzz-split-button" data-variant={variant}>
-      <Button
-        {...props}
-        variant={variant}
-        size={size}
-        loading={loading}
-        disabled={disabled}
-      >
-        {children}
-      </Button>
+      {icon ? (
+        <Button
+          {...props}
+          aria-label={props["aria-label"] ?? ""}
+          shape="icon"
+          variant={variant}
+          size={size}
+          loading={loading}
+          disabled={disabled}
+        >
+          {children}
+        </Button>
+      ) : (
+        <Button
+          {...props}
+          variant={variant}
+          size={size}
+          loading={loading}
+          disabled={disabled}
+        >
+          {children}
+        </Button>
+      )}
       <MenuRoot>
         <MenuTrigger
           disabled={disabled || loading || menuDisabled}

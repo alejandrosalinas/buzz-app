@@ -27,7 +27,7 @@ test("search opens a new Solo chat with one of the viewer's agents", async ({
   // sidebar's Solo chats instead.
   await expect(
     page
-      .getByRole("navigation", { name: "Solo conversations" })
+      .getByRole("navigation", { name: "Subscribed channels" })
       .getByRole("button", { name: "Earlier with Honey", exact: true }),
   ).toBeVisible();
   // Navigation load can finish before React mounts the shell shortcut owner.

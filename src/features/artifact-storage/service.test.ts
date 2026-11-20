@@ -35,7 +35,15 @@ it("binds collection ownership to the calling plugin and fences scope changes", 
     partition: "https://relay.test:viewer",
   });
   const refreshError = vi.fn(async () => null);
-  const collection = { get, close, refreshError, scope: scopeDescriptor };
+  const stopChanges = vi.fn();
+  const subscribeChanges = vi.fn(() => stopChanges);
+  const collection = {
+    get,
+    close,
+    refreshError,
+    subscribeChanges,
+    scope: scopeDescriptor,
+  };
   const factory = vi.fn(() => collection);
   const stores = service as unknown as { stores: Map<string, unknown> };
   stores.stores.set(JSON.stringify(["viewer", "https://relay.test"]), {
@@ -62,11 +70,15 @@ it("binds collection ownership to the calling plugin and fences scope changes", 
   });
   expect(handle).not.toHaveProperty("applyBatch");
   expect(handle.scope).toBe(scopeDescriptor);
+  const changed = vi.fn();
+  expect(handle.subscribeChanges?.(changed)).toBe(stopChanges);
+  expect(subscribeChanges).toHaveBeenCalledWith(changed);
   expect(await handle.refreshError()).toBeNull();
   expect(refreshError).toHaveBeenCalledOnce();
   await handle.get("task");
   expect(get).toHaveBeenCalledWith("task");
   scope = { viewer: "other", selected: "https://relay.test" };
+  expect(() => handle.subscribeChanges?.(changed)).toThrow("scope changed");
   for (const listener of subscribers) listener();
   expect(listener.mock.calls[0]?.[0].signal.aborted).toBe(true);
   expect(close).toHaveBeenCalled();

@@ -8,6 +8,8 @@ test.use({
   lifecycleRole: "guest",
   channelWriteKinds: [9, 9007, 40100],
   historyCounts: { alpha: 1, beta: 1 },
+  // Follow taps need the complete read-state snapshot (NIP-RS startup gate).
+  readState: true,
 });
 
 const readerChannelId = "11111111-1111-4111-8111-111111111111";
@@ -56,7 +58,7 @@ async function readPermalink(page, app, messageId, joined = false) {
     page.getByRole("button", { name: /^(React|Add reaction)/ }),
   ).toHaveCount(0);
   const readAction = page.getByRole("menuitem", {
-    name: /^(Mark read|Mark unread)$/,
+    name: /^(Mark as read|Mark as unread)$/,
   });
   const followAction = page.getByRole("menuitem", {
     name: /^(Follow thread|Unfollow thread)$/,

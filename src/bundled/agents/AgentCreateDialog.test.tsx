@@ -22,7 +22,7 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useSyncExternalStore } from "react";
 import { CreateModelChoices } from "../../features/agents/CreateModelChoices";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
@@ -41,6 +41,7 @@ import {
   emojiAvatarScale,
   uploadAvatar,
 } from "../../features/profiles/avatar-upload";
+import { CHECK_MS } from "../../features/agents/recommended";
 import { AgentCreateDialog } from "./AgentCreateDialog";
 import {
   BuilderlabLogoIcon,
@@ -2339,6 +2340,236 @@ describe("Recommended setup", () => {
     await pickOption(user, harnessSelect(dialog), /^Codex/);
     expect(aiSettings(dialog)).toHaveTextContent("Custom");
     expect(within(dialog).queryByText("Hosted rows")).not.toBeInTheDocument();
+  });
+
+  describe("a harness with its own setup rows, as Claude", () => {
+    // Signed in or out on this computer, as Claude's credentials are.
+    let signedIn = true;
+    const listeners = new Set<() => void>();
+    const sign = (next: boolean) =>
+      act(() => {
+        signedIn = next;
+        for (const listener of listeners) listener();
+      });
+    const useSignedIn = () =>
+      useSyncExternalStore(
+        (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        () => signedIn,
+      );
+    const claude = {
+      ...harness("claude-code", "Claude", () => signedIn),
+      CreateAction: function SignIn() {
+        return useSignedIn() ? null : <button type="button">Sign in</button>;
+      },
+      CreateConfiguration: function ClaudeRows({
+        harnessControl,
+        rowsOnly,
+        onReadyChange,
+      }: {
+        harnessControl: ReactNode;
+        rowsOnly?: boolean;
+        onReadyChange?: (ready: boolean) => void;
+      }) {
+        const ready = useSignedIn();
+        useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
+        const rows = (
+          <>
+            {harnessControl}
+            <p>Claude rows</p>
+          </>
+        );
+        return rowsOnly ? rows : <SettingsGroup>{rows}</SettingsGroup>;
+      },
+    } as unknown as RegisteredAgentType;
+    const first = {
+      harness: "claude-code",
+      model: "model-c",
+      effort: "high",
+      label: "Model C",
+    };
+    beforeEach(() => {
+      signedIn = true;
+      vi.stubEnv(
+        "VITE_BUZZ_RECOMMENDED_AGENT",
+        JSON.stringify([first, ...candidates]),
+      );
+    });
+
+    it("creates it under Custom once its rows report ready", async () => {
+      const { agents, dialog, user } = setup([claude, goose, codex]);
+      await inspectModel(user, dialog, "Model C · High");
+      await chooseCustom(user, dialog);
+      expect(harnessSelect(dialog)).toHaveTextContent("Claude");
+      // Its rows sit in AI setup's group, not in one of their own.
+      const rows = within(dialog).getByText("Claude rows");
+      expect(folded(rows)).toBe(false);
+      expect(
+        rows
+          .closest(".buzz-settings-group")
+          ?.parentElement?.closest(".buzz-settings-group"),
+      ).toBeNull();
+      expect(within(dialog).queryByText("Model picker")).toBeNull();
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      expect(createButton()).toBeEnabled();
+      await user.click(createButton());
+      expect(agents.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "test/claude-code", name: "Agent A" }),
+      );
+      expect(agents.create.mock.calls[0]?.[0].config).not.toHaveProperty(
+        "preset",
+      );
+    });
+
+    it("holds it under Custom while signed out, beside its sign-in", async () => {
+      signedIn = false;
+      const { agents, dialog, user } = setup([claude, goose, codex]);
+      // Automatic skipped it for the next harness that is ready.
+      await inspectModel(user, dialog, "Model A · High");
+      await chooseCustom(user, dialog);
+      await pickOption(user, harnessSelect(dialog), /^Claude/);
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      expect(
+        within(dialog).getByRole("button", { name: "Sign in" }),
+      ).toBeVisible();
+      expect(createButton()).toBeDisabled();
+      submitForm(dialog);
+      expect(agents.create).not.toHaveBeenCalled();
+      await sign(true);
+      expect(
+        within(dialog).queryByRole("button", { name: "Sign in" }),
+      ).toBeNull();
+      expect(createButton()).toBeEnabled();
+      await user.click(createButton());
+      expect(agents.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "test/claude-code" }),
+      );
+    });
+
+    it("creates it as Automatic's pick, without opening its rows", async () => {
+      const { agents, dialog, user } = setup([claude, goose, codex]);
+      expect(createButton()).toBeDisabled();
+      await inspectModel(user, dialog, "Model C · High");
+      expect(within(dialog).queryByText("Claude rows")).toBeNull();
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      expect(createButton()).toBeEnabled();
+      await user.click(createButton());
+      expect(agents.create).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          type: "test/claude-code",
+          name: "Agent A",
+          config: {
+            notes: "start",
+            instructions: "Be brief.",
+            preset: "recommended",
+          },
+        }),
+      );
+    });
+
+    it("never picks it for Automatic while signed out, and says what to set up", async () => {
+      signedIn = false;
+      const { agents, dialog, user } = setup([claude]);
+      expect(
+        await within(dialog).findByText("One thing to set up first"),
+      ).toBeInTheDocument();
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      expect(createButton()).toHaveAttribute("aria-disabled", "true");
+      await user.click(createButton());
+      expect(agents.create).not.toHaveBeenCalled();
+      // Custom has its sign-in, and still waits for it.
+      await chooseCustom(user, dialog);
+      expect(
+        within(dialog).getByRole("button", { name: "Sign in" }),
+      ).toBeVisible();
+      expect(createButton()).toBeDisabled();
+      await sign(true);
+      expect(createButton()).toBeEnabled();
+    });
+
+    it("picks it for Automatic after a sign-in under Custom", async () => {
+      signedIn = false;
+      const { agents, dialog, user } = setup([claude]);
+      await within(dialog).findByText("One thing to set up first");
+      await chooseCustom(user, dialog);
+      await sign(true);
+      await pickOption(user, aiSettings(dialog), /^Automatic/);
+      await waitFor(() =>
+        expect(
+          within(dialog).queryByText("One thing to set up first"),
+        ).toBeNull(),
+      );
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      expect(createButton()).toBeEnabled();
+      await user.click(createButton());
+      await waitFor(() =>
+        expect(agents.create).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            type: "test/claude-code",
+            config: expect.objectContaining({ preset: "recommended" }),
+          }),
+        ),
+      );
+    });
+
+    it("creates nothing when Automatic's pick was signed out since it was found", async () => {
+      const { agents, dialog, user } = setup([claude]);
+      await inspectModel(user, dialog, "Model C · High");
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      await sign(false);
+      await user.click(createButton());
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+        "Claude isn’t ready on this computer.",
+      );
+      expect(agents.create).not.toHaveBeenCalled();
+      // The pick is asked again, and there is none now.
+      expect(
+        await within(dialog).findByText("One thing to set up first"),
+      ).toBeInTheDocument();
+      expect(createButton()).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("gives up on a readiness check that stalls, leaving the dialog usable", async () => {
+      let stalled = false;
+      const slow = harness("claude-code", "Claude", () =>
+        stalled ? new Promise<boolean>(() => {}) : true,
+      );
+      const { agents, dialog, user } = setup([slow]);
+      await inspectModel(user, dialog, "Model C · High");
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      stalled = true;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      onTestFinished(() => void vi.useRealTimers());
+      submitForm(dialog);
+      await act(async () => {});
+      expect(within(dialog).getByLabelText("Name")).toBeDisabled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CHECK_MS);
+      });
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
+        "Claude isn’t ready on this computer.",
+      );
+      expect(within(dialog).getByLabelText("Name")).toBeEnabled();
+      expect(agents.create).not.toHaveBeenCalled();
+    });
+
+    it("leaves Goose and Codex as they were, picked or chosen under Custom", async () => {
+      signedIn = false;
+      const { agents, dialog, user } = setup([claude, goose, codex]);
+      await inspectModel(user, dialog, "Model A · High");
+      await chooseCustom(user, dialog);
+      expect(harnessSelect(dialog)).toHaveTextContent("Codex");
+      await pickOption(user, harnessSelect(dialog), /^Goose/);
+      expect(folded(within(dialog).getByText("Model picker"))).toBe(false);
+      await user.type(within(dialog).getByLabelText("Name"), "Agent A");
+      expect(createButton()).toBeEnabled();
+      await user.click(createButton());
+      expect(agents.create).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "test/goose" }),
+      );
+    });
   });
 
   it("is absent in builds without a recommendation", async () => {

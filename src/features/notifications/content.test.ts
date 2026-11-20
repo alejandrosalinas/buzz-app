@@ -104,6 +104,12 @@ it("flattens blocks, links, images, escapes and code without URLs", () => {
     messagePreview("\\*literal\\* &amp; `code`\n\n```js\nconst a = 1;\n```"),
   ).toBe("*literal* & code const a = 1;");
 });
+
+it("reads a wrapped link as its conversation renders it", () => {
+  expect(messagePreview("see [docs]\\(https://example.org/a) now")).toBe(
+    "see docs now",
+  );
+});
 it("bounds source, Unicode output and nesting, with a nonempty fallback", () => {
   expect(messagePreview("😀".repeat(400))).toBe(`${"😀".repeat(199)}…`);
   expect(messagePreview(`${" ".repeat(4096)}not parsed`)).toBe("New message");

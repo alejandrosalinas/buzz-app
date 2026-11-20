@@ -9,7 +9,11 @@
   },
   "host": {
     "mcp": true,
-    "networkOrigins": ["https://releases.openai.com"],
+    "networkOrigins": [
+      "https://releases.openai.com",
+      "https://chatgpt.com",
+      "https://persistent.oaistatic.com"
+    ],
     "files": true,
     "processes": [
       {

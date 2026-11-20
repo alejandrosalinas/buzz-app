@@ -8,6 +8,7 @@ import { fakeSpawn, MODELS, sessionState } from "./claude-testing";
 import script from "./claude.sh?raw";
 import manifest from "./manifest.json";
 import { PROTECTED_CLAUDE_ROOT, PROTECTED_CLAUDE_VERSION } from "./security";
+import { PROCESS_LIMIT } from "./sessions";
 import { ClaudeAuth, type Step } from "./auth";
 import { checkClaude, ClaudeSetup, MIN_VERSION, withScript } from "./setup";
 
@@ -779,6 +780,8 @@ function pinnedRelease(state: {
   installed: boolean;
   broken?: boolean;
   failed?: boolean;
+  /** Times the host refuses the copy as it runs all it allows. */
+  full?: number;
 }) {
   const calls: string[] = [];
   const pinned: { protection?: unknown; killed: boolean }[] = [];
@@ -789,6 +792,10 @@ function pinnedRelease(state: {
     if (id === "install") state.installed = !state.broken && !state.failed;
     const protectedCopy = id === "claude-protected-arm64";
     const started = { protection: options.protection, killed: false };
+    if (protectedCopy && state.full) {
+      state.full--;
+      throw PROCESS_LIMIT;
+    }
     if (protectedCopy) pinned.push(started);
     if (protectedCopy && !state.installed)
       throw new Error("Artifact is unreadable");
@@ -835,6 +842,57 @@ it("installs the pinned protected release only when the host refuses its copy", 
     `install ${PROTECTED_CLAUDE_VERSION} darwin-arm64 ${CHECKSUM}`,
     "claude-protected-arm64 --version",
   ]);
+});
+
+it("makes room for the protected check when the host runs all it allows", async () => {
+  const { spawn, request, calls } = pinnedRelease({ installed: true, full: 1 });
+  const room = vi.fn(async () => true);
+  await new ClaudeSetup(spawn, request).protectedInstalled(
+    new AbortController().signal,
+    room,
+  );
+  expect(room).toHaveBeenCalledTimes(1);
+  expect(calls).toEqual([
+    "platform",
+    "claude-protected-arm64 --version",
+    "claude-protected-arm64 --version",
+  ]);
+});
+
+it("reclaims capacity before the protected check's platform probe", async () => {
+  const fake = pinnedRelease({ installed: true });
+  let full = true;
+  const calls: string[] = [];
+  const spawn: typeof fake.spawn = async (id, options) => {
+    calls.push(id);
+    // The native cap applies to every declared process, including uname.
+    if (full) throw PROCESS_LIMIT;
+    return fake.spawn(id, options);
+  };
+  const room = vi.fn(async () => {
+    full = false;
+    return true;
+  });
+  await expect(
+    new ClaudeSetup(spawn, fake.request).protectedInstalled(
+      new AbortController().signal,
+      room,
+    ),
+  ).resolves.toBeUndefined();
+  expect(room).toHaveBeenCalledTimes(1);
+  expect(calls).toEqual(["platform", "platform", "claude-protected-arm64"]);
+});
+
+it("fails a protected check the full host refuses, without installing", async () => {
+  const { spawn, request, calls } = pinnedRelease({ installed: true, full: 2 });
+  const room = vi.fn(async () => false);
+  await expect(
+    new ClaudeSetup(spawn, request).protectedInstalled(
+      new AbortController().signal,
+      room,
+    ),
+  ).rejects.toBe(PROCESS_LIMIT);
+  expect(calls).toEqual(["platform", "claude-protected-arm64 --version"]);
 });
 
 it("checks the pinned copy contained, never the download folder's file", async () => {

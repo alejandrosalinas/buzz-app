@@ -138,6 +138,28 @@ export const groups: Group[] = [
           ),
         ],
       },
+      {
+        id: "relayed-message",
+        title: "Relayed from another chat",
+        description:
+          "Another agent's message, relayed by its owner, reads as that agent's collapsed line. Opening it shows the text and who it was sent as and to.",
+        rows: [
+          message(
+            "relayed-message",
+            "@Sam Rivera Message from Studio assistant (relayed as the owner)\n\nRebase the icon fix on main before review; the grouping change landed there this morning.",
+            {
+              mentions: [teammate],
+              relayedFrom: {
+                agent,
+                channelId: "gallery",
+                notice:
+                  "@Sam Rivera Message from Studio assistant (relayed as the owner)",
+                verified: true,
+              },
+            },
+          ),
+        ],
+      },
     ],
   },
   {

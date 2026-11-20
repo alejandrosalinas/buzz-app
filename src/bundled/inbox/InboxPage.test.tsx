@@ -15,6 +15,7 @@ import {
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { PageTabs } from "../channels/PageTabs";
+import { InboxBadge } from "./InboxBadge";
 import { InboxPage } from "./InboxPage";
 import { InboxPreview } from "./InboxPreview";
 import { apply } from "./index";
@@ -665,6 +666,133 @@ it("keeps Unread only to the card and offers recent activity once caught up", as
   expect(unreadOnly()).not.toBeChecked();
 });
 
+it("keeps keyboard focus in the card after its Mark as read, down to Unread only once the list empties", async () => {
+  const h = fixture({ withDm: true });
+  render(previewAt(h));
+  await waitFor(() => expect(previewRows()).toHaveLength(3));
+  const action = (row: HTMLElement) =>
+    within(row).queryByRole("button", { name: /^Mark as read / });
+  const open = (row: HTMLElement) =>
+    within(row).getByRole("button", { name: /^Open / });
+  const readFromKeyboard = (row: HTMLElement) => {
+    const button = action(row);
+    if (!button) throw new Error("Missing Mark as read");
+    button.focus();
+    fireEvent.click(button);
+  };
+
+  // The read row stays without Unread only, and its own row takes focus.
+  const [first] = previewRows();
+  if (!first) throw new Error("Missing preview row");
+  readFromKeyboard(first);
+  await waitFor(() => expect(action(first)).not.toBeInTheDocument());
+  await waitFor(() => expect(open(first)).toHaveFocus());
+  expect(previewRows()).toHaveLength(3);
+
+  // Under Unread only the row leaves, and a neighbor takes focus.
+  fireEvent.click(screen.getByRole("switch", { name: "Unread only" }));
+  await waitFor(() => expect(previewRows()).toHaveLength(2));
+  const [leaving, staying] = previewRows();
+  if (!leaving || !staying) throw new Error("Missing unread rows");
+  readFromKeyboard(leaving);
+  await waitFor(() => expect(previewRows()).toEqual([staying]));
+  await waitFor(() => expect(open(staying)).toHaveFocus());
+
+  // The final row empties the list; Unread only keeps focus in the card.
+  readFromKeyboard(staying);
+  expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Unread only" })).toHaveFocus(),
+  );
+});
+
+it("saves both steps of the card's two-step Mark as read", async () => {
+  const h = fixture();
+  const root = message(h.alice, "room", "Two-step root", 30, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const child = message(h.alice, "room", "Two-step reply", 31, [
+    ["p", h.viewer.pubkey],
+    ["e", root.id, "", "reply"],
+  ]);
+  h.events.push(root, child);
+  h.emit([root, child]);
+  render(previewAt(h));
+  await waitFor(() =>
+    expect(
+      h.owner.session.unread
+        .inbox()
+        .items.find((entry) => entry.id === `room:${root.id}`)?.readThrough,
+    ).toHaveLength(2),
+  );
+  const row = await waitFor(() => {
+    const found = previewRows().find((entry) =>
+      entry.textContent?.includes("Two-step reply"),
+    );
+    if (!found) throw new Error("Missing two-step row");
+    return found;
+  });
+  fireEvent.click(within(row).getByRole("button", { name: /^Mark as read / }));
+  await waitFor(() =>
+    expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBe(31),
+  );
+  expect(h.journal()?.state.frontiers[`msg:${root.id}`]).toBe(30);
+});
+
+it("stops the card's two-step Mark as read before a newer unread reminder", async () => {
+  const h = fixture();
+  const root = message(h.alice, "room", "Two-step root", 30, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const child = message(h.alice, "room", "Two-step reply", 31, [
+    ["p", h.viewer.pubkey],
+    ["e", root.id, "", "reply"],
+  ]);
+  h.events.push(root, child);
+  h.emit([root, child]);
+  render(previewAt(h), { wrapper: ToastProvider });
+  const thread = {
+    kind: "thread" as const,
+    channelId: "room",
+    rootId: root.id,
+  };
+  const item = () =>
+    h.owner.session.unread
+      .inbox()
+      .items.find((entry) => entry.id === `room:${root.id}`);
+  await waitFor(() => expect(item()?.readThrough).toHaveLength(2));
+  const row = await waitFor(() => {
+    const found = previewRows().find((entry) =>
+      entry.textContent?.includes("Two-step reply"),
+    );
+    if (!found) throw new Error("Missing two-step row");
+    return found;
+  });
+  const release = h.holdSave();
+  let reminder: Promise<unknown> | undefined;
+  try {
+    fireEvent.click(
+      within(row).getByRole("button", { name: /^Mark as read / }),
+    );
+    await waitFor(() => expect(h.saveStarted()).toBe(true));
+    // A newer reminder, as another window's Mark as unread, queues behind the
+    // first step's save.
+    reminder = h.owner.session.unread.markUnreadLocal(thread);
+  } finally {
+    await act(async () => release());
+  }
+  await act(async () => {
+    await reminder;
+  });
+  // The read stopped, so the row keeps its action and says so.
+  expect(await screen.findByText("Couldn't mark as read")).toBeInTheDocument();
+  // The first step saved; the older second step never erases the reminder.
+  expect(h.journal()?.state.frontiers[`msg:${root.id}`]).toBe(30);
+  expect(h.journal()?.localUnread[`thread:${root.id}`]).toBeTypeOf("number");
+  expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
+  await waitFor(() => expect(item()?.unreadCount).toBeGreaterThan(0));
+});
+
 it("leads the card's header with the total and counts a mention only while it is unread", async () => {
   const h = fixture({ withSolo: true });
   render(previewAt(h));
@@ -860,6 +988,7 @@ function fixture(
     failRoster?: boolean;
     archivedChannel?: boolean;
     withDm?: boolean;
+    withMutes?: boolean;
     withSolo?: boolean;
     withSenders?: boolean;
     holdProfiles?: boolean;
@@ -1055,6 +1184,18 @@ function fixture(
     {
       viewer: viewer.pubkey,
       relayAuthor: relayKey.pubkey,
+      ...(options.withMutes
+        ? {
+            decodeSidebarPreferences: async () => ({
+              sections: [],
+              assignments: {},
+              starred: [],
+              muted: [],
+            }),
+            writeSidebarMute: async ({ channelId, muted }) =>
+              muted ? [channelId] : [],
+          }
+        : {}),
       query: async (filters) => {
         if (
           filters.some(
@@ -1226,6 +1367,20 @@ function fixture(
         const work = owner.session.unread.markThrough(target, id);
         readSteps.push({ target, id, work });
         return work;
+      },
+      prepareReadThrough(
+        steps: Parameters<typeof owner.session.unread.prepareReadThrough>[0],
+      ) {
+        // Record each step as it is saved, as markThrough records its one.
+        return owner.session.unread
+          .prepareReadThrough(steps)
+          .map((save, index) => () => {
+            const work = save();
+            const step = steps[index];
+            if (step)
+              readSteps.push({ target: step.target, id: step.messageId, work });
+            return work;
+          });
       },
     },
   };
@@ -1462,6 +1617,19 @@ function fixture(
     },
     failThreadSave() {
       failThreadSave = true;
+    },
+    /** Another window's local Mark as unread: saved, but this owner is not told. */
+    markUnreadElsewhere(key: string) {
+      if (!journal) throw new Error("Missing read journal");
+      const revision = journal.revision + 1;
+      journal = readJournal(
+        {
+          ...journal,
+          revision,
+          localUnread: { ...journal.localUnread, [key]: revision },
+        },
+        viewer.pubkey,
+      );
     },
     saveStarted: () => saveStarted,
     holdSave() {
@@ -1893,7 +2061,7 @@ it("lets a joined Guest read an Inbox item and change its personal unread state"
 // the row's state: a read row offers Mark unread, an unread row Mark as read.
 async function openRowMenu(
   method: "context" | "keyboard" | "contextKey" = "context",
-  name: "Mark as read" | "Mark unread" = "Mark unread",
+  name: "Mark as read" | "Mark as unread" = "Mark as unread",
 ) {
   const row = rows()[0];
   if (!row) throw new Error("Missing inbox row");
@@ -1915,7 +2083,7 @@ async function openRowMenu(
   const action = await screen.findByRole("menuitem", { name });
   expect(
     screen.queryByRole("menuitem", {
-      name: name === "Mark unread" ? "Mark as read" : "Mark unread",
+      name: name === "Mark as unread" ? "Mark as read" : "Mark as unread",
     }),
   ).not.toBeInTheDocument();
   return action;
@@ -1962,7 +2130,7 @@ it.each(["Please review", "A thread update"])(
     );
     fireEvent.contextMenu(within(row).getByRole("button", { name: /^Open / }));
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Mark unread" }),
+      await screen.findByRole("menuitem", { name: "Mark as unread" }),
     );
     await waitFor(() =>
       expect(
@@ -2006,7 +2174,9 @@ it("reads a reopened row again after its tab closes", async () => {
   await findReader();
   await waitFor(() => expect(unread()).not.toBeInTheDocument());
   fireEvent.contextMenu(within(row()).getByRole("button", { name: /^Open / }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Mark unread" }));
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Mark as unread" }),
+  );
   await waitFor(() => expect(unread()).toBeInTheDocument());
   const side = sideTabList();
   if (!side) throw new Error("Missing side tabs");
@@ -2589,7 +2759,7 @@ it.each(["context", "keyboard"] as const)(
     await waitFor(() => expect(row).toHaveAttribute("data-unread"));
     expect(row).toBeInTheDocument();
     expect(screen.getAllByRole("menuitem")).toEqual([action]);
-    expect(action).toHaveTextContent("Mark unread");
+    expect(action).toHaveTextContent("Mark as unread");
     expect(action).toHaveAttribute("aria-disabled", "true");
     const before = h.journal();
     fireEvent.click(action);
@@ -2638,7 +2808,7 @@ it("opens local unread actions with the ContextMenu key without changing selecti
   );
   expect(queryReader()).not.toBeInTheDocument();
   const action = await openRowMenu("contextKey");
-  expect(action).toHaveTextContent("Mark unread");
+  expect(action).toHaveTextContent("Mark as unread");
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21);
   expect(queryReader()).not.toBeInTheDocument();
   expect(sideTabs()).toEqual([]);
@@ -2793,6 +2963,122 @@ it("two-step read access loss during its first save stops before the second step
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Reading observation expired",
   );
+});
+
+it("stops a two-step Mark as read before a newer unread reminder, even on Retry", async () => {
+  const h = fixture();
+  const root = message(h.alice, "room", "Reminder root", 30, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const child = message(h.alice, "room", "Reminder reply", 31, [
+    ["p", h.viewer.pubkey],
+    ["e", root.id, "", "reply"],
+  ]);
+  h.events.push(root, child);
+  h.emit([root, child]);
+  render(h.view);
+  await screen.findByText("Reminder reply");
+  await waitFor(() =>
+    expect(h.owner.session.inboxFeed.snapshot().status).toBe("ready"),
+  );
+  const item = () =>
+    h.owner.session.unread
+      .inbox()
+      .items.find((entry) => entry.id === `room:${root.id}`);
+  expect(item()?.readThrough).toHaveLength(2);
+  const row = rows().find((entry) =>
+    entry.textContent?.includes("Reminder reply"),
+  );
+  if (!row) throw Error("Missing two-step row");
+  const release = h.holdSave();
+  let reminder: Promise<unknown> | undefined;
+  try {
+    fireEvent.click(
+      within(row).getByRole("button", { name: /^Mark as read / }),
+    );
+    await waitFor(() => expect(h.saveStarted()).toBe(true));
+    // A newer reminder, as another window's Mark as unread, queues behind the
+    // first step's save.
+    reminder = h.owner.session.unread.markUnreadLocal({
+      kind: "thread",
+      channelId: "room",
+      rootId: root.id,
+    });
+  } finally {
+    await act(async () => release());
+  }
+  await act(async () => {
+    await reminder;
+  });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Reading observation expired",
+  );
+  // The first step saved; the older second step never erases the reminder.
+  expect(h.journal()?.state.frontiers[`msg:${root.id}`]).toBe(30);
+  expect(h.journal()?.localUnread[`thread:${root.id}`]).toBeTypeOf("number");
+  expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
+  // Retry cannot resume the stopped read and erase the reminder either.
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
+  await waitFor(() =>
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
+  );
+  expect(h.journal()?.localUnread[`thread:${root.id}`]).toBeTypeOf("number");
+  expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
+  await waitFor(() => expect(item()?.unreadCount).toBeGreaterThan(0));
+});
+
+it("a two-step Mark as read's Retry keeps its click's cut before a newer unread reminder", async () => {
+  const h = fixture();
+  const root = message(h.alice, "room", "Retry root", 30, [
+    ["p", h.viewer.pubkey],
+  ]);
+  const child = message(h.alice, "room", "Retry reply", 31, [
+    ["p", h.viewer.pubkey],
+    ["e", root.id, "", "reply"],
+  ]);
+  h.events.push(root, child);
+  h.emit([root, child]);
+  render(h.view);
+  await screen.findByText("Retry reply");
+  await waitFor(() =>
+    expect(h.owner.session.inboxFeed.snapshot().status).toBe("ready"),
+  );
+  expect(
+    h.owner.session.unread
+      .inbox()
+      .items.find((entry) => entry.id === `room:${root.id}`)?.readThrough,
+  ).toHaveLength(2);
+  const row = rows().find((entry) =>
+    entry.textContent?.includes("Retry reply"),
+  );
+  if (!row) throw Error("Missing two-step row");
+  h.failThreadSave();
+  fireEvent.click(within(row).getByRole("button", { name: /^Mark as read / }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "thread disk full",
+  );
+  expect(h.journal()?.state.frontiers[`msg:${root.id}`]).toBe(30);
+  // Another window saves a reminder after the click, before Retry.
+  h.markUnreadElsewhere(`thread:${root.id}`);
+  fireEvent.click(screen.getByRole("button", { name: "Retry activity" }));
+  // Retry saves the failed step again under the click's cut, which rejects it.
+  await waitFor(() => expect(h.readSteps).toHaveLength(3));
+  await waitFor(() =>
+    expect(screen.getByRole("list", { name: "Activity" })).toHaveAttribute(
+      "aria-busy",
+      "false",
+    ),
+  );
+  expect(h.readSteps.map((step) => step.id)).toEqual([
+    root.id,
+    child.id,
+    child.id,
+  ]);
+  expect(h.journal()?.state.frontiers[`thread:${root.id}`]).toBeUndefined();
+  expect(h.journal()?.localUnread[`thread:${root.id}`]).toBeTypeOf("number");
 });
 
 it.each(["retry", "other", "blur"] as const)(
@@ -3080,7 +3366,7 @@ it("combines the existing filter choices without placeholder actions", async () 
       .map((list) => list.getAttribute("aria-label")),
   ).toEqual(["Activity type"]);
   expect(
-    screen.queryByRole("button", { name: /Mark shown as read|Mark unread/ }),
+    screen.queryByRole("button", { name: /Mark shown as read|Mark as unread/ }),
   ).toBeNull();
   // Mark as read is a per-row action, never a list-wide one.
   expect(
@@ -3389,7 +3675,7 @@ it("routine delayed publication does not cancel Retry for a failed mark-unread s
   const release = h.holdSave();
   h.failSave();
   try {
-    fireEvent.click(screen.getByRole("menuitem", { name: "Mark unread" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark as unread" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -3502,19 +3788,19 @@ it("a Solo chat row includes ordinary agent responses under All, not DMs, keepin
   await waitFor(() => expect(rows()[0]).toHaveTextContent("Agent progress"));
   expect(rows()[1]).toHaveTextContent("A thread update");
   expect(screen.queryByText("Please review this")).not.toBeInTheDocument();
-  // Opening the timeline row reads it with one channel catch-up mark, leaving
-  // its separate thread row unread.
+  // Opening the timeline row reads it with one channel frontier write, which
+  // also covers the older reply in its separate thread row.
   const before = h.journal()?.revision ?? 0;
   fireEvent.click(
     within(rows()[0] as HTMLElement).getByRole("button", { name: /^Open / }),
   );
-  await waitFor(() =>
-    expect(h.journal()?.state.frontiers["activity:room"]).toBe(30),
-  );
+  await waitFor(() => expect(h.journal()?.state.frontiers.room).toBe(30));
   expect(h.journal()?.revision).toBe(before + 1);
-  expect(
-    within(rows()[1] as HTMLElement).getByRole("img", { name: "Unread" }),
-  ).toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      within(rows()[1] as HTMLElement).queryByRole("img", { name: "Unread" }),
+    ).not.toBeInTheDocument(),
+  );
   // The sidebar keeps Solo chats apart from direct messages; so does Inbox.
   await chooseFilter("DMs");
   expect(screen.queryByText("Agent progress")).not.toBeInTheDocument();
@@ -5173,6 +5459,206 @@ it.each(["solo", "dm", "thread"] as const)(
     }
   },
 );
+
+it.each(["page", "preview"] as const)(
+  "keeps direct mentions and DMs in the %s when channels are muted",
+  async (surface) => {
+    const h = fixture({ withDm: true, withMutes: true });
+    const root = h.root;
+    if (!root) throw new Error("Missing fixture root");
+    h.addEvent(
+      signed(h.alice, {
+        kind: 7,
+        content: "❤️",
+        created_at: 30,
+        tags: [
+          ["e", root.id],
+          ["p", h.viewer.pubkey],
+        ],
+      }),
+    );
+    const preferences = h.session.sidebarPreferences;
+    await preferences.ensure();
+    render(
+      <>
+        {surface === "page" ? h.view : previewAt(h)}
+        <InboxBadge relay={h.relay} />
+      </>,
+    );
+    const reaction = { name: /Alice reacted with heart/ };
+    await screen.findByText("A thread update");
+    await screen.findByText("Please review this");
+    await screen.findByRole("button", reaction);
+    expect(screen.getByRole("img", { name: "3 unread" })).toBeVisible();
+
+    await act(async () => {
+      await preferences.setMute("room", true);
+    });
+    expect(screen.getByText("A direct reply")).toBeVisible();
+    expect(screen.queryByText("A thread update")).not.toBeInTheDocument();
+    expect(screen.getByText("Please review this")).toBeVisible();
+    expect(screen.queryByRole("button", reaction)).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "2 unread" })).toBeVisible();
+    if (surface === "preview")
+      expect(
+        screen.getByText("2 unread · 1 mention · 1 DM"),
+      ).toBeInTheDocument();
+
+    const threadMention = message(
+      h.alice,
+      "room",
+      "Direct mention in thread",
+      30,
+      [
+        ["e", root.id, "", "reply"],
+        ["p", h.viewer.pubkey],
+      ],
+    );
+    const laterReply = message(h.alice, "room", "Another thread reply", 31, [
+      ["e", root.id, "", "reply"],
+    ]);
+    act(() => h.emit([threadMention, laterReply]));
+    await screen.findByText("Direct mention in thread");
+    // Wait for the session to project the reply so its absence proves the mute.
+    await waitFor(() =>
+      expect(
+        h.session.unread
+          .inbox()
+          .items.some((item) => item.messageIds.includes(laterReply.id)),
+      ).toBe(true),
+    );
+    expect(screen.queryByText("Another thread reply")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "3 unread" })).toBeVisible();
+
+    await act(async () => {
+      await h.session.unread.markThrough(
+        { kind: "thread", channelId: "room", rootId: root.id },
+        threadMention.id,
+      );
+    });
+    expect(screen.getByText("Direct mention in thread")).toBeVisible();
+    expect(screen.getByRole("img", { name: "2 unread" })).toBeVisible();
+
+    await act(async () => {
+      await preferences.setMute("room", false);
+    });
+    expect(screen.getByText("Another thread reply")).toBeVisible();
+    expect(
+      screen.queryByText("Direct mention in thread"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Please review this")).toBeVisible();
+    expect(screen.getByRole("button", reaction)).toBeVisible();
+    expect(screen.getByRole("img", { name: "3 unread" })).toBeVisible();
+    await act(async () => {
+      await preferences.setMute("dm-room", true);
+    });
+    expect(screen.getByText("A direct reply")).toBeVisible();
+    expect(screen.getByRole("img", { name: "3 unread" })).toBeVisible();
+  },
+);
+
+it.each(["page", "preview"] as const)(
+  "keeps muted DM reactions in the %s",
+  async (surface) => {
+    const h = fixture({ withDm: true, withMutes: true });
+    const target = message(
+      h.viewer,
+      "dm-room",
+      "My DM acknowledged message",
+      25,
+    );
+    h.addEvent(target);
+    h.addEvent(
+      signed(h.alice, {
+        kind: 7,
+        content: "❤️",
+        created_at: 29,
+        tags: [
+          ["e", target.id],
+          ["p", h.viewer.pubkey],
+        ],
+      }),
+    );
+    const preferences = h.session.sidebarPreferences;
+    await preferences.ensure();
+    render(
+      <>
+        {surface === "page" ? h.view : previewAt(h)}
+        <InboxBadge relay={h.relay} />
+      </>,
+    );
+    const reaction = {
+      name: /Alice reacted with heart to your message: My DM acknowledged message/,
+    };
+    await screen.findByRole("button", reaction);
+    await act(async () => {
+      await preferences.setMute("dm-room", true);
+    });
+    expect(screen.getByRole("button", reaction)).toBeVisible();
+  },
+);
+
+it("hides an ordinary Activity-row Mark as unread after its channel is muted", async () => {
+  const h = fixture({ withMutes: true });
+  const preferences = h.session.sidebarPreferences;
+  await preferences.ensure();
+  const page = render(
+    <>
+      {h.view}
+      <InboxBadge relay={h.relay} />
+    </>,
+  );
+  await screen.findByText("A thread update");
+  await chooseFilter("Threads");
+  await markRead(h, "room");
+  const row = rows()[0];
+  if (!row) throw new Error("Missing ordinary thread row");
+  await waitFor(() => expect(row).not.toHaveAttribute("data-unread"));
+  fireEvent.contextMenu(within(row).getByRole("button", { name: /^Open / }));
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Mark as unread" }),
+  );
+  await waitFor(() => expect(row).toHaveAttribute("data-unread"));
+  expect(screen.getByRole("img", { name: "1 unread" })).toBeVisible();
+
+  await act(async () => {
+    await preferences.setMute("room", true);
+  });
+  expect(screen.queryByText("A thread update")).not.toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: "1 unread" })).toBeNull();
+
+  page.unmount();
+  render(
+    <>
+      {previewAt(h)}
+      <InboxBadge relay={h.relay} />
+    </>,
+  );
+  expect(screen.queryByText("A thread update")).not.toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: "1 unread" })).toBeNull();
+});
+
+it("opens a muted mention at the mention rather than an ordinary reply", async () => {
+  const h = fixture({ withMutes: true });
+  const preferences = h.session.sidebarPreferences;
+  await preferences.ensure();
+  render(h.view);
+  await screen.findByText("Please review this");
+  await act(async () => {
+    await preferences.setMute("room", true);
+  });
+  const mentionRow = rows().find((row) =>
+    row.textContent?.includes("Please review this"),
+  );
+  if (!mentionRow) throw new Error("Missing muted mention row");
+  fireEvent.click(within(mentionRow).getByRole("button", { name: /^Open / }));
+  const detail = await findReader();
+  await waitFor(() =>
+    expect(
+      detail.querySelector(`[data-message-id="${h.mention.id}"]`),
+    ).toHaveFocus(),
+  );
+});
 
 it("mixes hover reactions by time, preserves unread filtering, and opens the exact target", async () => {
   const h = fixture();

@@ -470,7 +470,7 @@ it("a chat's local agents get its first message and its Canvas before the relay 
       h.session.channelWrites.startingCanvas(channelId),
     );
   expect(heard.map((event) => event.id)).toEqual([message]);
-  await expect(canvas(id)).resolves.toBe("# Brief");
+  await expect(canvas(id)).resolves.toEqual({ content: "# Brief" });
   expect(
     h.query.mock.calls.some(([filters]) =>
       filters.some((filter) => filter["#h"]?.includes(id)),

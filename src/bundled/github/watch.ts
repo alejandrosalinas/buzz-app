@@ -1,9 +1,10 @@
 // Pull request watches for agents: what one GitHub read says about a pull
 // request, and whether that is worth waking the agent that asked. Code decides,
 // not a model: CI finishing on the head commit, or stuck; new feedback; and
-// what nothing else would wake it for on the way to merging: conflicts, a base
-// to catch up with as the last thing in the way, auto-merge turned off, and
-// being ready to merge. Recovering on its own wakes nothing.
+// what nothing else would wake it for on the way to merging: conflicts, losing
+// its approval, a base to catch up with as the last thing in the way,
+// auto-merge turned off, and being ready to merge. Recovering on its own wakes
+// nothing.
 //
 // The wake is the plugin's (`ctx.agents.wake`), not a message: the agent is
 // told it is data. So it quotes what GitHub says, check names and comments,
@@ -71,6 +72,9 @@ export type Watch = Readonly<{
   /** Auto-merge on or in the merge queue, as last read, and still so until
    * the agent is told it is not. */
   armed?: boolean | undefined;
+  /** Approved, as last read, and still so until the agent is told GitHub
+   * wants a review again. */
+  approved?: boolean | undefined;
   /** The merge state last known, which GitHub forgets while it works it out
    * again, as after the base moves. */
   merge?: string | undefined;
@@ -118,6 +122,10 @@ export type Step = Readonly<{
   wake?: string | undefined;
   /** Why the watch is over, when it is. */
   ended?: "merged" | "closed" | undefined;
+  /** With a wake, whether it was approved as last read, before telling: a
+   * wake that cannot be sent keeps the watch as it was but this, so losing
+   * an approval it saw come back is news. */
+  approved?: boolean | undefined;
 }>;
 
 /** The watch after `snapshot` at `now`, and what to tell its agent; unless
@@ -162,6 +170,7 @@ export function step(
       : watch;
   // Checks running again on the head it was told about.
   const rechecking = !snapshot.settled && prior.head === snapshot.head;
+  const { decision } = snapshot;
   const rerun =
     rechecking &&
     prior.reported === `${snapshot.head}:failed` &&
@@ -186,6 +195,9 @@ export function step(
     ready:
       prior.ready && (merging.ready || (rechecking && merging.readyOnceGreen)),
     armed: merging.armed || prior.armed,
+    approved:
+      decision === "APPROVED" ||
+      (decision !== "CHANGES_REQUESTED" && !!prior.approved),
     merge,
     pendingHead,
     since: !pendingHead
@@ -195,6 +207,13 @@ export function step(
         : now,
     woken: (prior.woken ?? []).filter((at) => now - at < DAY_MS),
   };
+  // Approval lost is told once checks are not running, so a push that
+  // dismisses stale approvals wakes once, with its CI result; checks pending
+  // long enough to be stuck no longer hold it. Changes requested forget it
+  // unannounced: that review comes as feedback.
+  const unapproved =
+    decision === "REVIEW_REQUIRED" &&
+    (!pendingHead || now - (next.since ?? now) >= STUCK_MS);
   // A failed head that turns green after a rerun is news too.
   const result = `${snapshot.head}:${snapshot.failed.length ? "failed" : "passed"}`;
   const news: News = {
@@ -204,6 +223,7 @@ export function step(
       next.stuck !== pendingHead &&
       now - (next.since ?? now) >= STUCK_MS,
     conflicted: merging.conflicted && !next.conflicted,
+    unapproved: !!next.approved && unapproved,
     behind: merging.behind && !next.behind,
     ready: merging.ready && !next.ready,
     disarmed: !!prior.armed && !merging.armed,
@@ -220,6 +240,7 @@ export function step(
   // An answer to the agent's own call is not a wake, so it waits for none.
   const told = paced ? [...woken, now] : woken;
   return {
+    approved: next.approved,
     watch: {
       ...next,
       // Feedback waiting goes with any wake.
@@ -233,6 +254,7 @@ export function step(
       behind: merging.behind || next.behind,
       ready: merging.ready || next.ready,
       armed: merging.armed,
+      approved: next.approved && !unapproved,
       wakes: watch.wakes + 1,
       woken: told,
     },
@@ -279,6 +301,7 @@ type News = Readonly<{
   ci: boolean;
   stuck: boolean;
   conflicted: boolean;
+  unapproved: boolean;
   behind: boolean;
   ready: boolean;
   disarmed: boolean;
@@ -328,6 +351,8 @@ function wakeText(
       `CI has been pending ${sha}for over ${STUCK_MS / 3_600_000} hours on ${url}; a check may be stuck.`,
     news.conflicted &&
       `Merge conflicts on ${url}: it can't merge cleanly into its base.`,
+    news.unapproved &&
+      `${url} is no longer approved: GitHub wants a review again, as when an approval is dismissed or more are required.`,
     news.behind &&
       `${url} is approved and green, but must catch up with its base before it can merge.`,
     news.disarmed &&

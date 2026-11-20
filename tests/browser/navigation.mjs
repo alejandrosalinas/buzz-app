@@ -28,7 +28,7 @@ export async function openPage(page, name, { connected = true } = {}) {
   await selectPage(page, name, { connected });
 }
 
-// Nexus composes chat creation inside Chats; ordinary Buzz keeps the global menu.
+// The sidebar's floating New button hosts the New options menu.
 export async function newChat(page) {
   // The community switcher appears after local startup has replaced the launch view.
   await expect(
@@ -47,25 +47,13 @@ export async function newChat(page) {
     });
     if (await show.isVisible()) await show.click();
   }
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  const menu = page.getByRole("menu");
-  await expect(menu).toBeVisible();
-  const globalChat = menu.getByRole("menuitem", {
-    name: "New chat",
+  const options = page.getByRole("button", {
+    name: "New options",
     exact: true,
   });
-  if (await globalChat.isVisible()) {
-    await globalChat.click();
-    return;
-  }
-  await page.keyboard.press("Escape");
-  await page.getByRole("tab", { name: "Solo", exact: true }).click();
-  await expect(
-    page.getByRole("tab", { name: "Solo", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await page
-    .getByRole("button", { name: "New chat in Chats", exact: true })
-    .click();
+  await options.focus();
+  await options.press("Enter");
+  await page.getByRole("menuitem", { name: "New chat", exact: true }).click();
 }
 
 // The agents-only composer pill's menu adds and removes agents, never the

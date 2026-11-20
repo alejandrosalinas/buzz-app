@@ -15,15 +15,15 @@ test.use({
 
 async function createWorkspace(page, id, name) {
   await page
-    .locator(`[data-solo-channel-id="${id}"]`)
+    .locator(`[data-solo-destination-id="${id}"]`)
     .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move to", exact: true }).hover();
+  await page.getByRole("menuitem", { name: "Move to…", exact: true }).hover();
   await page
-    .getByRole("menuitem", { name: "New workspace", exact: true })
+    .getByRole("menuitem", { name: "Create new…", exact: true })
     .click();
   const dialog = page.getByRole("dialog");
   await expect(page.locator('[role="menu"]')).toHaveCount(0);
-  const field = dialog.getByRole("textbox", { name: "Workspace name" });
+  const field = dialog.getByRole("textbox", { name: "Name", exact: true });
   await expect(field).toBeFocused();
   await field.fill(name);
   await dialog.getByRole("button", { name: "Create and move" }).click();
@@ -34,6 +34,8 @@ async function createWorkspace(page, id, name) {
 }
 
 async function pull(page, from, to) {
+  // Keep the header clear of the sidebar's floating New button.
+  await from.evaluate((node) => node.scrollIntoView({ block: "center" }));
   const start = await from.boundingBox();
   const end = await to.boundingBox();
   if (!start || !end) throw new Error("Missing workspace header");
@@ -70,34 +72,51 @@ test("ordinary and composed workspace headers reorder, cancel and restore", asyn
       await newChat(page);
     }
     const sidebar = page.getByRole("navigation", {
-      name: "Solo conversations",
-    });
-    const work = sidebar.locator("[data-project]").filter({
-      has: page.getByRole("button", { name: "Work", exact: true }),
-    });
-    const home = sidebar.locator("[data-project]").filter({
-      has: page.getByRole("button", { name: "Home", exact: true }),
+      name: "Subscribed channels",
     });
     const heading = (name) =>
-      sidebar.getByRole("button", { name, exact: true });
+      composed
+        ? sidebar.getByRole("button", { name, exact: true })
+        : sidebar.locator(`summary[aria-label="${name}"]`);
+    const frame = (name) =>
+      heading(name).locator(
+        composed
+          ? "xpath=ancestor::*[@data-project][1]"
+          : "xpath=ancestor::*[@data-sidebar-section][1]",
+      );
+    const work = frame("Work");
+    const home = frame("Home");
     const order = () =>
       sidebar
         .locator(
-          "[data-project] > [data-solo-menu-id], [data-project] [data-solo-workspace-id]",
+          '[data-sidebar-section^="group:"] summary, [data-solo-workspace-id]',
         )
         .evaluateAll((nodes) => nodes.map((node) => node.textContent.trim()));
     await expect.poll(order).toEqual(["Work", "Home"]);
     const disclosure = composed
       ? home.getByRole("button", { name: /tasks and chats in Home/ })
       : heading("Home");
-    if ((await disclosure.getAttribute("aria-expanded")) === "false")
-      await disclosure.click();
+    const isOpen = () =>
+      composed
+        ? disclosure
+            .getAttribute("aria-expanded")
+            .then((value) => value === "true")
+        : disclosure
+            .locator("..")
+            .getAttribute("open")
+            .then((value) => value !== null);
+    if (!(await isOpen())) await disclosure.click();
     await disclosure.click();
     const expanded = () =>
       composed
         ? home.getByRole("button", { name: "Show tasks and chats in Home" })
         : heading("Home");
-    await expect(expanded()).toHaveAttribute("aria-expanded", "false");
+    const expectClosed = async () => {
+      if (composed)
+        await expect(expanded()).toHaveAttribute("aria-expanded", "false");
+      else await expect(expanded().locator("..")).not.toHaveAttribute("open");
+    };
+    await expectClosed();
     if (composed) {
       await heading("Work").click();
       await expect(heading("Work")).toHaveAttribute("aria-current", "page");
@@ -116,8 +135,8 @@ test("ordinary and composed workspace headers reorder, cancel and restore", asyn
     await expect.poll(order).toEqual(["Work", "Home"]);
     expect(app.report.sidebarPublications).toHaveLength(baseline);
 
-    // Unfiled Chats is pinned; it cannot accept a workspace-header drop.
-    await pull(page, heading("Home"), heading("Chats"));
+    // Dropping outside the navigation must leave the workspace order intact.
+    await pull(page, heading("Home"), page.getByRole("main"));
     await expect(home).toHaveAttribute("data-section-dragging");
     await expect(
       sidebar.locator("[data-drop-edge], [data-drop-target]"),
@@ -132,11 +151,11 @@ test("ordinary and composed workspace headers reorder, cancel and restore", asyn
     await page.mouse.up();
     await expect.poll(order).toEqual(["Home", "Work"]);
     await published(baseline + 1);
-    await expect(expanded()).toHaveAttribute("aria-expanded", "false");
+    await expectClosed();
     // Suppress a late pointer click after the drop without disabling keyboard
     // activation or the next deliberate pointer action.
     await heading("Home").dispatchEvent("click", { detail: 1 });
-    await expect(expanded()).toHaveAttribute("aria-expanded", "false");
+    await expectClosed();
     if (composed) {
       await expect(heading("Work")).toHaveAttribute("aria-current", "page");
       await expect(heading("Home")).not.toHaveAttribute("aria-current");
@@ -148,23 +167,25 @@ test("ordinary and composed workspace headers reorder, cancel and restore", asyn
 
     await page.reload();
     await expect.poll(order).toEqual(["Home", "Work"]);
-    await expect(expanded()).toHaveAttribute("aria-expanded", "false");
+    await expectClosed();
     await expect(
-      work.locator(`[data-solo-channel-id="${alpha}"]`),
+      work.locator(`[data-solo-destination-id="${alpha}"]`),
     ).toBeVisible();
     await expect(sidebar.getByRole("alert")).toHaveCount(0);
 
-    await sidebar.getByRole("button", { name: "Actions for Home" }).focus();
+    await sidebar
+      .getByRole("button", {
+        name: composed ? "Actions for Home" : "More actions for Home",
+        exact: true,
+      })
+      .focus();
     await page.keyboard.press("Enter");
-    await expect(
-      page.getByRole("menuitem", { name: "Move up", exact: true }),
-    ).toBeDisabled();
     await page
       .getByRole("menuitem", { name: "Move down", exact: true })
       .focus();
     await page.keyboard.press("Enter");
     await expect.poll(order).toEqual(["Work", "Home"]);
     await published(baseline + 2);
-    await expect(expanded()).toHaveAttribute("aria-expanded", "false");
+    await expectClosed();
   }
 });

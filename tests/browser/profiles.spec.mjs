@@ -948,12 +948,14 @@ for (const local of [false, true]) {
         [],
       );
     } else {
+      // Without a DM, Message drafts one: Pinky sees nothing until a send.
       await message.click();
-      await expect
-        .poll(() => page.evaluate(() => window.profilesFixture.dmOpens))
-        .toEqual([
-          [await page.evaluate(() => window.profilesFixture.keys.pinky)],
-        ]);
+      await expect(
+        page.getByRole("button", { name: "Remove Pinky" }),
+      ).toBeVisible();
+      expect(await page.evaluate(() => window.profilesFixture.dmOpens)).toEqual(
+        [],
+      );
     }
     expect(errors.unexplained()).toEqual([]);
   });
@@ -1316,7 +1318,9 @@ test("member Send message navigates a human DM without sending or returning focu
   page,
 }) => {
   const errors = watchPageErrors(page);
-  await page.goto("/tests/fixtures/profiles.html?member-message");
+  await page.goto("/tests/fixtures/profiles.html?member-message&existing-dm");
+  // The existing DM opens first; Members starts from channel One.
+  await page.locator('[data-channel-id="one"]').click();
   await page
     .getByRole("button", { name: "Manage members of One", exact: true })
     .click();

@@ -36,6 +36,7 @@ import type { Navigation } from "../../features/navigation/controller";
 import type {
   Agent,
   Agents,
+  ConfigHistory,
   RegisteredAgentType,
   TranscriptRequest,
 } from "../../features/agents/service";
@@ -110,7 +111,7 @@ it("updates a mounted profile from the shared name view without replacing its id
     );
     expect(await screen.findByRole("heading", { name })).toBeTruthy();
     expect(screen.queryByRole("img", { name: /^Presence:/ })).toBeNull();
-    expect(screen.getByText("Active", { exact: true })).toBeVisible();
+    expect(screen.getByText("Online", { exact: true })).toBeVisible();
     expect(
       screen.getAllByRole("img", { name: `${name} avatar, online` }),
     ).toHaveLength(1);
@@ -123,11 +124,11 @@ it("updates a mounted profile from the shared name view without replacing its id
     expect(
       screen.getByRole("img", { name: `${name} avatar, online` }),
     ).toBeTruthy();
-    expect(screen.queryByRole("img", { name: "Presence: Active" })).toBeNull();
-    expect(screen.getByText("Active", { exact: true })).toBeVisible();
+    expect(screen.queryByRole("img", { name: /^Presence:/ })).toBeNull();
+    expect(screen.getByText("Online", { exact: true })).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Info" }));
     expect(screen.queryByRole("img", { name: /^Presence:/ })).toBeNull();
-    expect(screen.getByText("Active", { exact: true })).toBeVisible();
+    expect(screen.getByText("Online", { exact: true })).toBeVisible();
     expect(
       screen.getAllByRole("img", { name: `${name} avatar, online` }),
     ).toHaveLength(1);
@@ -149,7 +150,7 @@ it("updates a mounted profile from the shared name view without replacing its id
       expect(
         screen.getByRole("img", { name: `${name} avatar, ${status}` }),
       ).toBeTruthy();
-      expect(screen.queryByText("Active", { exact: true })).toBeNull();
+      expect(screen.queryByText("Online", { exact: true })).toBeNull();
     }
     presenceStatus.mockReturnValue("unknown");
     act(() => {
@@ -157,11 +158,11 @@ it("updates a mounted profile from the shared name view without replacing its id
       notify();
     });
     expect(screen.getByRole("img", { name: `${name} avatar` })).toBeTruthy();
-    expect(screen.queryByRole("img", { name: "Presence: Active" })).toBeNull();
+    expect(screen.queryByRole("img", { name: /^Presence:/ })).toBeNull();
     expect(document.querySelector(".buzz-avatar-status")).not.toHaveAttribute(
       "data-status",
     );
-    expect(screen.queryByText(/^(Active|Away|Offline)$/)).toBeNull();
+    expect(screen.queryByText(/^(Online|Away|Offline)$/)).toBeNull();
     expect(owner.session.profiles.snapshot().size).toBe(0);
   } finally {
     vi.useRealTimers();
@@ -358,7 +359,7 @@ it("exposes thinking through the named profile avatar across tabs", async () => 
     expect(
       screen.getByRole("img", { name: "Thinking agent avatar, thinking" }),
     ).toBeVisible();
-    expect(screen.getByText("Active", { exact: true })).toBeVisible();
+    expect(screen.getByText("Online", { exact: true })).toBeVisible();
     await userEvent
       .setup()
       .click(screen.getByRole("tab", { name: "Channels" }));
@@ -368,7 +369,7 @@ it("exposes thinking through the named profile avatar across tabs", async () => 
     expect(
       screen.getByRole("img", { name: "Thinking agent avatar, thinking" }),
     ).toBeVisible();
-    expect(screen.getByText("Active", { exact: true })).toBeVisible();
+    expect(screen.getByText("Online", { exact: true })).toBeVisible();
     act(() => {
       activity = { ...activity, turns: [] };
       for (const listener of listeners) listener();
@@ -396,6 +397,7 @@ function renderAgentActivity(
     dirty: boolean;
     saving: boolean;
   },
+  history?: ConfigHistory,
 ) {
   const owner = createRelaySession(null);
   const memories =
@@ -455,10 +457,12 @@ function renderAgentActivity(
         conversation,
         initialTranscript,
         openConversation,
+        settingsContent,
       }: {
         conversation?: { channelId: string; rootId?: string };
         initialTranscript?: TranscriptRequest;
         openConversation?: (channelId: string, threadRootId?: string) => void;
+        settingsContent?: ReactNode;
       }) {
         // Like a type's Activity tab: it acts on the request as it shows.
         const [first] = useState(!!initialTranscript);
@@ -476,6 +480,7 @@ function renderAgentActivity(
         return (
           <>
             <p>Echo {title.toLowerCase()}</p>
+            {history && settingsContent}
             {role === "settings" && (
               <button type="button" onClick={() => setDirty(true)}>
                 Make a change
@@ -516,6 +521,7 @@ function renderAgentActivity(
     pubkey: key,
     ...(memory && { owner: viewer }),
     name: "Echo",
+    ...(history && { owner: viewer, configProblem: "Unsupported settings" }),
     type: type.key,
     place: "here",
     config: {},
@@ -529,7 +535,7 @@ function renderAgentActivity(
     types: () => types,
     find: (pubkey: string) => (pubkey === key ? agent : undefined),
     memberships: () => [],
-    configHistory: () => undefined,
+    configHistory: () => history,
     addedTabs: () =>
       linkTab
         ? [
@@ -590,6 +596,63 @@ function renderAgentActivity(
     },
   );
 }
+
+it("focuses Previous versions when opening recovery from profile Activity", async () => {
+  const channel = "c";
+  const head = signed(keypair(), {
+    kind: 45010,
+    created_at: 1,
+    content: JSON.stringify({
+      version: 1,
+      agentType: "other",
+      settings: {},
+    }),
+    tags: [
+      ["ar", "1"],
+      ["h", channel],
+      ["d", "settings"],
+      ["type", "buzz.agent.settings"],
+      ["op", "create"],
+    ],
+  });
+  const history: ConfigHistory = {
+    read: async () => [head],
+    revise: async () => ({ status: "accepted" }),
+    sides: [
+      {
+        side: "settings",
+        expected: { channel, d: "settings", type: "buzz.agent.settings" },
+        head,
+        version: 0,
+      },
+    ],
+    settings: { agentType: "test/echo", schema: {} },
+  };
+  const dispose = renderAgentActivity(
+    [
+      { title: "Settings", role: "settings" },
+      { title: "Activity", role: "activity" },
+    ],
+    undefined,
+    false,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    history,
+  );
+  try {
+    const user = userEvent.setup();
+    const recovery = screen.getByRole("button", { name: "Previous Versions" });
+    recovery.focus();
+    await user.keyboard("{Enter}");
+    expect(
+      screen.getByRole("button", { name: "Previous versions" }),
+    ).toHaveFocus();
+  } finally {
+    dispose();
+  }
+});
 
 it.each([false, "opened"] as const)(
   "keeps an Activity profile mounted across version addresses (transcript %s)",

@@ -53,6 +53,9 @@ export type ArtifactImport = Readonly<{
   /** The final batch and this marker commit together. */
   marker?: string;
 }>;
+export type ArtifactCollectionChange =
+  | Readonly<{ ids: readonly string[] }>
+  | Readonly<{ reset: true }>;
 export type ArtifactCollection = {
   readonly scope: Readonly<{
     viewer: string;
@@ -64,6 +67,15 @@ export type ArtifactCollection = {
   page(query: ArtifactPageQuery): Promise<ArtifactPage>;
   /** Subscribe before the first read. Each notification requires a fresh read. */
   subscribe(listener: () => void): () => void;
+  /**
+   * Post-commit local invalidation hints, without content or access authority.
+   * Subscribe before scanning; buffer IDs during the scan, then re-read with get.
+   * Reset discards the scan/index. Rebuild after reopening or any delivery gap.
+   * Optional on older hosts. See docs/local-artifact-storage.md for recovery.
+   */
+  subscribeChanges?(
+    listener: (change: ArtifactCollectionChange) => void,
+  ): () => void;
   preferences: {
     get(id: string): Promise<JsonValue | undefined>;
     update(
@@ -100,6 +112,7 @@ export type ArtifactBatch = Readonly<{
 }>;
 /** Host-only writes. Plugins submit shared changes through the delivery service. */
 export type HostArtifactCollection = ArtifactCollection & {
+  subscribeChanges: NonNullable<ArtifactCollection["subscribeChanges"]>;
   applyBatch(batch: ArtifactBatch, signal?: AbortSignal): Promise<void>;
   checkpoint(): Promise<string | null>;
   knownIds(query: {

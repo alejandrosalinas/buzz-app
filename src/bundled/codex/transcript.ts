@@ -251,6 +251,7 @@ export type Lookup = Readonly<{
   /** The channel's name, as the agent named threads with it. */
   name?: string;
   root?: string;
+  community?: true;
   threadId?: string;
 }>;
 /** `legacy` threads were named without the tag, so their name alone does not
@@ -270,10 +271,11 @@ function startedFor(turns: readonly Turn[], lookup: Lookup) {
       )?.body;
       try {
         const context = JSON.parse(body ?? "") as Json;
-        return (
-          context.channel_id === lookup.channelId &&
-          (context.session_thread ?? undefined) === lookup.root
-        );
+        return lookup.community
+          ? context.session_scope === "community"
+          : context.session_scope !== "community" &&
+              context.channel_id === lookup.channelId &&
+              (context.session_thread ?? undefined) === lookup.root;
       } catch {
         return false;
       }
@@ -286,6 +288,7 @@ function startedFor(turns: readonly Turn[], lookup: Lookup) {
 async function findThreads(rpc: AppServer, lookup: Lookup): Promise<Found[]> {
   const conversation = {
     channelId: lookup.channelId,
+    ...(lookup.community ? { community: true as const } : {}),
     name: lookup.name ?? lookup.channelId,
     ...(lookup.root ? { root: lookup.root } : {}),
   };

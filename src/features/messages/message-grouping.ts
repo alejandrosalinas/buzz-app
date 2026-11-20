@@ -14,6 +14,9 @@ export function continuesMessageGroup(
     !current.workflowOwnerId &&
     !current.sentFromThread &&
     !previous.sentFromThread &&
+    // A relayed line is another agent's, never part of its signer's group.
+    !previous.relayedFrom?.verified &&
+    !current.relayedFrom?.verified &&
     previous.channelId === current.channelId &&
     previous.authorId === current.authorId &&
     (previous.audience === current.audience || current.audience === "agents") &&

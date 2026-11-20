@@ -70,9 +70,13 @@ test("profile snapshot and same-socket renewal coexist with real chat while opti
     expect(
       app.report.presenceSnapshots.some((snapshot) => snapshot.pending),
     ).toBe(true);
-    await expect(profile.getByText(/^(Active|Away|Offline)$/)).toHaveCount(0);
+    // One locator serves both checks, so a renamed label cannot leave the
+    // held-state check matching nothing while the released check still passes.
+    const presenceLine = profile.getByText(/^(Online|Away|Offline)$/);
+    await expect(presenceLine).toHaveCount(0);
     app.relay.releasePresence();
-    await expect(profile.getByText("Active", { exact: true })).toBeVisible();
+    await expect(presenceLine).toHaveText("Online");
+    await expect(presenceLine).toBeVisible();
     await expect(
       profile.getByRole("img", { name: "Alice Fixture avatar, online" }),
     ).toBeVisible();
@@ -269,7 +273,7 @@ test.describe("human message bylines omit presence", () => {
     await expect(
       profile.getByRole("img", { name: "Alice Fixture avatar, online" }),
     ).toBeVisible();
-    await expect(profile.getByText("Active", { exact: true })).toBeVisible();
+    await expect(profile.getByText("Online", { exact: true })).toBeVisible();
     app.presence("away");
     await expect(profile.getByText("Away", { exact: true })).toBeVisible();
     await expect(
@@ -341,7 +345,7 @@ test("real same-origin windows queue one publisher and transfer its Web Lock on 
     await second
       .getByRole("button", { name: "Your profile", exact: true })
       .click();
-    await second.getByRole("button", { name: /^Availability:/ }).click();
+    await second.getByRole("button", { name: /^Availability/ }).click();
     await second
       .getByRole("menuitemradio", { name: "Offline", exact: true })
       .click();

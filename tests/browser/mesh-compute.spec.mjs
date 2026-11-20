@@ -46,7 +46,7 @@ test("Mesh compute is off by default and can be enabled and disabled", async ({
   ).toHaveText("Open Buzz desktop to use shared compute.");
   await expect(
     page.getByText("Shared compute for Primary", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     page.getByRole("region", { name: "Community mesh", exact: true }),
   ).toHaveCount(0);

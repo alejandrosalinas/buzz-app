@@ -127,15 +127,27 @@ fn archive(event: &EventTemplate) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 fn member_administration(event: &EventTemplate) -> bool {
-    matches!(event.kind, 9000 | 9001)
-        && event.content.is_empty()
-        && event.created_at <= 9_007_199_254_740_991
-        && event.tags.len() == if event.kind == 9000 { 3 } else { 2 }
-        && tag(event, 0, "h").is_some_and(uuid)
-        && (ownership_transfer(event).is_some()
-            || (tag(event, 1, "p").is_some_and(super::hex_key)
-                && (event.kind == 9001
-                    || matches!(tag(event, 2, "role"), Some("admin" | "member" | "guest")))))
+    if !event.content.is_empty()
+        || event.created_at > 9_007_199_254_740_991
+        || !tag(event, 0, "h").is_some_and(uuid)
+    {
+        return false;
+    }
+    let target = tag(event, 1, "p").is_some_and(super::hex_key);
+    let role = matches!(tag(event, 2, "role"), Some("admin" | "member" | "guest"));
+    match (event.kind, event.tags.len()) {
+        (9000, 3) => ownership_transfer(event).is_some() || (target && role),
+        (9001, 2) => target,
+        (9050, 4) => {
+            target
+                && role
+                && matches!(
+                    tag(event, 3, "expected_role"),
+                    Some("admin" | "member" | "guest" | "bot")
+                )
+        }
+        _ => false,
+    }
 }
 /// The stepping-down owner of `[h, ["p", heir, "owner"], ["p", owner, "admin"]]`.
 fn ownership_transfer(event: &EventTemplate) -> Option<&str> {

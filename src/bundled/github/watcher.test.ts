@@ -529,6 +529,33 @@ describe("github_watch_pr", () => {
     app.dispose();
   });
 
+  it("keeps the old Interest watch if Attention turns off during a move", async () => {
+    const app = setup();
+    await app.call({ url });
+    const id = Object.keys(app.records[agent] ?? {}).find((slug) =>
+      slug.startsWith("watch/"),
+    );
+    if (!id) throw new Error("Missing watch");
+    const watch = app.records[agent]?.[id];
+    if (watch?.type !== "source") throw new Error("Missing source");
+    await app.save(agent, {
+      attention: {
+        "interest/github-pulls": { type: "interest", instructions: "Follow" },
+        [id]: { ...watch, interest_id: "github-pulls" },
+      },
+    });
+    const before = app.records[agent]?.[id];
+    const read = app.states.read.bind(app.states);
+    vi.spyOn(app.states, "read").mockImplementationOnce(async (...args) => {
+      const result = await read(...args);
+      app.attentionEnabled(false);
+      return result;
+    });
+    await expect(app.call({ url }, true)).rejects.toThrow(/Turn on Attention/);
+    expect(app.records[agent]?.[id]).toEqual(before);
+    app.dispose();
+  });
+
   it("drops watches saved before Attention instead of importing them", async () => {
     localStorage.setItem(
       "buzz.github.pull-watches.v1",
@@ -659,6 +686,30 @@ describe("github_watch_pr", () => {
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(app.texts().slice(2)).toEqual([
       `${url} is no longer set to merge while it is open: it left the merge queue, or auto-merge was turned off or cancelled.\n${url} looks ready to merge: approved, checks that block merging passed, no conflicts or unresolved threads. GitHub decides how many approvals it needs; check that before you turn on auto-merge.`,
+    ]);
+    app.dispose();
+  });
+
+  it("tells a lost approval again after a wake that could not be sent saw it come back", async () => {
+    const app = setup();
+    const green = { checks: [{ name: "unit", conclusion: "SUCCESS" }] };
+    app.gh(answer({ ...green, decision: "APPROVED", threads: [false] }));
+    await app.call({ url });
+    app.gh(answer({ ...green, decision: "REVIEW_REQUIRED", threads: [false] }));
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(app.texts()).toEqual([
+      `${url} is no longer approved: GitHub wants a review again, as when an approval is dismissed or more are required.`,
+    ]);
+    // Approved again and ready, but the wake cannot be sent; then dismissed.
+    await vi.advanceTimersByTimeAsync(SPACING_MS);
+    app.runs(false);
+    app.gh(answer({ ...green, decision: "APPROVED", threads: [true] }));
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    app.gh(answer({ ...green, decision: "REVIEW_REQUIRED", threads: [true] }));
+    app.runs(true);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(app.texts().slice(1)).toEqual([
+      `${url} is no longer approved: GitHub wants a review again, as when an approval is dismissed or more are required.`,
     ]);
     app.dispose();
   });

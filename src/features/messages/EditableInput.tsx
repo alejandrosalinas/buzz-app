@@ -1,4 +1,5 @@
 import {
+  memo,
   useLayoutEffect,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import {
   Plugin,
   Selection,
   AllSelection,
+  NodeSelection,
   TextSelection,
   type Transaction,
 } from "prosemirror-state";
@@ -30,6 +32,10 @@ import {
   joinForward,
   deleteSelection,
   selectAll,
+  splitBlockKeepMarks,
+  createParagraphNear,
+  selectNodeBackward,
+  selectNodeForward,
 } from "prosemirror-commands";
 import { sinkListItem, liftListItem } from "prosemirror-schema-list";
 import {
@@ -66,6 +72,7 @@ import {
   toggleComposerBlock,
   composerBlockLineBreak,
   composerBlockPrefix,
+  composerCodeBlockExit,
   composerCodeFence,
   composerFenceDelimiters,
   composerPrefixDelimiters,
@@ -75,7 +82,23 @@ import {
   applyComposerInlineInput,
   composerInlineDelimiters,
 } from "./composer-inline-input";
-import { composerMarkdown } from "./composer-markdown";
+import {
+  composerMarkdown,
+  type ComposerMarkdownMode,
+} from "./composer-markdown";
+import {
+  documentEditorDraft,
+  documentEditorMarkdown,
+} from "./document-editor-markdown";
+import {
+  DOCUMENT_PROFILE,
+  fitsDocumentRenderBudget,
+} from "../markdown/document-profile";
+import {
+  MarkdownDocument,
+  MarkdownTable,
+  sharedComponents,
+} from "../markdown/MarkdownDocument";
 import {
   annotationAt,
   annotationPlugin,
@@ -176,6 +199,15 @@ const CARET_KEYS = new Map<string | number, string>([
   [39, "ArrowRight"],
   [40, "ArrowDown"],
 ]);
+/** The visual direction each arrow key moves the caret. */
+const arrowDirections: Partial<
+  Record<string, "left" | "right" | "up" | "down">
+> = {
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+};
 /** The key a keydown names, restoring a caret key the host reported as a control
  * character (Right Arrow arrives as U+001D) from its code. */
 function keyboardKey(
@@ -405,8 +437,11 @@ export type EditableInputProps = Omit<
   disabled: boolean;
   placeholder: string;
   maxLength: number;
+  /** One policy for wire output, editing budgets and both clipboard flavors. */
+  markdownMode?: ComposerMarkdownMode;
   onDraftChange(draft: MentionDraft): void;
   onFormatsChange(active: readonly ComposerFormat[]): void;
+  onScrollCaret?(bottom: number): void;
   onEditLink?(edit: ComposerLinkEdit): void;
   /** A paste would exceed the serialized message budget; nothing was inserted. */
   onPasteTooLong?(): void;
@@ -419,8 +454,49 @@ export type EditableInputProps = Omit<
   onAnnotationMenu?: ((request: AnnotationMenuRequest) => void) | undefined;
 };
 
-/** ProseMirror owns native editing, composition, selection and a single history.
- * React owns only the noneditable token artwork and the surrounding composer. */
+const tableComponents: typeof sharedComponents = {
+  ...sharedComponents,
+  a: ({ children }) => children,
+  table: (props) => (
+    <MarkdownTable
+      {...props}
+      tabIndex={0}
+      onKeyDown={(event) => {
+        const table = event.currentTarget;
+        if (
+          table.scrollWidth <= table.clientWidth ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey ||
+          event.shiftKey
+        )
+          return;
+        const direction =
+          event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (!direction) return;
+        event.preventDefault();
+        table.scrollLeft += (direction * table.clientWidth) / 4;
+      }}
+    />
+  ),
+};
+const DocumentTable = memo(function DocumentTable({
+  source,
+}: {
+  source: string;
+}) {
+  return (
+    <MarkdownDocument
+      content={source}
+      profile={DOCUMENT_PROFILE}
+      components={tableComponents}
+      scale="inherit"
+    />
+  );
+});
+
+/** ProseMirror owns editing and history. React renders noneditable content
+ * and the surrounding composer. */
 export function EditableInput({
   ref,
   draft,
@@ -429,8 +505,10 @@ export function EditableInput({
   disabled,
   placeholder,
   maxLength,
+  markdownMode = "chat",
   onDraftChange,
   onFormatsChange,
+  onScrollCaret,
   onEditLink,
   onPasteTooLong,
   onSemanticPaste,
@@ -441,6 +519,8 @@ export function EditableInput({
   draft: MentionDraft;
   decorationsFor(draft: MentionDraft): readonly EditorDecoration[];
 }) {
+  const serializeDraft =
+    markdownMode === "document" ? documentEditorMarkdown : composerMarkdown;
   const mount = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const { enabled: autocorrect } = useMessageAutocorrectPreference();
@@ -448,8 +528,11 @@ export function EditableInput({
     draft,
     decorationsFor,
     maxLength,
+    markdownMode,
+    serializeDraft,
     onDraftChange,
     onFormatsChange,
+    onScrollCaret,
     onEditLink,
     onPasteTooLong,
     onSemanticPaste,
@@ -463,8 +546,11 @@ export function EditableInput({
     draft,
     decorationsFor,
     maxLength,
+    markdownMode,
+    serializeDraft,
     onDraftChange,
     onFormatsChange,
+    onScrollCaret,
     onEditLink,
     onPasteTooLong,
     onSemanticPaste,
@@ -491,6 +577,9 @@ export function EditableInput({
     >(),
   );
   const [, refresh] = useState(0);
+  const tableHosts = useRef(
+    new Map<HTMLElement, { key: number; source: string }>(),
+  );
   const scrollAfterTokens = useRef(false);
   const composing = useRef(false);
   /** Pending-chip settles and extensions that landed during an IME
@@ -530,11 +619,31 @@ export function EditableInput({
     };
   }, []);
 
+  // A selection keeps painting after focus leaves the editor or its window,
+  // where :focus no longer matches. Selected tokens follow the selection.
+  useLayoutEffect(() => {
+    const root = mount.current;
+    const document = root?.ownerDocument;
+    if (!root || !document) return;
+    const track = () => {
+      const selection = document.getSelection();
+      root.toggleAttribute(
+        "data-selection-inside",
+        !!selection?.rangeCount &&
+          root.contains(selection.anchorNode) &&
+          root.contains(selection.focusNode),
+      );
+    };
+    document.addEventListener("selectionchange", track);
+    return () => document.removeEventListener("selectionchange", track);
+  }, []);
+
   useLayoutEffect(() => {
     if (!mount.current) return;
     const initial = readComposerDocument(
       current.current.draft,
       current.current.decorationsFor(current.current.draft),
+      current.current.markdownMode,
     );
     let editor: EditorView;
     let separateHistory = false;
@@ -547,6 +656,73 @@ export function EditableInput({
     // keystroke; projectComposerDocument memoizes per immutable document.
     const projection = () => projectComposerDocument(editor.state.doc);
     const tokenViews = () => refresh((revision) => revision + 1);
+    const { markdown_table: table, paragraph } = composerSchema.nodes;
+    const endsWithTable = (doc: EditorNode) => doc.lastChild?.type === table;
+    const preserveTableSources = (tr: Transaction, overBudget = false) => {
+      const roots = new Set<number>();
+      for (const { from } of projectComposerDocument(tr.doc).tables) {
+        const position = tr.doc.resolve(from);
+        if (position.depth) roots.add(position.before(1));
+        else if (overBudget) roots.add(from);
+      }
+      // Source fallback keeps the enclosing list/quote prefixes and matches
+      // the editor's representation after a save and reload.
+      for (const position of [...roots].reverse()) {
+        const block = tr.doc.nodeAt(position);
+        if (!block) continue;
+        const source = documentEditorMarkdown(
+          projectComposerDocument(composerSchema.nodes.doc.create(null, block))
+            .draft,
+        );
+        const end = position + block.nodeSize;
+        const { head } = tr.selection;
+        tr.replaceWith(
+          position,
+          end,
+          paragraph.create(null, composerSchema.text(source)),
+        );
+        if (head >= position && head <= end)
+          tr.setSelection(
+            TextSelection.create(tr.doc, position + 1 + source.length),
+          );
+      }
+    };
+    const tableTextSelection = () => {
+      if (!tableHosts.current.size) return;
+      const selection = editor.dom.ownerDocument.getSelection();
+      if (!selection?.anchorNode || !selection.focusNode) return;
+      for (const element of tableHosts.current.keys())
+        if (
+          element.contains(selection.anchorNode) &&
+          element.contains(selection.focusNode)
+        )
+          return selection;
+    };
+    const copyTableText = (event: ClipboardEvent) => {
+      const selection = tableTextSelection();
+      if (!selection) return false;
+      if (!selection.isCollapsed)
+        event.clipboardData?.setData("text/plain", selection.toString());
+      event.preventDefault();
+      return true;
+    };
+    const selectAdjacentTable = (backward: boolean) => {
+      if (!projection().tables.length) return false;
+      let selected = false;
+      (backward ? selectNodeBackward : selectNodeForward)(
+        editor.state,
+        (tr) => {
+          if (
+            tr.selection instanceof NodeSelection &&
+            tr.selection.node.type === table
+          ) {
+            selected = true;
+            editor.dispatch(tr);
+          }
+        },
+      );
+      return selected;
+    };
     let formats: string | undefined;
     const selected = () => {
       const { from, to, empty, $from } = editor.state.selection;
@@ -600,8 +776,8 @@ export function EditableInput({
       filterTransaction(tr) {
         return (
           !tr.docChanged ||
-          composerMarkdown(projectComposerDocument(tr.doc).draft).length <=
-            current.current.maxLength
+          current.current.serializeDraft(projectComposerDocument(tr.doc).draft)
+            .length <= current.current.maxLength
         );
       },
       appendTransaction(transactions, old, state) {
@@ -764,6 +940,36 @@ export function EditableInput({
             token.to,
             composerSchema.text(token.node.attrs.source, token.node.marks),
           );
+        // Joins and HTML paste can bring hard breaks into single-line headings.
+        // Keep the first line as a heading and the rest as a paragraph.
+        if (current.current.markdownMode === "document") {
+          const { heading, hard_break } = composerSchema.nodes;
+          const splits: number[] = [];
+          tr.doc.descendants((node, pos) => {
+            if (!node.isTextblock) return;
+            if (node.type === heading && node.attrs.level > 2) {
+              let split: number | undefined;
+              node.forEach((child, offset) => {
+                if (split === undefined && child.type === hard_break)
+                  split = pos + 1 + offset;
+              });
+              if (split !== undefined) splits.push(split);
+            }
+            return false;
+          });
+          for (const split of splits.reverse()) {
+            tr.delete(split, split + 1);
+            tr.split(split, 1, [{ type: paragraph }]);
+          }
+        }
+        if (endsWithTable(tr.doc)) {
+          tr.insert(tr.doc.content.size, paragraph.create());
+          if (
+            tr.selection instanceof NodeSelection &&
+            tr.selection.node.type === table
+          )
+            tr.setSelection(Selection.atEnd(tr.doc));
+        }
         if (!tr.docChanged) return;
         // ProseMirror never passes a plugin its own appended transaction.
         mapPending(tr.mapping);
@@ -808,22 +1014,66 @@ export function EditableInput({
       styles.annotation ?? "",
       () => composing.current || !!editor?.composing,
     );
-    const state = (doc = initial) =>
-      EditorState.create({ doc, plugins: [history(), normalize, annotations] });
+    const state = (doc = initial) => {
+      if (endsWithTable(doc))
+        doc = doc.copy(doc.content.addToEnd(paragraph.create()));
+      const selection =
+        doc.firstChild?.type === table
+          ? Selection.findFrom(doc.resolve(0), 1, true)
+          : null;
+      return EditorState.create({
+        doc,
+        ...(selection ? { selection } : {}),
+        plugins: [history(), normalize, annotations],
+      });
+    };
     const setRange = (start: number, end: number, direction?: string) => {
       openTokens(start, end);
+      // A plugin can restore an exact saved source range inside a table. Open
+      // just that table as source, just as openTokens opens an indivisible chip.
+      const inside = projection().tables.filter(
+        (table) =>
+          (start > table.start && start < table.end) ||
+          (end > table.start && end < table.end),
+      );
+      if (inside.length) {
+        const tr = editor.state.tr;
+        const trailing = tr.doc.lastChild;
+        const last = inside.at(-1);
+        if (
+          tr.doc.childCount > 1 &&
+          trailing?.type === paragraph &&
+          !trailing.content.size &&
+          last?.to === tr.doc.content.size - trailing.nodeSize
+        )
+          tr.delete(last.to, tr.doc.content.size);
+        for (const { from, to, node } of inside.reverse())
+          tr.replaceWith(
+            from,
+            to,
+            paragraph.create(null, composerSchema.text(node.attrs.source)),
+          );
+        editor.dispatch(tr.setMeta("addToHistory", false));
+      }
       const source = projection();
       const first = source.position(start),
         last = source.position(end, -1);
-      editor.dispatch(
-        closeHistory(editor.state.tr).setSelection(
-          TextSelection.create(
-            editor.state.doc,
-            direction === "backward" ? last : first,
-            direction === "backward" ? first : last,
-          ),
-        ),
+      const doc = editor.state.doc;
+      const selectedTable = source.tables.find(
+        (item) => item.start === start && item.end === end,
       );
+      const selection = selectedTable
+        ? NodeSelection.create(doc, selectedTable.from)
+        : start === 0 &&
+            end === source.draft.text.length &&
+            doc.firstChild?.type === table
+          ? new AllSelection(doc)
+          : TextSelection.create(
+              doc,
+              direction === "backward" ? last : first,
+              direction === "backward" ? first : last,
+            );
+      editor.dispatch(closeHistory(editor.state.tr).setSelection(selection));
     };
     const openTokens = (start: number, end: number) => {
       const source = projection();
@@ -881,8 +1131,9 @@ export function EditableInput({
         // Like inline input rules, keep the typed source as the undo target.
         const typed = editor.state.tr.insertText(terminator);
         if (
-          composerMarkdown(projectComposerDocument(typed.doc).draft).length >
-          current.current.maxLength
+          current.current.serializeDraft(
+            projectComposerDocument(typed.doc).draft,
+          ).length > current.current.maxLength
         )
           return false;
         const previous = editor.state;
@@ -951,8 +1202,8 @@ export function EditableInput({
       )
         tr.setStoredMarks(marks);
       if (
-        composerMarkdown(projectComposerDocument(tr.doc).draft).length >
-        current.current.maxLength
+        current.current.serializeDraft(projectComposerDocument(tr.doc).draft)
+          .length > current.current.maxLength
       ) {
         onTooLong?.();
         return !!terminator; // The typed colon landed even if conversion cannot.
@@ -1042,22 +1293,24 @@ export function EditableInput({
           tr.replaceSelection(new Slice(doc.content, 0, 0));
         }
       }
-      if (
-        composerMarkdown(projectComposerDocument(tr.doc).draft).length >
-        current.current.maxLength
-      ) {
+      const projected = projectComposerDocument(tr.doc);
+      const markdown = current.current.serializeDraft(projected.draft);
+      if (markdown.length > current.current.maxLength) {
         current.current.onPasteTooLong?.();
         return null;
       }
+      if (projected.tables.length && !fitsDocumentRenderBudget(markdown))
+        preserveTableSources(tr, true);
       editor.dispatch(tr.scrollIntoView());
       editor.focus();
       return { from, to: editor.state.selection.to };
     };
-    /** Quote copied timeline content after the draft, wherever its caret is,
-     * and continue on a new line below it. A blank last paragraph, such as an
-     * empty draft's, gives way to the quote. Quoted identity links stay
-     * references: unlike a paste, quoting someone never notifies them. */
-    const insertQuote = (html: string) => {
+    /** Quote copied timeline content with its source links after the draft,
+     * wherever its caret is, and leave a blank line for the reply.
+     * A blank last paragraph, such as an empty draft's, gives way to the quote.
+     * Quoted identity links stay references: unlike a paste, quoting someone
+     * never notifies them. */
+    const insertQuote = (html: string, sourceLinks: readonly string[] = []) => {
       if (!editable() || composing.current || editor.composing) return false;
       const copy = buzzCopyDocument(html);
       if (!copy?.textContent.trim()) return false;
@@ -1069,8 +1322,18 @@ export function EditableInput({
         last?.type === nodes.paragraph && !last.content.size
           ? end - last.nodeSize
           : end;
+      const previous = tr.doc.resolve(from).nodeBefore;
       tr.replaceWith(from, end, [
+        ...(sourceLinks.length &&
+        previous?.type === nodes.paragraph &&
+        previous.content.size
+          ? [nodes.paragraph.create()]
+          : []),
+        ...sourceLinks.map((link) =>
+          nodes.paragraph.create(null, composerSchema.text(`From ${link}:`)),
+        ),
         nodes.blockquote.create(null, copy.content),
+        ...(sourceLinks.length ? [nodes.paragraph.create()] : []),
         nodes.paragraph.create(),
       ]);
       tr.setSelection(Selection.atEnd(tr.doc));
@@ -1133,7 +1396,7 @@ export function EditableInput({
       const next = projectComposerDocument(tr.doc).draft;
       if (
         next.recipients.length > 32 ||
-        composerMarkdown(next).length > current.current.maxLength
+        current.current.serializeDraft(next).length > current.current.maxLength
       )
         return false;
       tr.setSelection(editor.state.selection.map(tr.doc, tr.mapping));
@@ -1185,8 +1448,8 @@ export function EditableInput({
         Selection.near(tr.doc.resolve(tr.mapping.map(to, 1)), -1),
       );
       if (
-        composerMarkdown(projectComposerDocument(tr.doc).draft).length >
-        current.current.maxLength
+        current.current.serializeDraft(projectComposerDocument(tr.doc).draft)
+          .length > current.current.maxLength
       )
         return false;
       const before = editor.state;
@@ -1242,8 +1505,8 @@ export function EditableInput({
       // A longer current name can overrun the limit; the typed text then stands.
       if (
         recipient &&
-        composerMarkdown(projectComposerDocument(tr.doc).draft).length >
-          current.current.maxLength
+        current.current.serializeDraft(projectComposerDocument(tr.doc).draft)
+          .length > current.current.maxLength
       )
         tr = convert(null);
       editor.dispatch(tr);
@@ -1401,7 +1664,10 @@ export function EditableInput({
       const next = projectComposerDocument(tr.doc);
       if (next.tokens.filter((token) => token.node.attrs.resource).length > 32)
         return "Add at most 32 links to one message";
-      if (composerMarkdown(next.draft).length > current.current.maxLength)
+      if (
+        current.current.serializeDraft(next.draft).length >
+        current.current.maxLength
+      )
         return "Message is too long to add this link";
       if (brokenResources(tr.doc, next).length)
         return "Links can't be added inside code or other Markdown here";
@@ -1410,7 +1676,15 @@ export function EditableInput({
       return true;
     };
     const toggleFormat = (format: ComposerFormat) => {
-      if (!editable() || composing.current || editor.composing) return;
+      if (
+        !editable() ||
+        composing.current ||
+        editor.composing ||
+        tableTextSelection()
+      )
+        return;
+      if (current.current.markdownMode === "document" && format === "spoiler")
+        return;
       flushTokens();
       // Formatting operates on textblock contents, not the document's outer edges.
       if (editor.state.selection instanceof AllSelection) {
@@ -1510,7 +1784,13 @@ export function EditableInput({
       editor.focus();
     };
     const editLink = (): ComposerLinkEdit | null => {
-      if (!editable() || composing.current || editor.composing) return null;
+      if (
+        !editable() ||
+        composing.current ||
+        editor.composing ||
+        tableTextSelection()
+      )
+        return null;
       const doc = editor.state.doc,
         source = projection();
       const context = composerMarkdownContext(doc, source);
@@ -1651,8 +1931,8 @@ export function EditableInput({
             ),
         );
         if (
-          composerMarkdown(projectComposerDocument(tr.doc).draft).length >
-          current.current.maxLength
+          current.current.serializeDraft(projectComposerDocument(tr.doc).draft)
+            .length > current.current.maxLength
         )
           return false;
         applied = true;
@@ -1676,7 +1956,11 @@ export function EditableInput({
           ? content
           : composerSchema.nodes.paragraph.create(null, content),
       );
-      const { text, html } = composerClipboard(doc, editor.dom.ownerDocument);
+      const { text, html } = composerClipboard(
+        doc,
+        editor.dom.ownerDocument,
+        current.current.markdownMode,
+      );
       event.clipboardData?.setData("text/plain", text);
       event.clipboardData?.setData("text/html", html);
       event.preventDefault();
@@ -1730,6 +2014,30 @@ export function EditableInput({
       (forward ? redo : undo)(editor.state, editor.dispatch);
       editor.focus();
     };
+    const primaryModifier = (event: globalThis.KeyboardEvent) =>
+      isApplePlatform(navigator.platform)
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey;
+    const historyShortcut = (event: globalThis.KeyboardEvent, key: string) => {
+      if (
+        !primaryModifier(event) ||
+        event.altKey ||
+        (key !== "z" && key !== "y")
+      )
+        return false;
+      historyCommand(event.shiftKey || key === "y");
+      return true;
+    };
+    const handleTableKey = (event: globalThis.KeyboardEvent, key: string) => {
+      if (
+        key !== "backspace" &&
+        key !== "delete" &&
+        !historyShortcut(event, key)
+      )
+        return false;
+      event.preventDefault();
+      return true;
+    };
     /** Adopts the DOM selection as the editor's. A range spanning the whole
      * document becomes AllSelection, so deleting a DOM select-all also clears
      * block structure, unless `directional`: a Shift move that has just
@@ -1740,6 +2048,7 @@ export function EditableInput({
       scroll = false,
       directional = false,
     } = {}) => {
+      if (tableTextSelection()) return;
       const selection = editor.dom.ownerDocument.getSelection();
       if (
         !selection?.anchorNode ||
@@ -1759,6 +2068,14 @@ export function EditableInput({
       };
       const anchor = position(selection.anchorNode, selection.anchorOffset);
       const head = position(selection.focusNode, selection.focusOffset);
+      const currentSelection = editor.state.selection;
+      if (
+        currentSelection instanceof NodeSelection &&
+        currentSelection.node.type === table &&
+        Math.min(anchor, head) === currentSelection.from &&
+        Math.max(anchor, head) === currentSelection.to
+      )
+        return;
       const doc = editor.state.doc;
       // DOM select-all may end at text nodes or at the editor's child boundaries.
       // Preserve whole-document intent so deletion also clears block structure.
@@ -1953,6 +2270,15 @@ export function EditableInput({
       {
         state: state(),
         editable,
+        handleScrollToSelection(view) {
+          const { onScrollCaret } = current.current;
+          const { empty, head } = view.state.selection;
+          if (onScrollCaret && empty && view.hasFocus()) {
+            // ProseMirror scrolls directly and does not use CSS scroll padding.
+            onScrollCaret(view.coordsAtPos(head).bottom);
+          }
+          return false;
+        },
         attributes: () => ({
           role: "textbox",
           "aria-multiline": "true",
@@ -1967,6 +2293,8 @@ export function EditableInput({
           writingsuggestions: "false",
         }),
         dispatchTransaction(tr: Transaction) {
+          if (tr.docChanged && current.current.markdownMode === "document")
+            preserveTableSources(tr);
           if (tr.docChanged && separateHistory) {
             closeHistory(tr);
             separateHistory = false;
@@ -2015,6 +2343,34 @@ export function EditableInput({
           selected();
         },
         nodeViews: {
+          markdown_table(node) {
+            const dom = document.createElement("div");
+            dom.className = styles.markdownTable ?? "";
+            dom.contentEditable = "false";
+            tableHosts.current.set(dom, {
+              key: ++tokenHosts,
+              source: node.attrs.source,
+            });
+            tokenViews();
+            return {
+              dom,
+              ignoreMutation: (mutation) => mutation.type !== "selection",
+              stopEvent(event) {
+                if (
+                  !(event instanceof KeyboardEvent) ||
+                  event.type !== "keydown" ||
+                  !(event.target instanceof HTMLTableElement)
+                )
+                  return false;
+                handleTableKey(event, keyboardKey(event).toLowerCase());
+                return true;
+              },
+              destroy() {
+                tableHosts.current.delete(dom);
+                tokenViews();
+              },
+            };
+          },
           // Tokens also come and go in transactions the normalizer appends,
           // which report no change of their own; render each new host's artwork.
           token(node, _view, getPos) {
@@ -2091,7 +2447,7 @@ export function EditableInput({
           editor.dispatch(tr.scrollIntoView());
           // A typed delimiter converts in a second transaction: the third
           // character of a lone ``` or ~~~ line opens a code block at once, the
-          // space after a lone list or quote marker opens that block, and a
+          // space after a lone block marker opens that block, and a
           // closing delimiter converts its inline span. One undo restores the
           // typed source, that character included, and the next keystroke never
           // merges into the conversion. Near maxLength the typed character
@@ -2109,7 +2465,11 @@ export function EditableInput({
           ) {
             const block =
               composerCodeFence(editor.state, text) ??
-              composerBlockPrefix(editor.state, text);
+              composerBlockPrefix(
+                editor.state,
+                text,
+                current.current.markdownMode,
+              );
             const conversion = block ?? editor.state.tr;
             if (block || applyComposerInlineInput(conversion, text)) {
               const unconverted = editor.state;
@@ -2126,13 +2486,12 @@ export function EditableInput({
         handleKeyDown(_view, event) {
           if (composing.current || event.isComposing || event.keyCode === 229)
             return false;
-          syncNativeSelection();
-          const apple = isApplePlatform(navigator.platform);
-          const primary = apple
-            ? event.metaKey && !event.ctrlKey
-            : event.ctrlKey && !event.metaKey;
           const named = keyboardKey(event);
           const key = named.toLowerCase();
+          if (tableTextSelection()) return handleTableKey(event, key);
+          syncNativeSelection();
+          const apple = isApplePlatform(navigator.platform);
+          const primary = primaryModifier(event);
           plainPaste =
             primary &&
             event.shiftKey &&
@@ -2150,7 +2509,11 @@ export function EditableInput({
           const format =
             primary &&
             composerFormats.find((item) => formatBindings(item).some(pressed));
-          if (format) {
+          if (
+            format &&
+            (current.current.markdownMode !== "document" ||
+              format.mark !== "spoiler")
+          ) {
             if (!event.repeat) toggleFormat(format.mark);
             return true;
           }
@@ -2165,10 +2528,7 @@ export function EditableInput({
               return true;
             }
           }
-          if (primary && !event.altKey && (key === "z" || key === "y")) {
-            historyCommand(event.shiftKey || key === "y");
-            return true;
-          }
+          if (historyShortcut(event, key)) return true;
           if (named === "ArrowLeft" || named === "ArrowRight") {
             if (
               !event.altKey &&
@@ -2176,6 +2536,25 @@ export function EditableInput({
               adjacent(named === "ArrowLeft", true, event.shiftKey)
             )
               return true;
+          }
+          // A code block that no textblock follows or precedes has nowhere for
+          // the native caret to go past its edge: open a paragraph there.
+          const direction = arrowDirections[named];
+          const exit =
+            current.current.markdownMode === "chat" &&
+            direction &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            editable() &&
+            composerCodeBlockExit(
+              editor.state,
+              direction === "right" || direction === "down",
+            );
+          if (exit && editor.endOfTextblock(direction)) {
+            editor.dispatch(closeHistory(exit).scrollIntoView());
+            return true;
           }
           // A caret key reported as a control character would be typed as that
           // character by the native path. Move the caret here instead.
@@ -2189,6 +2568,7 @@ export function EditableInput({
             )
               return true;
             if (event.altKey || primary) return false;
+            if (selectAdjacentTable(event.key === "Backspace")) return true;
             adjacent(event.key === "Backspace", false, false);
             const { empty, $from } = editor.state.selection;
             if (
@@ -2266,6 +2646,15 @@ export function EditableInput({
             return false;
           },
           beforeinput(_view, event) {
+            if (tableTextSelection()) {
+              if (
+                event.inputType === "historyUndo" ||
+                event.inputType === "historyRedo"
+              )
+                historyCommand(event.inputType === "historyRedo");
+              event.preventDefault();
+              return true;
+            }
             flushTokens();
             // Native insertion can restore focus before its input/selectionchange
             // events. That focus must not overwrite the just-advanced caret.
@@ -2298,9 +2687,10 @@ export function EditableInput({
                 !event.isComposing &&
                 !composing.current &&
                 editable() &&
-                deleteSelection(editor.state, (tr) =>
+                (deleteSelection(editor.state, (tr) =>
                   editor.dispatch(closeHistory(tr)),
-                )
+                ) ||
+                  selectAdjacentTable(event.inputType.endsWith("Backward")))
               ) {
                 event.preventDefault();
                 return true;
@@ -2324,10 +2714,12 @@ export function EditableInput({
             return false;
           },
           copy(_view, event) {
+            if (copyTableText(event)) return true;
             copySelection(event);
             return true;
           },
           cut(_view, event) {
+            if (copyTableText(event)) return true;
             flushTokens();
             copySelection(event);
             if (editable())
@@ -2336,6 +2728,7 @@ export function EditableInput({
           },
           paste(_view, event) {
             event.preventDefault();
+            if (tableTextSelection()) return true;
             flushTokens();
             const raw = plainPaste;
             plainPaste = false;
@@ -2359,7 +2752,9 @@ export function EditableInput({
             const html = event.clipboardData?.getData("text/html") ?? "";
             const hasPlain =
               !!plain || event.clipboardData?.types?.includes("text/plain");
-            const copy = code ? undefined : buzzCopyDocument(html);
+            const copy = code
+              ? undefined
+              : buzzCopyDocument(html, current.current.markdownMode);
             // Unformatted prose takes the text path: it inherits the caret's
             // marks and the link spacing below. Structure pastes as nodes.
             const paragraph = copy?.childCount === 1 ? copy.firstChild : null;
@@ -2369,6 +2764,22 @@ export function EditableInput({
               !paragraph.firstChild?.marks.length
                 ? paragraph.textContent
                 : undefined;
+            const { $from, $to } = editor.state.selection;
+            if (
+              current.current.markdownMode === "document" &&
+              $from.sameParent($to) &&
+              $from.parent.type === composerSchema.nodes.paragraph &&
+              $from.parent.content.content.some(
+                (node) => node.isText && /[\r\n]/.test(node.textContent),
+              ) &&
+              (hasPlain || prose !== undefined)
+            ) {
+              // A fragment of raw source can parse as blocks or soft-broken prose.
+              // Keep it literal inside its raw destination instead of reparsing it.
+              const text = hasPlain ? plain : prose;
+              if (text) insertPastedText(text);
+              return true;
+            }
             if (copy && prose === undefined) {
               // Only the pasted content is offered: an item-start paste lands
               // after the item's text, whose display-only links stay so.
@@ -2430,6 +2841,32 @@ export function EditableInput({
                 current.current.maxLength
             )
               text += " ";
+            if (
+              !code &&
+              current.current.markdownMode === "document" &&
+              text.trim()
+            ) {
+              const draft = documentEditorDraft(text);
+              if (draft.document) {
+                const parsed = readComposerDocument(draft, [], "document");
+                const paragraph =
+                  parsed.childCount === 1 ? parsed.firstChild : null;
+                // Fallback blocks keep embedded source newlines; supported prose
+                // has already folded them and still inherits the caret's marks.
+                if (
+                  paragraph?.type === composerSchema.nodes.paragraph &&
+                  paragraph.childCount <= 1 &&
+                  !paragraph.firstChild?.marks.length
+                )
+                  insertPastedText(
+                    /[\r\n]/.test(paragraph.textContent)
+                      ? text
+                      : text.replace(/\r\n?|\n/g, " "),
+                  );
+                else insertDocument(parsed);
+                return true;
+              }
+            }
             if (!insertPastedText(text)) return true;
             const inserted = projection().source(editor.state.selection.to);
             if (reuse) {
@@ -2545,7 +2982,7 @@ export function EditableInput({
       toggleFormat: { configurable: true, value: toggleFormat },
       insertLineBreak: {
         configurable: true,
-        value: () => {
+        value: (kind?: "paragraph" | "hard") => {
           if (!editable() || composing.current || editor.composing)
             return false;
           // Mac WebKit can keep painting a stale caret after a line break:
@@ -2556,7 +2993,33 @@ export function EditableInput({
           // (1.41.0). Remove once upstream repaints it.
           if (editor.state.selection.empty && editor.hasFocus() && macWebKit())
             editor.dom.ownerDocument.getSelection()?.removeAllRanges();
-          const tr = composerBlockLineBreak(editor.state);
+          let tr: Transaction | undefined;
+          const parent = editor.state.selection.$from.parent;
+          // Only H1 and H2 have a multiline CommonMark representation.
+          const paragraphBreak =
+            kind === "paragraph" ||
+            (kind === "hard" &&
+              parent.type === composerSchema.nodes.heading &&
+              parent.attrs.level > 2);
+          if (
+            editor.state.selection instanceof NodeSelection &&
+            editor.state.selection.node.type === table
+          ) {
+            const next = editor.state.tr;
+            if (apply(next, createParagraphNear)) tr = next;
+          } else if (kind === "hard" && !paragraphBreak)
+            tr = parent.type.spec.code
+              ? editor.state.tr.insertText("\n")
+              : editor.state.tr.replaceSelectionWith(
+                  composerSchema.nodes.hard_break.create(),
+                );
+          else {
+            tr = composerBlockLineBreak(editor.state);
+            if (!tr && paragraphBreak) {
+              const next = editor.state.tr;
+              if (apply(next, splitBlockKeepMarks)) tr = next;
+            }
+          }
           if (tr) editor.dispatch(closeHistory(tr).scrollIntoView());
           const inserted = !!tr || insert("\n");
           editor.focus();
@@ -2752,6 +3215,7 @@ export function EditableInput({
         const doc = readComposerDocument(
           next,
           current.current.decorationsFor(next),
+          current.current.markdownMode,
         );
         if (reset) {
           separateHistory = false;
@@ -2951,6 +3415,13 @@ export function EditableInput({
           events.onCompositionEnd?.(event as never);
         }}
       />
+      {[...tableHosts.current].map(([element, { key, source }]) =>
+        createPortal(
+          <DocumentTable source={source} />,
+          element,
+          `table-${key}`,
+        ),
+      )}
       {[...hosts.current].map(([element, host]) => {
         const position = host.position();
         const source =

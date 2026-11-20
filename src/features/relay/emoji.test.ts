@@ -2,6 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createEmojiDirectory } from "./emoji-directory";
 import {
   EMOJI_SET,
+  contentEmojiTags,
+  emojiMatches,
   emojiTags,
   referencedEmoji,
   suggestShortcode,
@@ -84,6 +86,38 @@ it("normalizes first-wins scheme-agnostic emoji tags and leaves URL fragments ou
     ),
   ).toEqual(["party", "other"]);
 });
+it.each([
+  ["12:25:30:", []],
+  ["12:25:", []],
+  ["12:30:", []],
+  [":25:", ["25"]],
+  [":25::30:", ["25", "30"]],
+  [":25:30:", ["25"]],
+  ["😄:25:", ["25"]],
+  ["12:party:", ["party"]],
+  ["12:-25:", ["-25"]],
+  ["10:30:party:", ["party"]],
+])(
+  "keeps numeric time fragments literal in references, rendering and tags: %s",
+  (text, codes) => {
+    const entries = ["25", "30", "party", "-25"].map((shortcode) => ({
+      shortcode,
+      url: `https://example.org/emoji/${shortcode}.png`,
+    }));
+    expect(
+      [...emojiMatches(text, entries)].map(({ emoji }) => emoji.shortcode),
+    ).toEqual(codes);
+    expect(referencedEmoji(text)).toEqual(codes);
+    expect(contentEmojiTags(text, entries)).toEqual(
+      codes.map((code) => [
+        "emoji",
+        code,
+        `https://example.org/emoji/${code}.png`,
+      ]),
+    );
+  },
+);
+
 it("unions latest complete member sets; empty replacements and ties survive stale reads", async () => {
   const h = session();
   const loading = h.session.emoji.ensure();

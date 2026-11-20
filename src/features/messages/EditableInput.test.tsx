@@ -4941,6 +4941,42 @@ describe("oversized paste feedback", () => {
 });
 
 describe("quoting timeline content", () => {
+  it("adds attribution above the quote and leaves a blank reply line in the same undo step", async () => {
+    const h = mount("Draft");
+    const link = `buzz://message?channel=general&id=${"a".repeat(64)}`;
+    act(() =>
+      expect(
+        h.input.insertQuote(timelineHtml("Hello <strong>world</strong>"), [
+          link,
+        ]),
+      ).toBe(true),
+    );
+    expect(h.markdown()).toBe(
+      `Draft\n\nFrom ${link}:\n\n> Hello **world**\n\n\n`,
+    );
+    await h.user.keyboard("reply");
+    expect(h.markdown()).toBe(
+      `Draft\n\nFrom ${link}:\n\n> Hello **world**\n\n\nreply`,
+    );
+    act(() => h.input.undo(false));
+    expect(h.markdown()).toBe(
+      `Draft\n\nFrom ${link}:\n\n> Hello **world**\n\n\n`,
+    );
+    act(() => h.input.undo(false));
+    expect(h.markdown()).toBe("Draft");
+  });
+
+  it("counts source links toward the limit without changing the existing draft", () => {
+    const onPasteTooLong = vi.fn();
+    const h = mount("keep", { maxLength: 20, onPasteTooLong });
+    const link = `buzz://message?channel=general&id=${"a".repeat(64)}`;
+    act(() =>
+      expect(h.input.insertQuote(timelineHtml("short"), [link])).toBe(false),
+    );
+    expect(h.markdown()).toBe("keep");
+    expect(onPasteTooLong).toHaveBeenCalledOnce();
+  });
+
   it("replaces an empty draft's line and continues below the quote", async () => {
     const h = mount();
     act(() =>

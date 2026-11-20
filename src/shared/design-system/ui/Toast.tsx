@@ -5,6 +5,7 @@ import {
   useEffectEvent,
   useId,
   useLayoutEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -18,7 +19,7 @@ import { IconButton } from "./IconButton";
 
 const ToastHost = createContext("");
 
-/** How far each mounted docked surface reaches up from the window's bottom. */
+/** Space reserved by mounted surfaces at the top window edge. */
 const clearances = new Map<object, number>();
 /** Each mounted toast host's always-present Sonner section. */
 const viewports = new Set<HTMLElement>();
@@ -27,8 +28,8 @@ const viewports = new Set<HTMLElement>();
 let publishQueued = false;
 const writeClearance = (viewport: HTMLElement) => {
   const value = `${Math.max(0, ...clearances.values())}px`;
-  if (viewport.style.getPropertyValue("--buzz-toast-clearance") !== value)
-    viewport.style.setProperty("--buzz-toast-clearance", value);
+  if (viewport.style.getPropertyValue("--buzz-toast-top-clearance") !== value)
+    viewport.style.setProperty("--buzz-toast-top-clearance", value);
 };
 // Publish once a commit's effects settle, so a surface replaced by one of the
 // same height (switching channels) writes nothing.
@@ -49,17 +50,16 @@ const attachViewport = (viewport: HTMLElement | null) => {
   };
 };
 
-/** Keeps the toast stack above a surface docked at the bottom of the window,
- * such as a composer, while it is mounted, so notices never cover its
- * controls. A hidden surface takes no room. */
+/** Keeps the stack below a mounted top-edge surface, such as the shell header.
+ * Hidden surfaces take no room. */
 export function useToastClearance(ref: RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
     const key = {};
     const measure = () => {
-      const { top, height } = element.getBoundingClientRect();
-      clearances.set(key, height ? window.innerHeight - top : 0);
+      const { bottom, height } = element.getBoundingClientRect();
+      clearances.set(key, height ? bottom : 0);
       publishClearance();
     };
     measure();
@@ -88,6 +88,10 @@ export function ToastProvider({
   portalContainer?: HTMLElement | undefined;
 }) {
   const id = useId();
+  // WebKitGTK can crash while compositing an animated blur on a toast.
+  const skipBlur =
+    globalThis.navigator?.platform?.startsWith("Linux") &&
+    navigator.vendor === "Apple Computer, Inc.";
   useEffect(() => {
     // Sonner's global hotkey must not bypass the host's modal focus boundary.
     const guardModal = (event: KeyboardEvent) => {
@@ -116,15 +120,17 @@ export function ToastProvider({
         <Toaster
           ref={attachViewport}
           id={id}
-          position="bottom-right"
+          position="top-right"
           swipeDirections={["left", "right"]}
-          expand
+          expand={false}
           visibleToasts={Infinity}
           hotkey={["F6"]}
           customAriaLabel="App notifications"
-          className="buzz-toast-viewport"
-          offset="max(var(--space-6), env(safe-area-inset-bottom))"
-          mobileOffset="var(--space-4)"
+          className={
+            skipBlur
+              ? "buzz-toast-viewport buzz-toast-no-blur"
+              : "buzz-toast-viewport"
+          }
         />,
         portalContainer ?? document.body,
       )}
@@ -134,6 +140,7 @@ export function ToastProvider({
 }
 
 type ToastCardProps = {
+  exiting?: boolean;
   title: string;
   description?: string | undefined;
   /** Optional supporting detail between the message and its actions. */
@@ -146,6 +153,7 @@ type ToastCardProps = {
 };
 
 function ToastCard({
+  exiting,
   title,
   description,
   details,
@@ -159,6 +167,8 @@ function ToastCard({
   const descriptionId = useId();
   return (
     <div
+      inert={exiting}
+      aria-hidden={exiting}
       role="dialog"
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
@@ -192,15 +202,17 @@ function ToastCard({
         {onClose && (
           <div className="buzz-toast-dismiss">
             <IconButton
-              size="sm"
+              size="xs"
+              shape="round"
+              variant="outline-subtle"
               aria-label={closeLabel}
-              icon={<XIcon size={16} aria-hidden="true" />}
+              icon={<XIcon size={12} strokeWidth={1.5} aria-hidden="true" />}
               onClick={onClose}
             />
           </div>
         )}
       </div>
-      {details}
+      {details && <div className="buzz-toast-details">{details}</div>}
       {children && <div className="buzz-toast-actions">{children}</div>}
     </div>
   );
@@ -210,7 +222,7 @@ function ToastCard({
 // in a small React store instead, rendered inside Sonner so swipe/focus events
 // use its tree and cannot bubble into the originating composer or menu.
 function noticeContent(initial: ToastCardProps) {
-  let content: ToastCardProps | null = initial;
+  let content: ToastCardProps = initial;
   const listeners = new Set<() => void>();
   return {
     getSnapshot: () => content,
@@ -221,7 +233,7 @@ function noticeContent(initial: ToastCardProps) {
       };
     },
     update: (next: ToastCardProps | null) => {
-      content = next;
+      content = next ?? { ...content, exiting: true };
       for (const listener of listeners) listener();
     },
   };
@@ -233,7 +245,7 @@ function NoticeContent({
   source: ReturnType<typeof noticeContent>;
 }) {
   const content = useSyncExternalStore(source.subscribe, source.getSnapshot);
-  return content && <ToastCard {...content} />;
+  return <ToastCard {...content} />;
 }
 
 /** A notice lives with its source; removing it clears its floating presentation. */
@@ -266,6 +278,7 @@ export function ToastNotice({
   );
   const dismissed = useEffectEvent(() => onDismiss?.());
   const dismissible = timeout > 0 || !!onDismiss;
+  const closeNotice = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     let active = true;
     let closed = false;
@@ -275,6 +288,7 @@ export function ToastNotice({
       source.update(null);
       dismissed();
     };
+    closeNotice.current = onClose;
     toast.custom(() => <NoticeContent source={source} />, {
       id,
       toasterId,
@@ -284,6 +298,7 @@ export function ToastNotice({
     });
     return () => {
       active = false;
+      closeNotice.current = undefined;
       source.update(null);
       toast.dismiss(id);
     };
@@ -308,6 +323,7 @@ export function ToastNotice({
       onClose: dismissible
         ? () => {
             toast.dismiss(id);
+            closeNotice.current?.();
           }
         : undefined,
     });
@@ -338,8 +354,10 @@ export function useToastNotification() {
     title: string,
     tone: "success" | "error" | "info",
     action?: { label: string; onClick(): void; timeout?: number },
-  ) =>
-    String(
+  ) => {
+    // The card stays focusable while Sonner animates it out; act once.
+    let acted = false;
+    return String(
       toast.custom(
         (id) => (
           <ToastCard
@@ -353,6 +371,8 @@ export function useToastNotification() {
               <Button
                 size="compact"
                 onClick={() => {
+                  if (acted) return;
+                  acted = true;
                   toast.dismiss(id);
                   action.onClick();
                 }}
@@ -369,4 +389,5 @@ export function useToastNotification() {
         },
       ),
     );
+  };
 }

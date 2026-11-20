@@ -1141,6 +1141,61 @@ it("join and leave each save the membership change and its upload intent in one 
   expect(restored.pendingSync()).toEqual(left.sync.outbox);
 });
 
+it("reorder moves a community to another's place, keeps the selection and saves an order that joins, leaves and restarts keep", async () => {
+  const [a, b, c, d] = ["a", "b", "c", "d"].map(
+    (name) => `https://${name}.example`,
+  ) as [string, string, string, string];
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: [a, b, c].map((id) => ({ id, name: id })),
+    selected: b,
+  });
+  await flush();
+  const ids = () => client.snapshot().memberships.map((m) => m.id);
+  const writes = vi.spyOn(localStorage, "setItem");
+  const saved = () =>
+    JSON.parse(
+      writes.mock.calls
+        .filter(([key]) => key === `buzz-client.v1:${viewer}`)
+        .at(-1)?.[1] ?? "null",
+    );
+  // Upwards and downwards both land on the place the other community held.
+  client.reorder(c, a);
+  expect(ids()).toEqual([c, a, b]);
+  client.reorder(c, a);
+  expect(ids()).toEqual([a, c, b]);
+  expect(client.snapshot().selected).toBe(b);
+  expect(saved()).toMatchObject({
+    memberships: [a, c, b].map((id) => ({ id })),
+    selected: b,
+  });
+  // Its own place or a community that is not joined changes and saves nothing.
+  writes.mockClear();
+  client.reorder(a, a);
+  client.reorder("https://gone.example", a);
+  client.reorder(a, "https://gone.example");
+  expect(ids()).toEqual([a, c, b]);
+  expect(writes).not.toHaveBeenCalled();
+  // A join goes last and a leave closes its gap; the rest keep their order.
+  client.joined({ id: d, name: d }, { name: "Local", picture: "" });
+  expect(ids()).toEqual([a, c, b, d]);
+  // Claiming a community already held, as an invite for it does, refreshes
+  // the entry where it is.
+  client.joined({ id: c, name: "Renamed" }, { name: "Local", picture: "" });
+  expect(ids()).toEqual([a, c, b, d]);
+  expect(saved().memberships).toMatchObject([
+    { id: a },
+    { id: c, name: "Renamed" },
+    { id: b },
+    { id: d },
+  ]);
+  await client.leave(c);
+  expect(ids()).toEqual([a, b, d]);
+  const restored = setup(saved());
+  await flush();
+  expect(restored.snapshot().memberships.map((m) => m.id)).toEqual([a, b, d]);
+});
+
 it("re-running a join the service already holds queues nothing; a join it does not hold queues an add", async () => {
   const client = setup({
     profile: { name: "Local", picture: "" },
@@ -1321,4 +1376,35 @@ it("hydrates native public identity without contacting the development broker", 
   await flush();
   expect(fetch).not.toHaveBeenCalled();
   expect(client.relay.snapshot().status).not.toBe("ready");
+});
+it("reloads every open community in place, as new sessions", async () => {
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: [
+      { id: "primary", name: "Primary" },
+      { id: "secondary", name: "Secondary" },
+    ],
+    selected: "secondary",
+  });
+  await flush();
+  await flush();
+  const primary = client.open("primary");
+  const secondary = client.open("secondary");
+  await flush();
+  const before = [primary?.snapshot(), secondary?.snapshot()];
+  expect(before.map((each) => each?.status)).toEqual(["ready", "ready"]);
+  requests.length = 0;
+  client.reload();
+  await flush();
+  await flush();
+  for (const [index, relay] of [primary, secondary].entries()) {
+    expect(relay?.snapshot().status).toBe("ready");
+    expect(relay?.snapshot().session).not.toBe(before[index]?.session);
+  }
+  // The same owners, reconnected: nothing was opened again.
+  expect(client.open("primary")).toBe(primary);
+  expect(requests.filter((url) => url.endsWith("/session")).sort()).toEqual([
+    "/api/relay/primary/session",
+    "/api/relay/secondary/session",
+  ]);
 });

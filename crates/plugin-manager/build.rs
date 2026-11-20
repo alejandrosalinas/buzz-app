@@ -57,6 +57,19 @@ fn builderlab_apps_control_plane(
     }
     Ok(raw)
 }
+const GATEWAY_KEY: &str = "BUZZ_AGENT_GATEWAY";
+const DEFAULT_COMMUNITY_KEY: &str = "BUZZ_DEFAULT_COMMUNITY_URL";
+
+#[path = "src/gateway.rs"]
+#[allow(dead_code)]
+mod gateway;
+
+fn packaged_gateway(path: &Path, explicit: &str, community_url: &str) -> Result<String, String> {
+    let listed = std::fs::read_to_string(path).expect("src/bundled/org-gateways.json");
+    Ok(gateway::select(explicit, &listed, community_url)?
+        .map_or_else(String::new, |(_, canonical)| canonical))
+}
+
 const MANAGED_PLUGINS_URL_KEY: &str = "BUZZ_BUILD_MANAGED_PLUGINS_URL";
 const MANAGED_PLUGINS_URL_MAX_CHARS: usize = 2048;
 
@@ -83,6 +96,25 @@ fn packaged_managed_plugins_url(
         return Err("BUZZ_BUILD_MANAGED_PLUGINS_URL must be an https URL without credentials or a fragment, at most 2048 characters");
     }
     Ok(url.into())
+}
+
+const MANAGED_PLUGINS_SIGNER_KEY: &str = "BUZZ_BUILD_MANAGED_PLUGINS_SIGNER";
+
+/// The hex public key whose signature lets a managed plugin policy install and update
+/// plugins without review. Empty leaves every policy advisory.
+fn managed_plugins_signer(local: &Path, process: Option<String>) -> Result<String, &'static str> {
+    let values = build_env::load(local, &[MANAGED_PLUGINS_SIGNER_KEY], |_| process.clone())?;
+    let raw = values
+        .get(MANAGED_PLUGINS_SIGNER_KEY)
+        .map(|value| value.trim())
+        .unwrap_or("");
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    if raw.len() != 64 || !raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("BUZZ_BUILD_MANAGED_PLUGINS_SIGNER must be a 64-character hex public key");
+    }
+    Ok(raw.to_ascii_lowercase())
 }
 
 fn builderlab_target(
@@ -237,14 +269,58 @@ fn main() {
     let access = repository_access(process(REPOSITORY_ACCESS_KEY))
         .unwrap_or_else(|reason| panic!("Invalid {REPOSITORY_ACCESS_KEY}: {reason}"));
     println!("cargo:rustc-env={REPOSITORY_ACCESS_KEY}={access}");
+    // From the process only, like the FI descriptor: a private build input.
+    // Without one, the packaged org-gateways.json entry for the build's
+    // default community, as vite.config.ts selects it.
+    println!("cargo:rerun-if-env-changed={GATEWAY_KEY}");
+    println!("cargo:rerun-if-env-changed={DEFAULT_COMMUNITY_KEY}");
+    let org_gateways = root.join("src/bundled/org-gateways.json");
+    println!("cargo:rerun-if-changed={}", org_gateways.display());
+    let gateway = packaged_gateway(
+        &org_gateways,
+        &process(GATEWAY_KEY).unwrap_or_default(),
+        &process(DEFAULT_COMMUNITY_KEY).unwrap_or_default(),
+    )
+    .unwrap_or_else(|invalid| panic!("{invalid}"));
+    println!("cargo:rustc-env={GATEWAY_KEY}={gateway}");
     let managed = packaged_managed_plugins_url(&local, process(MANAGED_PLUGINS_URL_KEY))
         .expect("Invalid packaged managed plugin policy URL");
     println!("cargo:rustc-env={MANAGED_PLUGINS_URL_KEY}={managed}");
+    println!("cargo:rerun-if-env-changed={MANAGED_PLUGINS_SIGNER_KEY}");
+    let signer = managed_plugins_signer(&local, process(MANAGED_PLUGINS_SIGNER_KEY))
+        .expect("Invalid managed plugin policy signer");
+    println!("cargo:rustc-env={MANAGED_PLUGINS_SIGNER_KEY}={signer}");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_gateway_build_value_uses_the_descriptor_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("org-gateways.json");
+        let community = "\u{feff}wss://relay.example/";
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../src/features/agents/gateway/descriptor-vectors.json"
+        ))
+        .unwrap();
+        let fixture = &vectors["valid"][0];
+
+        std::fs::write(&path, "[]").unwrap();
+        assert_eq!(packaged_gateway(&path, "", community).unwrap(), "");
+        std::fs::write(
+            &path,
+            serde_json::json!([fixture["descriptor"]]).to_string(),
+        )
+        .unwrap();
+        assert_eq!(packaged_gateway(&path, "", "").unwrap(), "");
+        let selected = packaged_gateway(&path, "", community).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&selected).unwrap(),
+            fixture["expect"]
+        );
+    }
 
     /// Tauri's metadata in each build mode: `tauri dev` builds without
     /// `custom-protocol`; `tauri build`, `--debug` or not, builds with it; a
@@ -313,6 +389,24 @@ mod tests {
             packaged_managed_plugins_url(&local, None).unwrap(),
             "https://plugins.example/policy.json"
         );
+    }
+
+    #[test]
+    fn managed_plugins_signer_accepts_only_a_hex_public_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = directory.path().join(".env.local");
+        assert_eq!(managed_plugins_signer(&local, None).unwrap(), "");
+        let key = "AB".repeat(32);
+        assert_eq!(
+            managed_plugins_signer(&local, Some(format!(" {key}\n"))).unwrap(),
+            "ab".repeat(32)
+        );
+        for raw in ["npub1xyz", "ab", &"g".repeat(64), &"a".repeat(65)] {
+            assert!(
+                managed_plugins_signer(&local, Some(raw.into())).is_err(),
+                "{raw}"
+            );
+        }
     }
 
     #[test]

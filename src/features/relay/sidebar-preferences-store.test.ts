@@ -21,31 +21,24 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-it.each([
-  { groupsOnly: false, failure: "Section creation is unavailable" },
-  { groupsOnly: true, failure: "Workspaces are unavailable" },
-])(
-  "keeps creation errors specific to the groupsOnly=$groupsOnly surface",
-  async ({ groupsOnly, failure }) => {
-    const store = createSidebarPreferencesStore({
-      read: async () => ({
-        sections: [],
-        assignments: {},
-        starred: [],
-        muted: [],
-      }),
-      available: true,
-      groupsOnly,
-    });
-    try {
-      await expect(
-        store.queries.createSection({ id: "new", name: "New" }),
-      ).rejects.toThrow(failure);
-    } finally {
-      store.dispose();
-    }
-  },
-);
+it("keeps workspace creation disabled when the host has no writer", async () => {
+  const store = createSidebarPreferencesStore({
+    read: async () => ({
+      sections: [],
+      assignments: {},
+      starred: [],
+      muted: [],
+    }),
+    available: true,
+  });
+  try {
+    await expect(
+      store.queries.createSection({ id: "new", name: "New" }),
+    ).rejects.toThrow("Section creation is unavailable");
+  } finally {
+    store.dispose();
+  }
+});
 
 const data: SidebarPreferences = {
   sections: [{ id: "work", name: "Work", order: 0 }],

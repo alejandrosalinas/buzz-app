@@ -2,6 +2,74 @@ import { expect, test } from "../../browser/playwright-test.mjs";
 
 const viewer = "/tests/fixtures/design-system.html";
 
+test("ordinary Tab keeps recovery actions visible through pointer exit and reverse traversal", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 400 });
+  await page.goto(`${viewer}#/design/components/toast`);
+  await page.getByRole("button", { name: "Show recovery stack" }).click();
+  const region = page.getByRole("region", { name: "App notifications" });
+  const stack = region.locator("[data-sonner-toaster]");
+  const cards = stack.locator("[data-sonner-toast]");
+  await expect(cards).toHaveCount(6);
+  // Bound the portal's normal tab order without involving browser chrome or F6.
+  await region.evaluate((element) => {
+    for (const side of ["before", "after"] as const) {
+      const button = document.createElement("button");
+      button.tabIndex = 0;
+      button.textContent = `${side} notifications`;
+      element[side](button);
+    }
+  });
+  await page.mouse.move(0, 0);
+  await page.getByRole("button", { name: "before notifications" }).focus();
+  await expect(cards.first()).toHaveAttribute("data-expanded", "false");
+  for (let id = 6; id >= 1; id--) {
+    await page.keyboard.press("Tab");
+    await expect(cards.nth(6 - id)).toBeFocused();
+    await page.keyboard.press("Tab");
+    const action = stack.getByRole("button", {
+      name: `Resolve ${id}`,
+      exact: true,
+    });
+    await expect(action).toBeFocused();
+    await expect(cards.nth(6 - id)).toHaveAttribute("data-expanded", "true");
+    await expect(cards.nth(6 - id)).toHaveCSS("opacity", "1");
+    await expect(action).toHaveCSS("opacity", "1");
+    await expect(action).toBeInViewport();
+    if (id === 2) {
+      await action.hover();
+      await page.mouse.move(0, 0);
+      await expect(action).toBeFocused();
+      await expect(cards.nth(4)).toHaveAttribute("data-expanded", "true");
+      await expect(action).toHaveCSS("opacity", "1");
+    }
+  }
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "after notifications" }),
+  ).toBeFocused();
+  await expect(cards.first()).toHaveAttribute("data-expanded", "false");
+  for (let id = 1; id <= 6; id++) {
+    await page.keyboard.press("Shift+Tab");
+    const action = stack.getByRole("button", {
+      name: `Resolve ${id}`,
+      exact: true,
+    });
+    await expect(action).toBeFocused();
+    await expect(cards.nth(6 - id)).toHaveAttribute("data-expanded", "true");
+    await expect(action).toHaveCSS("opacity", "1");
+    await expect(action).toBeInViewport();
+    await page.keyboard.press("Shift+Tab");
+    await expect(cards.nth(6 - id)).toBeFocused();
+  }
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    page.getByRole("button", { name: "before notifications" }),
+  ).toBeFocused();
+  await expect(cards.first()).toHaveAttribute("data-expanded", "false");
+});
+
 // Real layout/focus coverage: a DOM emulator cannot prove portal stacking or scroll reachability.
 test("toast recovery stays reachable across themes, sizes, keyboard scrolling and modals", async ({
   page,
@@ -32,13 +100,13 @@ test("toast recovery stays reachable across themes, sizes, keyboard scrolling an
       const cardBox = await recovery.boundingBox();
       if (!cardBox) throw new Error("Toast card has no geometry");
       expect(cardBox.x + cardBox.width).toBeGreaterThan(width - 40);
-      expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(width - 16);
+      expect(cardBox.x + cardBox.width).toBeLessThanOrEqual(width - 8);
       const box = await stack.boundingBox();
       if (!box) throw new Error("Toast viewport has no geometry");
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
-      expect(box.y + box.height).toBeGreaterThan(844 - 40);
-      expect(box.y + box.height).toBeLessThanOrEqual(844 - 16);
+      expect(cardBox.y).toBeGreaterThanOrEqual(8);
+      expect(cardBox.y).toBeLessThan(24);
       expect(box.x + box.width).toBeGreaterThan(width - 40);
       await page.keyboard.press("F6");
       await expect(stack).toBeFocused();
@@ -85,7 +153,7 @@ test("toast recovery stays reachable across themes, sizes, keyboard scrolling an
   await page.evaluate(() =>
     document.documentElement.style.removeProperty("--type-scale"),
   );
-  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.setViewportSize({ width: 1280, height: 400 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.getByRole("button", { name: "Show recovery stack" }).click();
   await expect(region.getByRole("dialog")).toHaveCount(6);
@@ -172,11 +240,23 @@ test("swiping actual toast content dismisses confirmations and preserves recover
     ).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
     const bounds = await card.boundingBox();
     if (!bounds) throw new Error("Toast card has no geometry");
-    const x = bounds.x + 8,
+    const x = bounds.x + 24,
       y = bounds.y + bounds.height - 8;
     await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(x + 160, y, { steps: 8 });
+    const item = card.locator("xpath=ancestor::li[@data-sonner-toast]");
+    if (name === "Changes saved")
+      await expect(item).toHaveAttribute("data-swiping", "true");
+    await page.mouse.move(x + 80, y, { steps: 4 });
+    if (name === "Changes saved")
+      await expect
+        .poll(() =>
+          item.evaluate((el) =>
+            parseFloat(el.style.getPropertyValue("--swipe-amount-x")),
+          ),
+        )
+        .toBeGreaterThan(0);
+    await page.mouse.move(x + 160, y, { steps: 4 });
     await page.mouse.up();
   };
   await swipe("Changes saved");
@@ -228,7 +308,10 @@ test("keyboard focus pauses expiry and leaving resumes it, with and without F6",
     ).toBeFocused();
     await page.clock.runFor(6000);
     await expect(toast).toBeVisible();
-    await page.keyboard.press("Tab");
+    // Leave for an in-page control; tabbing past the final portal control can
+    // move focus into browser chrome, where document visibility pauses expiry.
+    await show.focus();
+    await expect(show).toBeFocused();
     await expect(
       toast.getByRole("button", { name: "Undo", exact: true }),
     ).not.toBeFocused();
@@ -276,7 +359,7 @@ test("touch panning reaches overflowing persistent recovery actions", async ({
     browserName !== "chromium",
     "Real touch drag injection uses Chromium's CDP input API.",
   );
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 390, height: 400 });
   const touch = await page.context().newCDPSession(page);
   await touch.send("Emulation.setTouchEmulationEnabled", {
     enabled: true,
@@ -287,6 +370,23 @@ test("touch panning reaches overflowing persistent recovery actions", async ({
     .getByRole("button", { name: "Show recovery stack", exact: true })
     .click();
   const stack = page.locator("[data-sonner-toaster]");
+  await expect(stack.locator("[data-sonner-toast]").first()).toHaveCSS(
+    "transform",
+    "matrix(1, 0, 0, 1, 0, 0)",
+  );
+  const front = await stack
+    .locator("[data-sonner-toast]")
+    .first()
+    .boundingBox();
+  if (!front) throw new Error("Missing front toast");
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: front.x + 20, y: front.y + 20 }],
+  });
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
   await expect(stack.getByRole("dialog")).toHaveCount(6);
   await expect(stack.locator("[data-sonner-toast]").first()).toHaveCSS(
     "transform",
@@ -375,6 +475,9 @@ test("notice body opens its destination while nested actions keep their targets"
     await expect(recovery).toBeVisible();
     const body = recovery.getByRole("button", { name: "Open related dialog" });
     await body.hover();
+    await expect(
+      recovery.locator("xpath=ancestor::li[@data-sonner-toast]"),
+    ).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
     await expect(body).toHaveCSS("cursor", "pointer");
     const title = await recovery
       .getByText("Plugin update available", { exact: true })
@@ -412,5 +515,135 @@ test("notice body opens its destination while nested actions keep their targets"
     await destination
       .getByRole("button", { name: "Close", exact: true })
       .click();
+  }
+});
+
+// A linked card must not steal a touch intended for its visible close button.
+test("touch dismisses a linked notice without opening its destination", async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext({
+    ...(baseURL ? { baseURL } : {}),
+    hasTouch: true,
+    viewport: { width: 390, height: 844 },
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(`${viewer}#/design/components/toast`);
+    await page
+      .getByRole("button", { name: "Show linked notice", exact: true })
+      .tap();
+    const notice = page.getByRole("dialog", {
+      name: "Plugin update available",
+      exact: true,
+    });
+    await expect(notice).toBeVisible();
+    await notice
+      .getByRole("button", { name: "Dismiss notification", exact: true })
+      .tap({ timeout: 5000 });
+    await expect(notice).toHaveCount(0);
+    await expect(
+      page.getByRole("dialog", { name: "Example dialog", exact: true }),
+    ).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+// Intrinsic button widths and enlarged text require a real layout engine.
+test("long recovery actions reflow without squeezing the message", async ({
+  page,
+}) => {
+  await page.goto(`${viewer}#/design/components/toast`);
+  await page
+    .getByRole("textbox", { name: "Toast title", exact: true })
+    .fill("Changes weren’t saved");
+  await page
+    .getByRole("textbox", { name: "Action label", exact: true })
+    .fill("Retry saving spelling correction");
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("--type-scale", "1.4"),
+  );
+  await page.getByRole("button", { name: "Show toast", exact: true }).click();
+  const card = page.getByRole("dialog", {
+    name: "Changes weren’t saved",
+    exact: true,
+  });
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect
+      .poll(() =>
+        card
+          .locator(".buzz-toast-heading")
+          .evaluate((el) => el.getBoundingClientRect().width),
+      )
+      .toBeGreaterThan(180);
+    await expect
+      .poll(() => card.evaluate((el) => el.scrollWidth <= el.clientWidth))
+      .toBe(true);
+    const heading = await card.locator(".buzz-toast-heading").boundingBox();
+    const action = await card
+      .getByRole("button", { name: "Retry saving spelling correction" })
+      .boundingBox();
+    if (!heading || !action)
+      throw new Error("Toast content has no layout bounds");
+    expect(action.y).toBeGreaterThanOrEqual(heading.y + heading.height);
+  }
+});
+
+// A touch tap emits compatibility mouse events; the viewport must not grow
+// into an invisible full-screen layer when Sonner marks the stack expanded.
+test("touch-primary stacks leave controls below them tappable", async ({
+  browser,
+  baseURL,
+}) => {
+  const context = await browser.newContext({
+    ...(baseURL ? { baseURL } : {}),
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+  const page = await context.newPage();
+  try {
+    await page.goto(`${viewer}#/design/components/toast`);
+    expect(
+      await page.evaluate(
+        () => matchMedia("(hover: none) and (pointer: coarse)").matches,
+      ),
+    ).toBe(true);
+    await page
+      .getByRole("button", { name: "Show recovery stack", exact: true })
+      .tap();
+    const stack = page.locator("[data-sonner-toaster]");
+    for (const id of [6, 5, 4, 3]) {
+      await stack
+        .getByRole("button", { name: `Resolve ${id}`, exact: true })
+        .tap();
+    }
+    await expect(stack.getByRole("dialog")).toHaveCount(2);
+    await stack.getByText("Recovery 2", { exact: true }).tap();
+    await expect
+      .poll(() => stack.evaluate((el) => el.getBoundingClientRect().height))
+      .toBeLessThan(500);
+    await page.evaluate(() => {
+      const button = document.createElement("button");
+      button.textContent = "Underlying control";
+      button.style.cssText =
+        "position:fixed;bottom:8px;left:8px;width:calc(100% - 16px);height:40px";
+      button.onclick = () => {
+        button.textContent = "Control activated";
+      };
+      document.body.append(button);
+    });
+    await page
+      .getByRole("button", { name: "Underlying control", exact: true })
+      .tap();
+    await expect(
+      page.getByRole("button", { name: "Control activated", exact: true }),
+    ).toBeVisible();
+    await expect(stack.getByRole("dialog")).toHaveCount(2);
+  } finally {
+    await context.close();
   }
 });

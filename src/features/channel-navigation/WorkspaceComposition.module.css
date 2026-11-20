@@ -22,4 +22,5 @@
 }
 .heading > :not(:first-child) {
   position: relative;
+  flex-shrink: 0;
 }

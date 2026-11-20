@@ -31,13 +31,21 @@ pub async fn refresh(manager: &Manager) -> bool {
         return false;
     }
     let _fetching = FETCHING.lock().await;
-    let stored = match fetch(managed::PACKAGED_URL).await {
-        Ok(bytes) => {
+    let fetched = match fetch(managed::PACKAGED_URL).await {
+        Ok(bytes) => fetch_signature(managed::PACKAGED_URL)
+            .await
+            .map(|signature| (bytes, signature)),
+        Err(reason) => Err(reason),
+    };
+    let stored = match fetched {
+        Ok((bytes, signature)) => {
             let manager = manager.clone();
-            tauri::async_runtime::spawn_blocking(move || manager.store_packaged_policy(&bytes))
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|stored| stored.map(|_| ()))
+            tauri::async_runtime::spawn_blocking(move || {
+                manager.store_packaged_policy(&bytes, signature.as_deref())
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|stored| stored.map(|_| ()))
         }
         Err(reason) => {
             manager.packaged_policy_failed(reason.clone());
@@ -65,15 +73,49 @@ fn client() -> Result<&'static reqwest::Client, String> {
         .map_err(Clone::clone)
 }
 
+/// The policy's detached signature, or `None` when the packager publishes none. Any
+/// other failure fails the refresh, so a signed policy is never kept as unsigned.
+async fn fetch_signature(url: &str) -> Result<Option<Vec<u8>>, String> {
+    let url = managed::signature_url(url);
+    let response = client()?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    read(
+        response,
+        16 * 1024,
+        "Managed plugin policy signature exceeds 16 KiB",
+    )
+    .await
+    .map(Some)
+}
+
 async fn fetch(url: &str) -> Result<Vec<u8>, String> {
-    let mut response = client()?.get(url).send().await.map_err(|e| e.to_string())?;
+    let response = client()?.get(url).send().await.map_err(|e| e.to_string())?;
+    read(
+        response,
+        managed::MAX_BYTES,
+        "Managed plugin policy exceeds 256 KiB",
+    )
+    .await
+}
+
+async fn read(
+    mut response: reqwest::Response,
+    limit: u64,
+    too_large: &str,
+) -> Result<Vec<u8>, String> {
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        if (body.len() + chunk.len()) as u64 > managed::MAX_BYTES {
-            return Err("Managed plugin policy exceeds 256 KiB".into());
+        if (body.len() + chunk.len()) as u64 > limit {
+            return Err(too_large.into());
         }
         body.extend_from_slice(&chunk);
     }

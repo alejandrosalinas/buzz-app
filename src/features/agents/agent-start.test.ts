@@ -212,9 +212,22 @@ describe("start resolution", () => {
     });
   });
 
-  it("refuses settings for another agent type, or holding workspace or an unknown value", () => {
+  it("reports the agent type mismatch without version guidance", () => {
+    const { store } = seeded();
+    install(
+      store,
+      settings,
+      revision({ agentType: "codex", settings: { model: "m" } }),
+    );
+    expect(resolveStart(input(store))).toMatchObject({
+      ok: false,
+      state: "invalid",
+      reason: "These settings are for another agent type",
+    });
+  });
+
+  it("refuses settings holding workspace or an unknown value", () => {
     for (const body of [
-      { agentType: "codex", settings: { model: "m" } },
       { agentType: "claude-code", settings: { workspace: "/elsewhere" } },
       { agentType: "claude-code", settings: { scope: "galaxy" } },
     ]) {
@@ -225,6 +238,42 @@ describe("start resolution", () => {
         state: "invalid",
       });
     }
+  });
+
+  it.each([
+    [{ scope: "galaxy" }, 'Setting "scope" has an unsupported value'],
+    [{ future: "value" }, 'Unknown setting "future"'],
+    [{ model: 42 }, 'Setting "model" is not text'],
+  ])(
+    "explains incompatible settings while preserving the reason: %j",
+    (value, reason) => {
+      const { store } = seeded();
+      install(
+        store,
+        settings,
+        revision({ agentType: "claude-code", settings: value }),
+      );
+      expect(resolveStart(input(store))).toMatchObject({
+        ok: false,
+        state: "invalid",
+        reason: `These agent settings aren't compatible with this version of Buzz: ${reason}`,
+      });
+    },
+  );
+
+  it("reports malformed settings as unusable", () => {
+    const { store } = seeded();
+    install(
+      store,
+      settings,
+      revision({ agentType: "claude-code" }),
+      "Settings missing",
+    );
+    expect(resolveStart(input(store))).toMatchObject({
+      ok: false,
+      state: "invalid",
+      reason: "Settings can't be used: Settings missing",
+    });
   });
 
   it("keeps serving a confirmed head while the relay is unreachable, but not after lost access", () => {

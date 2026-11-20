@@ -109,6 +109,10 @@ export class ArtifactStorageService extends Service implements ArtifactStorage {
         valid();
         return collection.subscribe(listener);
       },
+      subscribeChanges(listener) {
+        valid();
+        return collection.subscribeChanges(listener);
+      },
       preferences: {
         get(id) {
           valid();

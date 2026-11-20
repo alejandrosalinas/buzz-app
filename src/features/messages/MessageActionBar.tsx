@@ -19,7 +19,9 @@ import {
   DotsThreeIcon,
   LinkIcon,
   ForwardIcon,
+  QuotesIcon,
 } from "../../shared/design-system/icons";
+import { behindActiveOverlay } from "../../shared/design-system/overlayLayer";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
   ContextMenuRoot,
@@ -29,6 +31,8 @@ import {
   MenuPopup,
   MenuItem,
   MenuIcon,
+  MenuSeparator,
+  type MenuPosition,
 } from "../../shared/design-system/ui/Menu";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import styles from "./Messages.module.css";
@@ -36,15 +40,19 @@ import {
   useFloatingActionBar,
   useMessageActionBarReady,
 } from "./useFloatingActionBar";
-import { writeClipboardText } from "../../shared/clipboard";
+import {
+  writeClipboardRichText,
+  writeClipboardText,
+} from "../../shared/clipboard";
+import { captureSelectedQuote, quoteSelection } from "./selection-quote";
 
 const AfterMenuClose = createContext<
   ((action: () => void) => void) | undefined
 >(undefined);
 export const useAfterMessageMenuClose = () => useContext(AfterMenuClose);
 
-// Links, media, editable content and text the reader had already selected
-// keep the browser's own menu.
+// Links, media, editable content and selections that cannot be quoted keep
+// their own menus. A quotable selection takes precedence in the capture phase.
 const nativeMenuTarget =
   "a[href], img, video, audio, input, textarea, select, [contenteditable]:not([contenteditable='false'])";
 // Read at the press: macOS selects the word under a secondary click before
@@ -89,6 +97,7 @@ type Props = {
 // row under the press.
 type RowMenus = { rows: Map<string, Props>; changed: (id: string) => void };
 const RowMenus = createContext<RowMenus | undefined>(undefined);
+const SELECTION_HIGHLIGHT = "buzz-message-highlight";
 
 /** The context menu of the toolbar message rows rendered inside `children`. */
 export function MessageContextMenus({ children }: { children: ReactElement }) {
@@ -126,7 +135,7 @@ export function MessageContextMenus({ children }: { children: ReactElement }) {
           select: (element) => {
             const id = rowAt(element);
             if (id) setTarget(id);
-            return !!id;
+            return id;
           },
           release: () => setTarget(undefined),
         }}
@@ -196,10 +205,16 @@ function MessageActionBarControls({
   host,
 }: Props & {
   /** A list's menu: selects the row under a press and releases it on close. */
-  host?: { select: (element: Element) => boolean; release: () => void };
+  host?: {
+    select: (element: Element) => string | undefined;
+    release: () => void;
+  };
 }) {
   const active = useConversationPresentation();
   const [open, setOpen] = useState(false);
+  const [selection, setSelection] =
+    useState<ReturnType<typeof captureSelectedQuote>>();
+  const [contextLink, setContextLink] = useState<string>();
   // A hidden conversation, or a list's removed row, retires its open menu.
   if (open && (!active || (host && !messageId))) setOpen(false);
   const barRef = useRef<HTMLDivElement>(null);
@@ -214,11 +229,28 @@ function MessageActionBarControls({
   const [notice, setNotice] = useState<{ text: string; error: boolean }>();
   const busy = useRef(false);
   const afterClose = useRef<(() => void) | undefined>(undefined);
-  // A list's removed row also drops the item it queued for after close.
   const removed = !!host && !messageId;
   useLayoutEffect(() => {
-    if (removed) afterClose.current = undefined;
-  }, [removed]);
+    const highlights = globalThis.CSS?.highlights;
+    if (!open || !selection || !active || removed || !highlights) return;
+    // Paint the saved ranges while the menu owns focus. Fresh range objects
+    // also avoid WebKit sharing paint state with Find on screen.
+    const highlight = new Highlight(
+      ...selection.ranges.map((range) => range.cloneRange()),
+    );
+    highlights.set(SELECTION_HIGHLIGHT, highlight);
+    document.documentElement.dataset.messageHighlight = "";
+    return () => {
+      if (highlights.get(SELECTION_HIGHLIGHT) !== highlight) return;
+      highlight.clear();
+      highlights.delete(SELECTION_HIGHLIGHT);
+      delete document.documentElement.dataset.messageHighlight;
+    };
+  }, [open, selection, active, removed]);
+  // Retiring the conversation or source row cancels any queued handoff.
+  useLayoutEffect(() => {
+    if (removed || !active) afterClose.current = undefined;
+  }, [removed, active]);
   const live = useRef(true);
   useLayoutEffect(() => {
     live.current = true;
@@ -229,18 +261,22 @@ function MessageActionBarControls({
   }, []);
   const [handingOffFocus, setHandingOffFocus] = useState(false);
   const [openedByPointer, setOpenedByPointer] = useState(false);
-  const [contextAnchor, setContextAnchor] = useState<HTMLElement>();
+  const [contextAnchor, setContextAnchor] = useState<MenuPosition["anchor"]>();
   const contextFocus = useRef<HTMLElement | null>(null);
-  const selectedAtPress = useRef<boolean>(undefined);
+  const selectedAtPress = useRef<boolean | "touch">(undefined);
+  const overflowSelection =
+    useRef<ReturnType<typeof captureSelectedQuote>>(undefined);
   const ownTrigger = useRef<HTMLButtonElement>(null);
   const trigger = menuTriggerRef ?? ownTrigger;
-  const copy = async (text: () => string, label: string) => {
+  const copy = async (text: () => string, label: string, html?: string) => {
     if (busy.current) return;
     busy.current = true;
     setCopying(true);
     setNotice(undefined);
     try {
-      await writeClipboardText(text());
+      await (html === undefined
+        ? writeClipboardText(text())
+        : writeClipboardRichText(text(), html, { fallbackToPlainText: true }));
       setNotice({ text: `${label} copied`, error: false });
     } catch {
       setNotice({
@@ -275,6 +311,54 @@ function MessageActionBarControls({
           afterClose.current = action;
         }}
       >
+        {selection && (
+          <>
+            <MenuItem
+              disabled={copying}
+              onClick={() =>
+                void copy(() => selection.text, "Text", selection.html)
+              }
+            >
+              <MenuIcon>
+                <CopyIcon />
+              </MenuIcon>
+              Copy highlight
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setHandingOffFocus(true);
+                afterClose.current = () => {
+                  if (!quoteSelection(selection)) {
+                    const target = contextFocus.current;
+                    if (target?.isConnected)
+                      target.focus({ preventScroll: true });
+                    setNotice({
+                      text: "Couldn’t quote. Select the text and try again.",
+                      error: true,
+                    });
+                  }
+                };
+              }}
+            >
+              <MenuIcon>
+                <QuotesIcon />
+              </MenuIcon>
+              Quote highlight
+            </MenuItem>
+            {contextLink && (
+              <MenuItem
+                disabled={copying}
+                onClick={() => void copy(() => contextLink, "Link URL")}
+              >
+                <MenuIcon>
+                  <LinkIcon />
+                </MenuIcon>
+                Copy link URL
+              </MenuItem>
+            )}
+            <MenuSeparator />
+          </>
+        )}
         {leadingItems}
         <MenuItem
           disabled={copying}
@@ -331,7 +415,7 @@ function MessageActionBarControls({
           <MenuIcon>
             <LinkIcon />
           </MenuIcon>
-          Copy link
+          {contextLink ? "Copy message link" : "Copy link"}
         </MenuItem>
         {onForward && (
           <MenuItem
@@ -363,6 +447,8 @@ function MessageActionBarControls({
   const closed = (opened: boolean) => {
     if (!opened) {
       host?.release();
+      setSelection(undefined);
+      setContextLink(undefined);
       const action = afterClose.current;
       afterClose.current = undefined;
       action?.();
@@ -398,7 +484,50 @@ function MessageActionBarControls({
                 : children
             }
             onPointerDown={(event) => {
-              selectedAtPress.current = selectionHolds(event.nativeEvent);
+              selectedAtPress.current =
+                event.pointerType === "touch"
+                  ? withToolbar
+                    ? "touch"
+                    : false
+                  : selectionHolds(event.nativeEvent);
+            }}
+            onContextMenuCapture={(event) => {
+              if (
+                !active ||
+                !event.currentTarget.contains(event.target as Node) ||
+                (event.target as Element).closest?.(
+                  "[data-message-actions], input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+                ) ||
+                selectedAtPress.current === "touch" ||
+                !(selectedAtPress.current ?? selectionHolds(event.nativeEvent))
+              )
+                return;
+              const quote = captureSelectedQuote();
+              if (
+                !quote?.element.contains(event.target as Node) ||
+                behindActiveOverlay(event.currentTarget)
+              )
+                return;
+              const id = host
+                ? host.select(event.target as Element)
+                : messageId;
+              if (!id || !quote.messageIds.has(id)) return;
+              // Own a selected link's event before its separate menu can open.
+              event.preventDefault();
+              event.stopPropagation();
+              selectedAtPress.current = undefined;
+              setSelection(quote);
+              setContextLink(
+                (event.target as Element)
+                  .closest<HTMLAnchorElement>("a[data-link-label]")
+                  ?.getAttribute("href") ?? undefined,
+              );
+              setHandingOffFocus(false);
+              afterClose.current = undefined;
+              const rect = new DOMRect(event.clientX, event.clientY, 0, 0);
+              setContextAnchor({ getBoundingClientRect: () => rect });
+              contextFocus.current = quote.element;
+              setOpen(true);
             }}
             onContextMenu={(event) => {
               const selected = selectedAtPress.current;
@@ -412,6 +541,7 @@ function MessageActionBarControls({
                 return;
               }
               if (
+                selected === "touch" ||
                 keepsNativeMenu(event.target, selected) ||
                 (host && !host.select(event.target as Element))
               ) {
@@ -420,6 +550,7 @@ function MessageActionBarControls({
                 event.stopPropagation();
                 return;
               }
+              setSelection(undefined);
               setContextAnchor(undefined);
               contextFocus.current = withToolbar
                 ? null
@@ -436,6 +567,7 @@ function MessageActionBarControls({
                 event.preventBaseUIHandler();
                 return;
               }
+              setSelection(undefined);
               setContextAnchor(undefined);
               contextFocus.current =
                 event.currentTarget.querySelector("button");
@@ -453,6 +585,7 @@ function MessageActionBarControls({
               ) {
                 if (host && !host.select(event.target as Element)) return;
                 event.preventDefault();
+                setSelection(undefined);
                 contextFocus.current = event.target as HTMLElement;
                 setContextAnchor(contextFocus.current);
                 setHandingOffFocus(false);
@@ -506,6 +639,11 @@ function MessageActionBarControls({
               open={open}
               onOpenChange={(next, details) => {
                 if (next) {
+                  const quote = overflowSelection.current;
+                  overflowSelection.current = undefined;
+                  setSelection(quote);
+                  setContextLink(undefined);
+                  if (quote) contextFocus.current = quote.element;
                   setHandingOffFocus(false);
                   // Base UI opens on mousedown, so a real pointer press carries a
                   // click count; keyboard and assistive presses arrive as a click
@@ -527,6 +665,19 @@ function MessageActionBarControls({
               onOpenChangeComplete={closed}
             >
               <MenuTrigger
+                onPointerDownCapture={(event) => {
+                  // Save the same conversation's highlight before ⋯ takes focus.
+                  const quote = captureSelectedQuote();
+                  overflowSelection.current =
+                    messageId &&
+                    quote?.messageIds.has(messageId) &&
+                    quote.element.contains(event.currentTarget)
+                      ? quote
+                      : undefined;
+                }}
+                onKeyDownCapture={() => {
+                  overflowSelection.current = undefined;
+                }}
                 render={
                   <IconButton
                     hint="familiar"

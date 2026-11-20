@@ -244,6 +244,7 @@ export function fakeRelay(origin = "https://relay.example.test") {
     session,
   };
   const connected_ = snapshot;
+  let communityId: string | undefined;
   return {
     relay: {
       snapshot: () => snapshot,
@@ -256,7 +257,11 @@ export function fakeRelay(origin = "https://relay.example.test") {
     /** Drops the connection, or restores it with a new session. */
     connect(connected: boolean) {
       snapshot = connected
-        ? { ...connected_, session: { ...session } as RelaySession }
+        ? {
+            ...connected_,
+            session: { ...session } as RelaySession,
+            ...(communityId ? { communityId } : {}),
+          }
         : { status: "disconnected", generation: 2, session };
       for (const listener of changes) listener();
     },
@@ -275,10 +280,29 @@ export function fakeRelay(origin = "https://relay.example.test") {
       snapshot = { status: "error", generation: 4, session, error: "down" };
       for (const listener of changes) listener();
     },
+    /** Reloads in place, as Cmd+R does: connecting, then failing if asked
+     * (for good unless `retrying`), still reloading until `connect`. */
+    reload(failure?: { denied?: true; retrying?: true }) {
+      snapshot = failure
+        ? {
+            status: "error",
+            generation: 5,
+            session,
+            error: "down",
+            reloading: true,
+            ...failure,
+          }
+        : { status: "connecting", generation: 5, session, reloading: true };
+      for (const listener of changes) listener();
+    },
     /** Replaces the session, as after the transport was lost. */
     reconnecting() {
       snapshot = { status: "connecting", generation: 3, session };
       for (const listener of changes) listener();
+    },
+    /** The NIP-11 community ID the next connected session's transport reads. */
+    readsCommunity(id: string | undefined) {
+      communityId = id;
     },
     /** Drops and restores the socket inside the same session, as live.ts does. */
     recover() {

@@ -4,7 +4,7 @@ import { MeshGoose } from "./meshGoose";
 import { createMeshTranscriptTab } from "./MeshTranscriptTab";
 import { MemoryReads, coreOf } from "../../features/agent-harness/core-memory";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import type { PluginModule } from "../../plugins/api";
 
 import { EmbeddedActivity } from "./EmbeddedActivity";
@@ -277,6 +277,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     setupOnly?: boolean;
     disabled?: boolean;
   }) {
+    const sharingDisclosure = useId();
     const snapshot = useSyncExternalStore(
       ctx.relay.subscribe,
       ctx.relay.snapshot,
@@ -566,11 +567,21 @@ export const apply: PluginModule["apply"] = (ctx) => {
       );
     return (
       <ConsumerComputeView
+        headerDescription={
+          isTauri() && status && !otherCommunity ? (
+            <span id={sharingDisclosure}>
+              Members of {community?.name ?? "this community"} can run prompts
+              on this machine. Sharing resumes when Buzz reconnects after
+              relaunch.
+            </span>
+          ) : undefined
+        }
         headerControl={
           isTauri() && status && !otherCommunity ? (
             <div className={styles.sharingControl}>
               <Switch
                 aria-label="Share compute"
+                aria-describedby={sharingDisclosure}
                 checked={shareOn}
                 onCheckedChange={(next) => {
                   if (next) void share();
@@ -611,20 +622,6 @@ export const apply: PluginModule["apply"] = (ctx) => {
         refreshDisabled={busy || !isTauri()}
         refresh={() => void refresh()}
       >
-        {community?.name &&
-          (status?.sharing && !otherCommunity ? (
-            <p className="m-0 text-body">
-              Sharing{" "}
-              <strong title={status.sharing}>
-                {modelNames[status.sharing] ?? status.sharing}
-              </strong>{" "}
-              with <strong>{community.name}</strong>
-            </p>
-          ) : (
-            <p className="m-0 text-body-sm text-secondary">
-              Shared compute for <strong>{community.name}</strong>
-            </p>
-          ))}
         {otherCommunity && (
           <section aria-label="Bound compute community">
             <p>
@@ -656,13 +653,6 @@ export const apply: PluginModule["apply"] = (ctx) => {
         )}
         {isTauri() && status && !otherCommunity && (
           <section aria-label="Share compute">
-            <p className="m-0 text-body-sm text-secondary">
-              Let {community?.name ?? "this community"} run prompts on this
-              machine. Auto picks the best model for your hardware; you can also
-              choose one. Members serving your helper’s model can read its
-              prompts, conversation history and, in Agent mode, tool output and
-              core memory. Sharing resumes when you reopen Buzz.
-            </p>
             {status.sharing && status.download && !status.download.done && (
               <DownloadProgress download={status.download} />
             )}

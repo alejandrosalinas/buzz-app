@@ -73,7 +73,7 @@ vi.mock("virtua", async () => {
 
 /** The navigation Bestie hands its Members dialog. */
 const membersDialog = vi.hoisted(() => ({
-  onOpenConversation: undefined as ((id: string) => boolean) | undefined,
+  onOpenMessage: undefined as ((link: string) => boolean) | undefined,
 }));
 vi.mock("../channels/ChannelMembersDialog", async (importOriginal) => {
   const actual =
@@ -83,7 +83,7 @@ vi.mock("../channels/ChannelMembersDialog", async (importOriginal) => {
     ChannelMembersDialog(
       props: Parameters<typeof actual.ChannelMembersDialog>[0],
     ) {
-      membersDialog.onOpenConversation = props.onOpenConversation;
+      membersDialog.onOpenMessage = props.onOpenMessage;
       return <actual.ChannelMembersDialog {...props} />;
     },
   };
@@ -1131,10 +1131,12 @@ it("opens the DM an addition lands in, when Bestie's Members starts or finds ano
     await screen.findByRole("menuitem", { name: "View channel details" }),
   );
   await user.click(await screen.findByRole("button", { name: "View members" }));
-  await waitFor(() => expect(membersDialog.onOpenConversation).toBeDefined());
+  await waitFor(() => expect(membersDialog.onOpenMessage).toBeDefined());
   let opened: boolean | undefined;
   act(() => {
-    opened = membersDialog.onOpenConversation?.(fizzDM);
+    opened = membersDialog.onOpenMessage?.(
+      `buzz://channel/${encodeURIComponent(fizzDM)}`,
+    );
   });
   expect(opened).toBe(true);
   await waitFor(() =>

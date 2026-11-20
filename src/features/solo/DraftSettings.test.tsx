@@ -11,6 +11,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RelaySession } from "../relay/session";
+import {
+  LIVE_CANVAS_BYTES,
+  LIVE_CANVAS_LIMIT,
+} from "../channel-templates/model";
+import { readWorkspace } from "./workspace";
 import { DraftSettings } from "./DraftSettings";
 
 afterEach(cleanup);
@@ -75,6 +80,57 @@ it.each([
     expect(save).not.toHaveBeenCalled();
   },
 );
+
+it("opens a near-limit historical draft Canvas as structured settings and protects oversized edits", async () => {
+  const user = userEvent.setup();
+  const header = [
+    '<!-- buzz-session-workspace:v1 {"folders":["/repo"],"worktree":{"location":"~/trees","baseBranch":"main"}} -->',
+    "## Workspace instructions",
+    "",
+    "- Use `/repo` for review only. Do not make changes directly in it.",
+    "- Before starting new work, fetch the latest `main` branch from origin.",
+    "- For each repository that needs changes, create a new worktree under `~/trees` from `origin/main`.",
+    "- Make all changes in that new worktree.",
+    "<!-- /buzz-session-workspace -->",
+    "",
+    "",
+  ].join("\n");
+  const body = "x".repeat(LIVE_CANVAS_BYTES - header.length);
+  const h = await view(header + body);
+  expect(screen.getByRole("button", { name: "Remove repo" })).toBeVisible();
+  expect(
+    screen.getByRole("switch", { name: "Work in a new worktree" }),
+  ).toBeChecked();
+  const field = screen.getByRole("textbox", { name: /^Instructions/ });
+  expect((field as HTMLTextAreaElement).value.length).toBe(body.length);
+  await user.keyboard("{Escape}");
+  expect(h.close).toHaveBeenCalledOnce();
+  change(/^Chat name/, "Updated plan");
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  expect(h.save).toHaveBeenCalledWith(header + body, undefined, "Updated plan");
+  h.save.mockClear();
+  change(/^Chat name/, "");
+  change(/^Instructions/, `${body.slice(0, -1)}y`);
+  await user.keyboard("{Escape}");
+  await user.click(
+    within(await prompt()).getByRole("button", { name: "Keep editing" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(LIVE_CANVAS_LIMIT);
+  expect(h.save).not.toHaveBeenCalled();
+  change(/^Instructions/, body);
+  await user.keyboard("{Escape}");
+  expect(h.close).toHaveBeenCalledTimes(3);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  change(/^Instructions/, "Shorter instructions");
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  expect(h.save).toHaveBeenCalledOnce();
+  expect(readWorkspace(h.save.mock.calls[0]?.[0] ?? "")).toEqual({
+    folders: ["/repo"],
+    worktree: { location: "~/trees", baseBranch: "main" },
+    canvas: "Shorter instructions",
+  });
+});
 
 it("does not prompt for untouched legacy worktree instructions, but protects a real edit", async () => {
   const user = userEvent.setup();
@@ -174,7 +230,7 @@ it("closes at once while settings load and after their load fails", async () => 
   const close = vi.fn();
   render(
     <DraftSettings
-      session={{ soloPreferences: { refresh } } as unknown as RelaySession}
+      session={{ sidebarPreferences: { refresh } } as unknown as RelaySession}
       projectId="work"
       close={close}
       save={vi.fn()}

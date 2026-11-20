@@ -81,6 +81,54 @@
     opacity: 0;
   }
 }
+/* Unread activity: the trailing dot is Mark as read. Hover or keyboard focus
+   turns the dot into the action in its place, and the timestamp stays.
+   Without a hover pointer the dot stays and a tap on it reads the row. */
+.activityUnreadDot {
+  display: block;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
+  /* Room for the action's hover fill, so it never touches the timestamp. */
+  margin-inline-start: calc(
+    var(--size-control-sm) /
+    2 -
+    var(--space-2) /
+    2 -
+    var(--space-row-gap)
+  );
+  background: var(--text-navigation-unread);
+  transition: opacity var(--duration-state) var(--easing-state);
+}
+.activityItemUnread > .activityItemAction {
+  top: 0;
+  bottom: 0;
+  /* Center the button on the dot, inside the row's trailing inset. */
+  right: calc(
+    var(--space-control-inset) +
+    var(--space-2) /
+    2 -
+    var(--size-control-sm) /
+    2
+  );
+  align-items: center;
+  padding: 0;
+  background: none;
+  transition: opacity var(--duration-state) var(--easing-state);
+}
+.activityItemUnread:has(.activityItemAction:focus-within) .activityUnreadDot {
+  opacity: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .activityItemUnread:hover .activityUnreadDot {
+    opacity: 0;
+  }
+}
+@media (hover: none) {
+  .activityItemUnread > .activityItemAction:not(:focus-within) {
+    opacity: 0;
+  }
+}
 .activityAvatar {
   width: 1.875rem;
   height: 1.875rem;

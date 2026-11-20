@@ -10,6 +10,7 @@ import { constants } from "node:fs";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { diffHighlighterAliases } from "../../scripts/diff-highlighter-aliases.mjs";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -161,6 +162,8 @@ export async function previewFixtures(pages) {
       envDir: false,
       logLevel: "error",
       plugins: [react()],
+      // As in the app build, so diff fixtures load the grammars that ship.
+      resolve: { alias: diffHighlighterAliases },
       define: {
         "import.meta.env.DEV": "true",
         "process.env.NODE_ENV": '"development"',

@@ -9,6 +9,137 @@ test.use({
   historyCounts: { alpha: 3, beta: 1 },
 });
 
+test.describe("touch selection menus", () => {
+  test.use({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 900, height: 950 },
+  });
+
+  test("touch ⋯ quotes the highlight; Chromium long presses stay native", async ({
+    page,
+    app,
+    browserName,
+  }) => {
+    await open(page, app);
+    const message = app.append("primary", "alpha", "Touch context target");
+    const row = page.locator(
+      `[data-channel-timeline] [data-message-id="${message.id}"]`,
+    );
+    const prose = row.locator("[data-message-action-anchor] p");
+    await expect(prose).toBeVisible();
+    await prose.selectText();
+    // Trusted long-press synthesis needs CDP; both engines exercise the ⋯ tap.
+    if (browserName === "chromium") {
+      const box = await prose.boundingBox();
+      const nativeMenu = () =>
+        expect
+          .poll(() =>
+            page.evaluate(() =>
+              window.contextMenus.map((event) => ({
+                trusted: event.isTrusted,
+                pointerType: event.pointerType,
+                prevented: event.defaultPrevented,
+              })),
+            ),
+          )
+          .toEqual([{ trusted: true, pointerType: "touch", prevented: false }]);
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        if (process.platform === "linux") {
+          // Aura's synthesizeTapGesture route bypasses long-press recognition.
+          // Mouse-to-touch emulation still generates real trusted touch input.
+          const point = {
+            x: Math.round(box.x + box.width / 2),
+            y: Math.round(box.y + box.height / 2),
+            button: "left",
+            clickCount: 1,
+          };
+          const released = await page.evaluateHandle(() => {
+            const state = { ended: false };
+            window.addEventListener(
+              "touchend",
+              () => {
+                state.ended = true;
+              },
+              {
+                once: true,
+                capture: true,
+              },
+            );
+            return state;
+          });
+          await cdp.send("Emulation.setEmitTouchEventsForMouse", {
+            enabled: true,
+            configuration: "mobile",
+          });
+          try {
+            await cdp.send("Input.emulateTouchFromMouseEvent", {
+              type: "mousePressed",
+              ...point,
+            });
+            await nativeMenu();
+          } finally {
+            await cdp.send("Input.emulateTouchFromMouseEvent", {
+              type: "mouseReleased",
+              ...point,
+            });
+            try {
+              // Release is forwarded asynchronously; do not disable it early.
+              await expect
+                .poll(() => released.evaluate((state) => state.ended))
+                .toBe(true);
+            } finally {
+              await cdp.send("Emulation.setEmitTouchEventsForMouse", {
+                enabled: false,
+              });
+              await released.dispose();
+            }
+          }
+        } else {
+          await cdp.send("Input.synthesizeTapGesture", {
+            x: box.x + box.width / 2,
+            y: box.y + box.height / 2,
+            duration: 1000,
+            gestureSourceType: "touch",
+          });
+        }
+      } finally {
+        await cdp.detach();
+      }
+      await nativeMenu();
+      await expect(page.getByRole("menu")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+    }
+    await prose.selectText();
+    await row.getByRole("button", { name: "More message actions" }).tap();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem").nth(0)).toHaveText(
+      "Copy highlight",
+    );
+    await expect(menu.getByRole("menuitem").nth(1)).toHaveText(
+      "Quote highlight",
+    );
+    // Touch focus may clear the live range; the captured content must survive.
+    await page.evaluate(() => getSelection()?.removeAllRanges());
+    await menu.getByRole("menuitem", { name: "Quote highlight" }).tap();
+    const input = page.getByRole("textbox", {
+      name: "Message #Alpha",
+      exact: true,
+    });
+    await expect(input.locator("blockquote")).toHaveText(
+      "Touch context target",
+    );
+    await expect(
+      input.locator(":scope > p:first-child [data-source]"),
+    ).toHaveAttribute(
+      "data-source",
+      `buzz://message?channel=alpha&id=${message.id}`,
+    );
+    await expect(input).toBeFocused();
+  });
+});
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.copied = [];
@@ -135,16 +266,52 @@ test("right-clicking a message timestamp offers its ⋯ actions and copies its l
   await page.mouse.click(1, 1);
   await expect(menu).toHaveCount(0);
 
-  // Text the reader selected keeps the browser's menu.
+  // Highlighted prose prepends its actions to the existing message menu.
   const prose = row.locator("[data-message-action-anchor] p");
   await prose.selectText();
   await page.evaluate(() => {
     window.contextMenus = [];
   });
   await rightClick(page, prose);
-  expect(await prevented(page)).toEqual([false]);
+  expect(await prevented(page)).toEqual([true]);
+  await expect(menu).toBeVisible();
+  expect((await items(page).allInnerTexts()).slice(0, 2)).toEqual([
+    "Copy highlight",
+    "Quote highlight",
+  ]);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  // The same selection does not add highlight actions outside its range.
+  await prose.selectText();
+  await rightClick(
+    page,
+    rowOf(peer.id).locator("[data-message-action-anchor] p").first(),
+  );
+  await expect(
+    menu.getByRole("menuitem", { name: "Copy link", exact: true }),
+  ).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /highlight/ })).toHaveCount(
+    0,
+  );
+  await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await page.evaluate(() => document.getSelection()?.removeAllRanges());
+
+  // Editing selections keep the browser menu.
+  const input = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  await input.fill("Draft context");
+  await input.selectText();
+  await page.evaluate(() => {
+    window.contextMenus = [];
+  });
+  await input.click({ button: "right" });
+  expect(await prevented(page)).toEqual([false]);
+  await expect(menu).toHaveCount(0);
+  await input.fill("");
 
   // A thread reply's menu copies the reply's own thread link.
   await clickRow(page, summary);

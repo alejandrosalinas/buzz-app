@@ -20,7 +20,9 @@ import type {
 } from "./service";
 import { AgentSaveButton } from "./AgentSaveButton";
 import { AgentConfigHistoryRow } from "./AgentConfigHistoryRow";
+import { Button } from "../../shared/design-system/ui/Button";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
+import { incompatibleSettings } from "./agent-config-history";
 import { AgentExecutionNote } from "./AgentExecutionNote";
 import { agentExecution } from "./execution-location";
 
@@ -49,6 +51,8 @@ export function agentSections({
   communities,
   settingsSection,
   settingsContent,
+  openVersionHistory,
+  versionHistoryDisabled,
 }: {
   agents: Agents;
   agent: Agent;
@@ -66,6 +70,8 @@ export function agentSections({
   settingsHost?: AgentSettingsHost;
   settingsSection?: "identity" | "runtime";
   settingsContent?: ReactNode;
+  openVersionHistory?: (() => void) | undefined;
+  versionHistoryDisabled?: boolean | undefined;
   /** Memory reads through the owner's session; absent while it connects. */
   memories: AgentMemories | undefined;
   memoryLinks?: MemoryLinks | undefined;
@@ -81,6 +87,12 @@ export function agentSections({
       </SettingsGroup>
     ) : undefined;
   const details = settingsContent ?? historyContent;
+  const history =
+    agent.place === "here" ? agents.configHistory(agent.key) : undefined;
+  const recoverable =
+    agent.place === "here" &&
+    agent.configProblem &&
+    incompatibleSettings(history);
   // Remote harnesses own their availability-dependent execution guidance.
   const execution = type?.remote ? undefined : agentExecution(agent, type);
   const typeTabs = type?.tabs ?? [];
@@ -104,6 +116,9 @@ export function agentSections({
           }
           agents={agents}
           agent={agent}
+          openVersionHistory={recoverable ? openVersionHistory : undefined}
+          versionHistoryDisabled={versionHistoryDisabled}
+          recoveryProblem={history?.settingsProblem}
         >
           {(save) => {
             const content = (
@@ -246,13 +261,19 @@ function HostSettings({ host }: { host: AgentSettingsHost }) {
  * with, so an edit made over a stale view conflicts instead of overwriting.
  * Each save moves the base to what it saved. */
 function EditorBase({
+  recoveryProblem,
   agents,
   agent,
   children,
+  openVersionHistory,
+  versionHistoryDisabled,
 }: {
   agents: Pick<Agents, "save" | "snapshot">;
   agent: Agent;
+  recoveryProblem?: string | undefined;
   children(save: AgentViewProps["save"]): ReactNode;
+  openVersionHistory?: (() => void) | undefined;
+  versionHistoryDisabled?: boolean | undefined;
 }) {
   const [base, setBase] = useState(agent.configBase);
   const editor = children(async (config, options) => {
@@ -270,6 +291,21 @@ function EditorBase({
       {agent.configProblem && (
         <p role="alert" className="buzz-field-error">
           {agent.configProblem}
+          {recoveryProblem && <>. {recoveryProblem}</>}
+          {openVersionHistory && (
+            <>
+              {". Use a Buzz version that supports them, or open "}
+              <Button
+                variant="link"
+                size="text"
+                disabled={versionHistoryDisabled}
+                onClick={openVersionHistory}
+              >
+                Previous Versions
+              </Button>
+              {" to look for a compatible revision."}
+            </>
+          )}
         </p>
       )}
       {editor}

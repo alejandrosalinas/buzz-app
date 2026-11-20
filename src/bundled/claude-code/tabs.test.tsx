@@ -869,16 +869,14 @@ it("is an agent type on the desktop app", () => {
       workspace: "~/code",
       scope: "channel",
     }),
-  ).toEqual({ instructions: "Triage.", workspace: "~/code" });
+  ).toEqual({
+    instructions: "Triage.",
+    workspace: "~/code",
+    sessionScope: "channel",
+  });
   expect(type.describeMigration?.(DEFAULT_CONFIG)).toEqual([
     { id: "model", label: "Model", isOverride: false },
     { id: "thinking", label: "Thinking", isOverride: false },
-    {
-      id: "sessions",
-      label: "Sessions",
-      isOverride: false,
-      unchangedKey: "thread",
-    },
   ]);
   expect(
     type.describeMigration?.({
@@ -890,12 +888,6 @@ it("is an agent type on the desktop app", () => {
   ).toEqual([
     { id: "model", label: "Model", isOverride: true },
     { id: "thinking", label: "Thinking", isOverride: true },
-    {
-      id: "sessions",
-      label: "Sessions",
-      isOverride: true,
-      unchangedKey: "channel",
-    },
   ]);
   expect(type.summary?.(agent({ ...DEFAULT_CONFIG, model: "opus" }))).toBe(
     "opus",
@@ -1936,6 +1928,27 @@ it("holds a new Claude agent without a key, Model and Thinking disabled", async 
   expect(onReadyChange).toHaveBeenLastCalledWith(false);
 });
 
+it("gives a host's group its rows alone, still holding the agent without a key", async () => {
+  const { type } = installed({ keySaved: false });
+  const Configuration = type.CreateConfiguration;
+  if (!Configuration) throw new Error("Missing creation configuration");
+  const onReadyChange = vi.fn();
+  const { container } = render(
+    <Configuration
+      rowsOnly
+      config={DEFAULT_CONFIG}
+      disabled={false}
+      harnessControl={<div>Harness row</div>}
+      onReadyChange={onReadyChange}
+      onChange={vi.fn()}
+    />,
+  );
+  expect(screen.getByText("Harness row")).toBeVisible();
+  expect(await screen.findByRole("combobox", { name: "Model" })).toBeDisabled();
+  expect(container.querySelector(".buzz-settings-group")).toBeNull();
+  expect(onReadyChange).toHaveBeenLastCalledWith(false);
+});
+
 it("offers an interactive sign-in in Set up Claude when the build has one", async () => {
   interactive.signIn = true;
   try {
@@ -2214,11 +2227,14 @@ it("separates identity fields from runtime settings without changing the stored 
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(screen.queryByLabelText("Workspace")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Sessions")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Session scope")).not.toBeInTheDocument();
   expect(screen.queryByText("Runtime diagnostics")).not.toBeInTheDocument();
   view.rerender(<Settings {...props} settingsSection="runtime" />);
   expect(screen.getByLabelText("Workspace")).toBeInTheDocument();
-  expect(screen.getByLabelText("Sessions")).toBeInTheDocument();
+  expect(screen.getByLabelText("Session scope")).toBeInTheDocument();
+  expect(
+    screen.getByText("Choose how your agent uses sessions to keep context."),
+  ).toBeInTheDocument();
   expect(screen.queryByText("Runtime diagnostics")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Instructions")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
@@ -3146,4 +3162,34 @@ it("follows the recommended setup in Settings until a manual choice", async () =
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+it("blocks an unsupported proposal effort and lets the owner clear it", async () => {
+  const Settings = tab(installed().type, 0);
+  const save = vi.fn(async () => {});
+  const user = userEvent.setup();
+  render(
+    <Settings
+      agent={agent({ ...DEFAULT_CONFIG, model: "haiku", effort: "max" })}
+      save={save}
+      settingsHost={{ proposedModelOrEffort: true, pendingSave: save }}
+    />,
+  );
+  const submit = await screen.findByRole("button", { name: "Save" });
+  await waitFor(() => expect(submit).toBeEnabled());
+  await user.click(submit);
+  expect(
+    await screen.findByText(
+      /Choose a thinking level this Claude model supports/,
+    ),
+  ).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+  await user.click(
+    screen.getByRole("button", { name: "Clear model and thinking overrides" }),
+  );
+  await user.click(submit);
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ model: "", effort: "" }),
+    expect.anything(),
+  );
 });

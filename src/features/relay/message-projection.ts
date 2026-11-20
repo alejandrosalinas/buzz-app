@@ -7,6 +7,7 @@ import type { RelayProfiler } from "./profiling";
 
 import { channelRowKind as messageKind } from "./membership";
 import { compareMessages, eventMs, MessageClock } from "./message-order";
+import { relayedFromClaim } from "./relayed-from";
 import { threadReference } from "./thread-reference";
 const PARENT_OVERLAY_DEPTH = 2;
 const CHILD_OVERLAY_DEPTH = 1;
@@ -17,7 +18,7 @@ export class MessageProjection {
   private overlays = new Map<string, Set<string>>();
   private messages = new Map<string, ChannelMessage>();
   private deliveries = new Map<string, OutgoingEvent>();
-  private owners = new Map<string, string | undefined>();
+  private owners = new Map<string, string>();
   /** This client's reply sends that no relay summary has counted yet. A send
    * `sending` or `failed` when first retained is known to be uncounted: the
    * relay never committed a rejected send, which its row keeps visible for
@@ -53,9 +54,12 @@ export class MessageProjection {
     const affected = new Set<string>();
     for (const event of events) {
       if (!messageKind(event.kind)) continue;
-      const owner = this.agentOwner?.(
-        messageAuthor(event, this.signingAuthority),
-      );
+      // A relayed row is the agent's only while the author owns that agent.
+      const relayed = relayedFromClaim(event)?.agent;
+      const owner = [
+        this.agentOwner?.(messageAuthor(event, this.signingAuthority)),
+        relayed && this.agentOwner?.(relayed),
+      ].join(":");
       if (this.owners.get(event.id) !== owner) affected.add(event.id);
       this.owners.set(event.id, owner);
     }

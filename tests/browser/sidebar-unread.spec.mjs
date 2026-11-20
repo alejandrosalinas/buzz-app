@@ -428,48 +428,30 @@ test("resizing, collapsed groups and new unread evidence update only the display
   await open(page, app);
   await expect(row(page, "dm-090").getByRole("img")).toHaveCount(1);
   await expect(cue(page, "below")).toBeVisible();
-  // Messages are hidden behind a visible section summary: not below the scroll fold.
-  await list(page)
-    .locator("summary")
-    .filter({ hasText: /^Channels$/ })
-    .click();
-  // Channels are collapsed, but unread DMs remain eligible and keep the cue.
+  // Messages behind the Team heading sit above the DMs in this scrollport.
+  const team = list(page).locator('[data-sidebar-section="channels"]');
+  const channelsSummary = team.locator("summary");
+  await channelsSummary.click();
   await expect(cue(page, "below")).toBeVisible();
-  await list(page)
-    .locator("summary")
-    .filter({ hasText: /^Channels$/ })
-    .click();
+  await channelsSummary.click();
   await cue(page, "below").click();
   await expect.poll(() => inView(page, "dm-030")).toBe(true);
   // Collapse the preceding group without scrolling it into view first.
-  await list(page)
-    .locator("summary")
-    .filter({ hasText: /^Channels$/ })
-    .evaluate((el) => el.click());
+  await channelsSummary.evaluate((element) => element.click());
   await expect(cue(page, "above")).toBeVisible();
   await cue(page, "above").click();
   await expect.poll(() => inView(page, "Beta")).toBe(true);
-  await expect(list(page).locator("details").first()).toHaveAttribute(
-    "open",
-    "",
-  );
-  const controlledContent = await list(page)
-    .locator("details")
-    .first()
-    .locator("summary")
-    .getAttribute("aria-controls");
+  await expect(team.locator("details")).toHaveAttribute("open", "");
+  const controlledContent = await channelsSummary.getAttribute("aria-controls");
   await expect(page.locator(`[id="${controlledContent}"]`)).not.toHaveAttribute(
     "inert",
   );
   await expect(row(page, "Beta")).toBeFocused();
   await expect(row(page, "Beta")).toBeEnabled();
-  const channelsSummary = list(page)
-    .locator("summary")
-    .filter({ hasText: /^Channels$/ });
   await channelsSummary.focus();
   await page.keyboard.press("Tab");
   await expect(
-    list(page).getByRole("button", { name: "More actions for Channels" }),
+    list(page).getByRole("button", { name: "More actions for Team" }),
   ).toBeFocused();
   await page.keyboard.press("Tab");
   // Disabled header actions are skipped; traversal still reaches rows only
@@ -516,7 +498,7 @@ test("resizing, collapsed groups and new unread evidence update only the display
   await page.getByText("Diagnostics", { exact: true }).click();
   await page
     .getByRole("button", {
-      name: "Mark read through loaded messages",
+      name: "Mark as read through loaded messages",
       exact: true,
     })
     .click();
@@ -558,7 +540,7 @@ test("session changes discard the previous sidebar targets and manual unread sti
     await openChannelDetails(page);
     await page.getByText("Diagnostics", { exact: true }).press("Enter");
     await page
-      .getByRole("button", { name: "Mark unread on this device", exact: true })
+      .getByRole("button", { name: "Mark as unread", exact: true })
       .click();
     await page
       .getByRole("button", { name: "Close Channel settings tab", exact: true })
@@ -636,7 +618,7 @@ test("priority dots stay aligned and use the prominent mark color in both modes"
               row.getBoundingClientRect().right -
                 Number.parseFloat(fill.right) -
                 marker.right ===
-              10,
+              12,
             separated: marker.left - label.right >= 6,
           };
         }),
@@ -690,8 +672,9 @@ test.describe("DM preview wiring", () => {
   test("production sidebar wires only 1:1 avatars and preserves their shape and overlap", async ({
     page,
     app,
-  }) => {
+  }, info) => {
     await page.setViewportSize({ width: 1440, height: 500 });
+    await page.emulateMedia({ colorScheme: "dark" });
     await open(page, app);
     for (const id of ["dm-a", "dm-b", "dm-c", "dm-d", "dm-group", "dm-self"])
       await expect(
@@ -755,5 +738,175 @@ test.describe("DM preview wiring", () => {
     );
     expect(boxes[1].left).toBeLessThan(boxes[0].right);
     expect(boxes[2].left).toBeLessThan(boxes[1].right);
+
+    // Check the painted cue against the sidebar centerline and the New button.
+    const resize = page.getByRole("separator", { name: "Resize sidebar" });
+    const action = sidebar(page).getByRole("button", { name: "New options" });
+    await expect(action).toBeVisible();
+    const geometry = () =>
+      below.evaluate((button) => {
+        const pane = button.closest("aside");
+        const sidebar = pane.getBoundingClientRect();
+        const cue = button.getBoundingClientRect();
+        const action = pane
+          .querySelector("[data-sidebar-floating-action]")
+          .getBoundingClientRect();
+        return {
+          centerDelta: Math.abs(
+            cue.left + cue.width / 2 - (sidebar.left + sidebar.width / 2),
+          ),
+          horizontalGap: cue.left - action.right,
+          verticalGap: action.top - cue.bottom,
+        };
+      });
+    const expectCentered = () =>
+      expect
+        .poll(async () => (await geometry()).centerDelta)
+        .toBeLessThanOrEqual(1);
+    const visibleAvatars = below.locator("[data-unread-dm]:visible");
+    const expectReadable = () =>
+      expect
+        .poll(() =>
+          below
+            .getByText(/^\d+ unread$/)
+            .evaluate((label) => label.scrollWidth - label.clientWidth),
+        )
+        .toBeLessThanOrEqual(1);
+    await expectCentered();
+    await expect
+      .poll(async () => (await geometry()).horizontalGap)
+      .toBeGreaterThanOrEqual(7);
+    await expect(below.locator("..")).toHaveCSS("bottom", "12px");
+    await sidebar(page).screenshot({
+      path: info.outputPath("unread-centered.png"),
+    });
+
+    await resize.press("Home");
+    await expectCentered();
+    await expect
+      .poll(async () => (await geometry()).horizontalGap)
+      .toBeGreaterThanOrEqual(7);
+    await expect(below.locator("..")).toHaveCSS("bottom", "12px");
+    await expect.poll(() => visibleAvatars.count()).toBeLessThan(3);
+    await expectReadable();
+    await action.click({ trial: true });
+    await below.click({ trial: true });
+    await sidebar(page).screenshot({
+      path: info.outputPath("unread-centered-compact.png"),
+    });
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+    const lowerWrapper = below.locator("..");
+    await expect(lowerWrapper).toHaveAttribute("data-lifted", "");
+    const narrowPreviews = await visibleAvatars.count();
+    await expectCentered();
+    await expect
+      .poll(async () => (await geometry()).verticalGap)
+      .toBeGreaterThanOrEqual(7);
+    await expectReadable();
+    await action.click({ trial: true });
+    await below.click({ trial: true });
+
+    for (let step = 0; step < 4; step++) await resize.press("Shift+ArrowRight");
+    await expect(resize).toHaveAttribute("aria-valuenow", "412");
+    await expect(lowerWrapper).not.toHaveAttribute("data-lifted");
+    expect(await visibleAvatars.count()).toBeGreaterThanOrEqual(narrowPreviews);
+    await resize.press("End");
+    await expect(visibleAvatars).toHaveCount(3);
+
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    await expectCentered();
+    await expect(below.locator("..")).toHaveCSS("bottom", "12px");
+    await expect(visibleAvatars).toHaveCount(3);
+  });
+  test("both unread cues and New are reachable in a short drawer at 200% interface size", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    await page.getByRole("textbox", { name: "Message #Alpha" }).focus();
+    await expect(
+      row(page, "alpha").locator("[data-channel-unread]"),
+    ).toHaveCount(0);
+    await page.setViewportSize({ width: 568, height: 240 });
+    await page.evaluate(() => {
+      localStorage.setItem("buzz-font-scale.v1", "2");
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: null, storageArea: localStorage }),
+      );
+    });
+    await expect(page.locator("html")).toHaveCSS("--buzz-text-scale", "2");
+    await page
+      .getByRole("button", { name: "Show navigation", exact: true })
+      .click();
+    const action = sidebar(page).getByRole("button", { name: "New options" });
+    const below = cue(page, "below");
+    const firstUnread = row(page, "beta");
+    // Place Beta just beyond the visible frame. Oversized nav padding would
+    // put it inside the nav's bounds even though the drawer clips it.
+    const clipFirstUnread = () =>
+      firstUnread.evaluate((button) => {
+        const nav = button.closest("nav");
+        const frame = nav.parentElement;
+        nav.scrollTop +=
+          button.getBoundingClientRect().top -
+          frame.getBoundingClientRect().bottom -
+          2;
+      });
+    await expect(firstUnread.locator("[data-channel-unread]")).toBeAttached();
+    await clipFirstUnread();
+    await expect(firstUnread).not.toBeInViewport();
+    await expect(action).toBeInViewport({ ratio: 1 });
+    await expect(below).toBeInViewport({ ratio: 1 });
+    await expect(below).toHaveAccessibleName("7 unread conversations below");
+    await action.click({ trial: true });
+    await below.click();
+    await expect(firstUnread).toBeFocused();
+    // Leave the drawer before it resizes under the pointer and opens a pinned preview.
+    await page.mouse.move(0, 0);
+
+    await clipFirstUnread();
+    await expect(below).toHaveAccessibleName("7 unread conversations below");
+    await action.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(below).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(firstUnread).toBeFocused();
+
+    const above = cue(page, "above");
+    for (const height of [340, 240]) {
+      await page.setViewportSize({ width: 568, height });
+      await scrollRowAbove(page, "beta");
+      await expect(above).toHaveAccessibleName("1 unread conversation above");
+      await expect(below).toHaveAccessibleName("6 unread conversations below");
+      for (const [control, count] of [
+        [above, 1],
+        [below, 6],
+      ]) {
+        const label = control.getByText(`${count} unread`, { exact: true });
+        await expect(label).toBeVisible();
+        await expect
+          .poll(() =>
+            label.evaluate((label) => label.scrollWidth - label.clientWidth),
+          )
+          .toBeLessThanOrEqual(1);
+      }
+      for (const control of [above, below, action]) {
+        await expect(control).toBeInViewport({ ratio: 1 });
+        await control.click({ trial: true });
+      }
+    }
+    await above.click();
+    await expect(firstUnread).toBeFocused();
+    await page.mouse.move(0, 0);
+
+    await scroll(page, 0);
+    await page.setViewportSize({ width: 568, height: 500 });
+    await expect(below).toBeInViewport({ ratio: 1 });
+    await expect(below.getByText(/^\d+ unread$/)).toBeVisible();
+    await below.click({ trial: true });
   });
 });

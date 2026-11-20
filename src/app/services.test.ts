@@ -3,11 +3,13 @@ import { BACKGROUND_JITTER_MS } from "../features/notifications/community-unread
 import type { Context } from "@deepseek-ai/cordis";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { Host } from "../features/host/service";
+import type { Seen } from "../features/seen/service";
 import { createServices, type AppServices } from "./services";
 
 const plugin = vi.hoisted(() => ({
   cleanup: vi.fn<() => void | Promise<void>>(),
   host: undefined as Host | undefined,
+  seen: undefined as Seen | undefined,
 }));
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
@@ -28,6 +30,7 @@ vi.mock("../bundled", () => ({
         inject: ["pages", "host"],
         apply(ctx: Context) {
           plugin.host = ctx.host;
+          plugin.seen = ctx.reflect.get("seen");
           ctx.pages.register({
             id: "main",
             title: "Test",
@@ -54,6 +57,7 @@ beforeEach(() => {
   vi.stubGlobal("navigator", { platform: "MacIntel" });
   plugin.cleanup.mockReset();
   plugin.host = undefined;
+  plugin.seen = undefined;
   vi.mocked(isTauri).mockReturnValue(false);
   vi.mocked(invoke).mockReset();
   values = new Map<string, string>();
@@ -117,6 +121,15 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it("provides Seen through optional lookup even with no selected community", async () => {
+  await vi.advanceTimersByTimeAsync(0);
+  expect(services.communities.snapshot().selected).toBeNull();
+  const key = "test.page/welcome";
+  expect(plugin.seen?.has(key)).toBe(false);
+  plugin.seen?.mark(key);
+  expect(services.seen.has(key)).toBe(true);
 });
 
 async function openCommunities() {

@@ -277,3 +277,14 @@ it("keeps an outstanding receipt when a retry submits the unchanged saved value"
   expect(f.result.current.changed).toBe(true);
   expect(f.result.current.conflicts).toEqual([]);
 });
+
+it("keeps an unsaved compaction size through another setting's update", () => {
+  const f = editor();
+  act(() =>
+    f.result.current.setDraft({ ...DEFAULT_CONFIG, compactAt: "150000" }),
+  );
+  const saved = { ...DEFAULT_CONFIG, instructions: "Elsewhere" };
+  f.rerender({ key: "a", saved, available: true });
+  expect(f.result.current.draft).toEqual({ ...saved, compactAt: "150000" });
+  expect(f.result.current.conflicts).toEqual([]);
+});

@@ -159,6 +159,9 @@ export type LinkPreviewProps = Readonly<{
   /** Opens `url` through the host, as clicking the link does. False once the
    * contribution or message retires. */
   open(): boolean;
+  /** The message's `TargetOpener`, for targets other than `url`, such as the
+   * plugin's own panel. Absent on hosts that predate it. */
+  opener?: TargetOpener | undefined;
 }>;
 /** A card below a message for one of its links. The lowest `order` among
  * matches draws it, so a plugin can claim its own URLs ahead of the default
@@ -470,6 +473,10 @@ export type ConversationWorkspaceProps = {
   session: RelaySession;
   scope: string;
   target: PageTabTarget;
+  /** A fresh signal opens the main transcript at its latest message once.
+   * Scope it to this opening. Omit it on history traversal. An aborted signal
+   * is ignored, and an explicit target.messageId takes precedence. */
+  latestRequest?: AbortSignal | undefined;
   label: string;
   /** Content at the start of history. It scrolls with the messages. */
   intro?: ReactNode;

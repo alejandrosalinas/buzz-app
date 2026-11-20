@@ -33,6 +33,10 @@ it("grants only folders the owner referenced that their repositories folder list
   expect(list).toHaveBeenCalledExactlyOnceWith("/example/repos");
   expect(granted.directories).toEqual([listed.path]);
   expect(granted.section).toContain(JSON.stringify(listed.path));
+  // A chip is context: it names no place to work.
+  expect(granted.section).toContain(
+    "They do not choose where you work; your working-location rule does.",
+  );
   expect(granted.section).not.toContain("/example/elsewhere");
 
   // Anyone in a chat can sign a folder chip; only the owner's count.

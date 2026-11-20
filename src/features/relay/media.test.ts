@@ -187,3 +187,29 @@ it("bounds decoded images by size and owner and forgets them with session media"
   retainDecodedImage(owner, "current", image(), decodedImageCapture());
   expect(hasDecodedImage(owner, "current")).toBe(true);
 });
+
+it("retains one decoded element per display of a shared source", () => {
+  const image = () =>
+    ({ naturalWidth: 4096, naturalHeight: 4096 }) as HTMLImageElement;
+  const owner = {};
+  createMediaPreparation().dispose();
+  const capture = decodedImageCapture();
+  // A channel row and its open thread show the same original; both detach.
+  const row = image();
+  const thread = image();
+  retainDecodedImage(owner, "shared", row, capture);
+  retainDecodedImage(owner, "shared", thread, capture);
+  const first = takeDecodedImage(owner, "shared");
+  const second = takeDecodedImage(owner, "shared");
+  expect(new Set([first, second])).toEqual(new Set([row, thread]));
+  expect(takeDecodedImage(owner, "shared")).toBeUndefined();
+  expect(hasDecodedImage(owner, "shared")).toBe(false);
+
+  // Every retained element counts against the budget, which holds eight.
+  for (let i = 0; i < 8; i++)
+    retainDecodedImage(owner, "shared", image(), capture);
+  retainDecodedImage(owner, "newest", image(), capture);
+  expect(hasDecodedImage(owner, "shared")).toBe(false);
+  expect(hasDecodedImage(owner, "newest")).toBe(true);
+  createMediaPreparation().dispose();
+});

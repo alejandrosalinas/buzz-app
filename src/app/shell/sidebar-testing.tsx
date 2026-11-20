@@ -31,6 +31,7 @@ import {
 import type { ContributionReader } from "../../features/conversation/contracts";
 import type { ChatIcon, ChatMenu } from "../../features/conversation/service";
 import type { SidebarRows } from "../../features/channel-navigation/sidebar-rows-service";
+import type { SidebarSections } from "../../features/channel-navigation/sidebar-sections-service";
 
 export const owners: ReturnType<typeof createRelaySession>[] = [];
 export const id = "11111111-1111-4111-8111-111111111111";
@@ -54,6 +55,7 @@ export function fixture(
     federatedIdentity?: FederatedIdentity;
     sidebarScope?: SidebarScope;
     sidebarRows?: SidebarRows;
+    sidebarSections?: SidebarSections;
   } = {},
 ) {
   const owner = createRelaySession(host.transport ?? null);
@@ -102,6 +104,7 @@ export function fixture(
         name: "Planning",
         channelType: "solo" as const,
         creator: viewer,
+        ...(combined ? { cached: true } : {}),
       },
       {
         id: other,
@@ -146,12 +149,6 @@ export function fixture(
     },
     sidebarPreferences: {
       ...base.sidebarPreferences,
-      sectionCreationWritable: canCreate,
-      snapshot: () => preferences,
-      ensure: async () => {},
-    },
-    soloPreferences: {
-      ...base.soloPreferences,
       sectionCreationWritable: canCreate,
       snapshot: () => preferences,
       ensure: async () => {},
@@ -270,6 +267,7 @@ export function fixture(
                   chatIcons={chatIcons}
                   chatMenus={chatMenus}
                   sidebarRows={host.sidebarRows}
+                  sidebarSections={host.sidebarSections}
                   sidebarScope={host.sidebarScope}
                   {...(host.federatedIdentity
                     ? { federatedIdentity: host.federatedIdentity }

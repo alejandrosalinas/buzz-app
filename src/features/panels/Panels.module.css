@@ -96,6 +96,11 @@ html:is([data-keyboard-input], [data-sidebar-resizing])
   .splitMotion:has(> .motion) {
   transition: none;
 }
+/* Navigation into a new destination snaps its split: content mounting in the
+   same commit measures its width before paint. */
+.splitMotion[data-instant-split]:has(> .motion) {
+  transition: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .splitMotion:has(> .motion) {
     transition: none;

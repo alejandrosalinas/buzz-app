@@ -27,7 +27,7 @@ it("omits unavailable evidence and updates valid profile status without Unknown 
   );
   expect(screen.queryByRole("img")).toBeNull();
   for (const [next, label] of [
-    ["online", "Active"],
+    ["online", "Online"],
     ["away", "Away"],
     ["offline", "Offline"],
     ["unknown", null],

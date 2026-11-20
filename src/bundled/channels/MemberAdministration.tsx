@@ -14,7 +14,7 @@ import {
 } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import {
-  canManageMember,
+  canSetMemberRole,
   canRemoveMember,
   canTransferOwnership,
   editableMemberRoles,
@@ -316,8 +316,21 @@ export function MemberRow({
   const role = state.authority.roles[pubkey] ?? "unknown";
   const permitted =
     !invitationAction && capability.available && state.status === "ready";
-  const canEdit =
-    permitted && canManageMember(state.authority, session.viewer ?? "", pubkey);
+  const currentAccess = role === "bot" ? "member" : role;
+  const roleChanges = permitted
+    ? editableMemberRoles.filter(
+        (next) =>
+          next !== currentAccess &&
+          canSetMemberRole(
+            state.authority,
+            session.viewer ?? "",
+            pubkey,
+            next,
+            verifiedOwner,
+          ),
+      )
+    : [];
+  const canEdit = roleChanges.length > 0;
   const canTransfer =
     permitted &&
     canTransferOwnership(state.authority, session.viewer ?? "", pubkey, agent);
@@ -371,23 +384,26 @@ export function MemberRow({
           <MenuSeparator />
           {canEdit && (
             <MenuRadioGroup
-              value={role === "bot" ? "member" : role}
+              value={currentAccess}
               onValueChange={(next) => {
-                const target = editableMemberRoles.find(
-                  (value) => value === next,
-                );
-                if (target && target !== role) {
+                const target = roleChanges.find((value) => value === next);
+                if (target) {
                   // The shared popup outlives the choice; the confirmation takes over.
                   menus.close();
                   choose(target);
                 }
               }}
             >
-              {editableMemberRoles.map((next) => (
-                <MenuRadioItem key={next} value={next}>
-                  {memberAccessLabel(next)}
-                </MenuRadioItem>
-              ))}
+              {editableMemberRoles
+                .filter(
+                  (next) =>
+                    next === currentAccess || roleChanges.includes(next),
+                )
+                .map((next) => (
+                  <MenuRadioItem key={next} value={next}>
+                    {memberAccessLabel(next)}
+                  </MenuRadioItem>
+                ))}
             </MenuRadioGroup>
           )}
           {canEdit && <MenuSeparator />}

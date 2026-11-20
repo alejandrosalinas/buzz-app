@@ -32,6 +32,7 @@ after this list:
 - `buzz://add-community?relay=<wss-url>[&name=<name>]`
 - `buzz://plugin?id=<plugin id>[&page=<page id>][&route.<key>=<value>...]`
 - `buzz://agent/new?card=<id>`
+- `buzz://dm/new?to=<64-hex key>`, a New message draft addressed to that person
 - `buzz://settings[?section=<section>][&provider=<agent type>]`, such as `buzz://settings?section=agents&provider=buzz.claude-code%2Fclaude-code`, which opens Claude's setup in Agent setup. `provider` needs `section=agents`. Like the Settings target it becomes, it only presents Settings and has no community scope.
 
 Two more links work only at the OS boundary. Neither names a destination, and

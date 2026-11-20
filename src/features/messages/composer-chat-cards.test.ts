@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stageChatCards } from "./composer-chat-cards";
+import { restoreChatLinks, stageChatCards } from "./composer-chat-cards";
 import { mentionDraft } from "./mention-draft";
 import { composerMarkdown } from "./composer-markdown";
 
@@ -149,3 +149,44 @@ it("stages new Chat labels and legacy Session labels with identical source ident
     expect(stageChatCards(mentionDraft(link), []).chatCards).toEqual([link]);
   }
 });
+
+it.each([
+  {
+    version: 1,
+    origin: "example.org",
+    channelId: "source",
+    id: "b".repeat(64),
+  },
+  null,
+])(
+  "restores legacy chat attachments and preserves forward state %j",
+  (forward) => {
+    const gif = "![wave](https://example.org/wave.gif)";
+    const caption = mentionDraft({
+      text: "@Honey please review",
+      recipients: [{ pubkey: "a".repeat(64), name: "Honey", start: 0, end: 6 }],
+      chatCards: [link],
+      gifs: [gif],
+      forward,
+    });
+    const restored = restoreChatLinks(caption);
+    expect(restored.chatCards).toBeUndefined();
+    expect(restored.forward).toEqual(forward);
+    expect(restored.text).toBe(`${link}\n\n@Honey please review`);
+    expect(restored.recipients).toEqual([
+      {
+        pubkey: "a".repeat(64),
+        name: "Honey",
+        start: link.length + 2,
+        end: link.length + 8,
+      },
+    ]);
+    expect(composerMarkdown(restored)).toBe(
+      `${link}\n\n@Honey please review\n\n${gif}`,
+    );
+    expect(restoreChatLinks(restored)).toBe(restored);
+    expect(
+      composerMarkdown(mentionDraft(JSON.parse(JSON.stringify(restored)))),
+    ).toBe(composerMarkdown(restored));
+  },
+);

@@ -613,25 +613,91 @@ test("thread-root actions nest from the message top edge", async ({
   const actions = actionsFor(row);
   await expect(row).toBeVisible();
   await settle(page, scroller);
-  await hoverMessage(row);
-  await shown(actions);
-  await expect
-    .poll(() =>
-      actions.evaluate((bar) => {
-        const row = bar.closest("[data-layout]");
-        const toolbar = bar.getBoundingClientRect();
-        const viewport = bar
-          .closest("[data-message-scroller]")
-          .getBoundingClientRect();
-        return {
-          nested:
-            Math.abs(toolbar.top - row.getBoundingClientRect().top - 8) < 1,
-          visible:
-            toolbar.top >= viewport.top && toolbar.bottom <= viewport.bottom,
-        };
-      }),
-    )
-    .toEqual({ nested: true, visible: true });
+  for (const density of ["default", "compact"]) {
+    await page.evaluate((density) => {
+      document.documentElement.dataset.messageDensity = density;
+    }, density);
+    await hoverMessage(row);
+    await shown(actions);
+    const overlap = await actions.evaluate((bar) =>
+      Number.parseFloat(getComputedStyle(bar).scrollMarginBlockStart),
+    );
+    await expect
+      .poll(() =>
+        actions.evaluate((bar, overlap) => {
+          const row = bar.closest("[data-layout]");
+          const toolbar = bar.getBoundingClientRect();
+          const viewport = bar
+            .closest("[data-message-scroller]")
+            .getBoundingClientRect();
+          return {
+            nested:
+              Math.abs(
+                toolbar.top - row.getBoundingClientRect().top - overlap,
+              ) < 1,
+            visible:
+              toolbar.top >= viewport.top && toolbar.bottom <= viewport.bottom,
+          };
+        }, overlap),
+      )
+      .toEqual({ nested: true, visible: true });
+    if (density !== "compact") continue;
+    await actions.getByRole("button").first().focus();
+    await page.mouse.move(0, 0);
+    await page.keyboard.press("Tab");
+    const height = await actions.evaluate((bar) => bar.offsetHeight);
+    // Leave room above the root to scroll across the placement threshold.
+    await row.evaluate((node) => {
+      node.style.marginBlockStart = "80px";
+    });
+    // Cross the clipping threshold in both directions while the root stays visible.
+    for (const offset of [
+      height - overlap - 1,
+      height - overlap + 1,
+      height - overlap - 1,
+      -10,
+    ]) {
+      await row.evaluate((node, offset) => {
+        const row = node.querySelector("[data-layout]");
+        const scroller = node.closest("[data-message-scroller]");
+        scroller.scrollTop +=
+          row.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top -
+          offset;
+      }, offset);
+      await settle(page, scroller);
+      await shown(actions);
+      await expect
+        .poll(() =>
+          row.evaluate((node) => {
+            const row = node
+              .querySelector("[data-layout]")
+              .getBoundingClientRect();
+            const viewport = node
+              .closest("[data-message-scroller]")
+              .getBoundingClientRect();
+            return Math.round(row.top - viewport.top);
+          }),
+        )
+        .toBe(offset);
+      await expect
+        .poll(() =>
+          actions.evaluate((bar, overlap) => {
+            const row = bar.closest("[data-layout]").getBoundingClientRect();
+            const viewport = bar
+              .closest("[data-message-scroller]")
+              .getBoundingClientRect();
+            return (
+              Math.abs(
+                bar.getBoundingClientRect().top -
+                  Math.max(row.top + overlap, viewport.top + overlap),
+              ) < 1
+            );
+          }, overlap),
+        )
+        .toBe(true);
+    }
+  }
   await actions.getByRole("button", { name: "Add reaction" }).click();
   await expect(page.locator("em-emoji-picker")).toBeVisible();
   await page.keyboard.press("Escape");

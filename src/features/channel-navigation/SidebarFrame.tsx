@@ -10,10 +10,13 @@ export function SidebarFrame({
   launchPending,
   children,
   header,
+  footer,
   panelId,
 }: {
   label: string;
   header?: ReactNode;
+  /** Floats over the list's end and follows it in tab order. */
+  footer?: ReactNode;
   panelId?: string | undefined;
   busy?: boolean | undefined;
   launchPending?: "required" | "settling" | undefined;
@@ -39,6 +42,7 @@ export function SidebarFrame({
             {children}
           </div>
         </SidebarNavigation>
+        {footer}
       </div>
     </Panel>
   );

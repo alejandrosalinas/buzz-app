@@ -291,6 +291,47 @@ sendTest(
   },
 );
 
+readingTest(
+  "returning to a channel read at its latest message never offers Jump to latest",
+  async ({ page, app }) => {
+    await open(page, app);
+    const visit = async (name) => {
+      await button(page, name).click();
+      await composer(page, name).waitFor();
+      await settle(page);
+    };
+    // Open both channels once, so each later visit returns to a saved latest place.
+    await visit("Beta");
+    await visit("Alpha");
+    // Register before switching: the button may show and hide within one frame.
+    await page.evaluate(() => {
+      window.jumpShown = 0;
+      new MutationObserver((records) => {
+        for (const record of records)
+          if (record.target.getAttribute("data-visible") === "true")
+            window.jumpShown++;
+      }).observe(document.body, {
+        attributes: true,
+        attributeFilter: ["data-visible"],
+        subtree: true,
+      });
+    });
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await visit("Beta");
+      await visit("Alpha");
+    }
+    await expect
+      .poll(() =>
+        history(page).evaluate(
+          (element) =>
+            element.scrollHeight - element.scrollTop - element.clientHeight,
+        ),
+      )
+      .toBeLessThan(4);
+    expect(await page.evaluate(() => window.jumpShown)).toBe(0);
+  },
+);
+
 test("cursor paging preserves visible anchors and keeps a large history virtualized", {
   tag: "@local-webkit",
 }, async ({ page, app, browserName }) => {

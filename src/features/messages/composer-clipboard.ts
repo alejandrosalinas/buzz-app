@@ -6,9 +6,17 @@ import {
 import { parseBuzzLink } from "../navigation/buzz-links";
 import { profileKey, profileTarget } from "../profiles/target";
 import { safeLinkUrl, scanMarkdown } from "../relay/message-content";
-import { composerSchema, projectComposerDocument } from "./composer-document";
-import { composerMarkdown } from "./composer-markdown";
+import {
+  composerSchema,
+  projectComposerDocument,
+  readComposerSnapshot,
+} from "./composer-document";
+import {
+  composerMarkdown,
+  type ComposerMarkdownMode,
+} from "./composer-markdown";
 import { messageLinkParts } from "./message-link-parts";
+import { documentEditorDraft } from "./document-editor-markdown";
 import {
   copyDocument,
   serializeNode,
@@ -136,8 +144,33 @@ function humanised(node: EditorNode): EditorNode {
 /** Both clipboard flavors of a composer document. `text` is the Markdown source
  * as a reader expects it; `html` carries every locator for this app's own paste
  * handler and other rich editors. */
-export function composerClipboard(doc: EditorNode, document: Document) {
-  const fragment = serializer.serializeFragment(doc.content, { document });
+export function composerClipboard(
+  doc: EditorNode,
+  document: Document,
+  mode: ComposerMarkdownMode = "chat",
+) {
+  const spread = (node: EditorNode) => ({
+    "data-buzz-spread": String(node.attrs.spread === true),
+  });
+  const writer =
+    mode === "document"
+      ? new DOMSerializer(
+          {
+            ...serializer.nodes,
+            heading: (node) => [`h${node.attrs.level}`, 0],
+            markdown_table: (node) => ["p", node.attrs.source],
+            bullet_list: (node) => ["ul", spread(node), 0],
+            ordered_list: (node) => [
+              "ol",
+              { start: node.attrs.order, ...spread(node) },
+              0,
+            ],
+            list_item: (node) => ["li", spread(node), 0],
+          },
+          serializer.marks,
+        )
+      : serializer;
+  const fragment = writer.serializeFragment(doc.content, { document });
   // Spoilers have no HTML of their own: their delimiters stay visible inside
   // the mark's span, marked so this app's paste reads the mark alone.
   for (const spoiler of fragment.querySelectorAll("[data-spoiler]"))
@@ -152,38 +185,74 @@ export function composerClipboard(doc: EditorNode, document: Document) {
       !node.parentElement?.closest("pre")
     )
       breaks.push(node as Text);
-  for (const text of breaks)
-    text.replaceWith(
-      ...text.data
-        .split("\n")
-        .flatMap((line, index) =>
-          index ? [document.createElement("br"), line] : [line],
-        ),
-    );
+  for (const text of breaks) {
+    const lines = text.data
+      .split("\n")
+      .flatMap((line, index) =>
+        index ? [document.createElement("br"), line] : [line],
+      );
+    if (mode === "document") {
+      // Embedded source lines are not semantic hard-break nodes. The existing
+      // source-span importer restores these bytes instead of interpreting <br>.
+      const source = document.createElement("span");
+      source.setAttribute("data-source", text.data);
+      source.append(...lines);
+      text.replaceWith(source);
+    } else text.replaceWith(...lines);
+  }
   const container = document.createElement("div");
   container.appendChild(fragment);
   return {
     text: composerMarkdown(projectComposerDocument(humanised(doc)).draft, {
       authored: true,
+      mode,
     }),
-    html: `<div data-buzz-copy="composer">${container.innerHTML}</div>`,
+    html: `<div data-buzz-copy="${mode === "document" ? "document" : "composer"}">${container.innerHTML}</div>`,
   };
 }
 
 /** This app's own `text/html` payload as editor content; other HTML is never
  * read. Its blocks and marks paste as they are, while anchors and line breaks
  * become source text: the host's decorations decide which links are chips, as
- * for typed source, and paragraphs keep line breaks as text. */
-export function buzzCopyDocument(html: string): EditorNode | undefined {
+ * for typed source. Chat keeps line breaks as source text; document mode retains
+ * hard-break nodes and list spacing. */
+export function buzzCopyDocument(
+  html: string,
+  mode: ComposerMarkdownMode = "chat",
+): EditorNode | undefined {
   if (!html.includes("data-buzz-copy")) return;
   const copy = new DOMParser()
     .parseFromString(html, "text/html")
     .querySelector("[data-buzz-copy]");
-  return (copy && sourced(copyDocument(copy))) ?? undefined;
+  return (
+    (copy && sourced(copyDocument(copy, undefined, mode), mode)) ?? undefined
+  );
 }
 
-function sourced(node: EditorNode): EditorNode | null {
-  if (node.isText) return node;
+function sourced(
+  node: EditorNode,
+  mode: ComposerMarkdownMode,
+): EditorNode | null {
+  if (node.isText || (mode === "document" && node.type.name === "hard_break"))
+    return node;
+  const first = node.firstChild;
+  if (
+    mode === "document" &&
+    node.type === composerSchema.nodes.paragraph &&
+    node.childCount === 1 &&
+    first?.type === composerSchema.nodes.token &&
+    /[\r\n]/.test(first.attrs.source)
+  ) {
+    const parsed = readComposerSnapshot(
+      documentEditorDraft(first.attrs.source).document,
+      mode,
+    );
+    if (
+      parsed?.childCount === 1 &&
+      parsed.firstChild?.type === composerSchema.nodes.markdown_table
+    )
+      return parsed.firstChild;
+  }
   // The schema refuses empty text nodes; a leaf without text contributes none.
   if (node.isLeaf)
     return node.textContent
@@ -191,7 +260,7 @@ function sourced(node: EditorNode): EditorNode | null {
       : null;
   return node.copy(
     Fragment.fromArray(
-      node.content.content.flatMap((child) => sourced(child) ?? []),
+      node.content.content.flatMap((child) => sourced(child, mode) ?? []),
     ),
   );
 }

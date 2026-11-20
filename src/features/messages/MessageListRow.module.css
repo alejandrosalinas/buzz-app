@@ -99,3 +99,67 @@
     height: var(--space-6);
   }
 }
+
+/* Mark as read on an unread row, shared by Activity and its sidebar preview.
+   The host is the row's positioned frame; the action, a sibling of the row's
+   button, sits on the unread dot, so the dot itself is the target. Hover or
+   keyboard focus turns the dot into the action, and the date stays. Without a
+   hover pointer the dot stays and a tap on it reads the row. */
+.unreadActionHost {
+  position: relative;
+}
+
+.unreadAction {
+  display: flex;
+  position: absolute;
+  inset-block: 0;
+  align-items: center;
+  /* Center the button on the dot in the row's trailing slot. */
+  inset-inline-end: calc(
+    var(--space-control-inset) +
+    var(--space-2) /
+    2 -
+    var(--size-control-sm) /
+    2
+  );
+  opacity: 0;
+  transition: opacity var(--duration-state) var(--easing-state);
+}
+
+.unreadActionHost [data-inbox-unread] {
+  transition: opacity var(--duration-state) var(--easing-state);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .unreadActionHost:hover .unreadAction {
+    opacity: 1;
+  }
+
+  .unreadActionHost:hover:has(.unreadAction) [data-inbox-unread] {
+    opacity: 0;
+  }
+}
+
+/* Keyboard focus anywhere in the row shows the action on any pointer. */
+.unreadActionHost:has(:focus-visible) .unreadAction {
+  opacity: 1;
+}
+
+.unreadActionHost:has(.unreadAction):has(:focus-visible) [data-inbox-unread] {
+  opacity: 0;
+}
+
+/* Room for the action's hover fill beside the dot, so it never touches the
+   date. Read rows keep the same slot, so dates stay aligned. Narrow windows
+   keep that space for the row's label. */
+@media (min-width: 601px) {
+  .unreadActionHost [class~="navigation-item-trailing"] {
+    margin-inline-start: calc(
+      var(--size-control-sm) /
+      2 -
+      var(--space-2) /
+      2 -
+      var(--space-row-gap)
+    );
+  }
+}

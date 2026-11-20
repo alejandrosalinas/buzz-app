@@ -207,6 +207,36 @@ it("cancels a Buzz tool when its run stops or the host goes", async () => {
   await vi.waitFor(() => expect(signals[1]?.aborted).toBe(true));
 });
 
+it("cancels a gateway check when the host cancels that request", async () => {
+  const host = fakeHost();
+  const signals: AbortSignal[] = [];
+  const gateway = vi.fn(
+    (_call: unknown, signal: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => {
+        signals.push(signal);
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      }),
+  );
+  const pi = new Pi(() => host.spawn, {
+    tool: vi.fn(),
+    event: vi.fn(),
+    gateway,
+  });
+  await pi.request("open");
+  const process = host.processes[0];
+  const call = { op: "admit", agent: "a", binding: {} };
+  const stopped = process?.tool(call, "gateway");
+  void process?.tool(call, "gateway");
+  await vi.waitFor(() => expect(signals).toHaveLength(2));
+  process?.send({ method: "security_cancel", params: { id: "h1" } });
+  await expect(stopped).resolves.toHaveProperty("error");
+  expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+  process?.exit(1);
+  await vi.waitFor(() => expect(signals[1]?.aborted).toBe(true));
+});
+
 it("closes the host's stdin to stop it, and refuses requests after", async () => {
   const host = fakeHost();
   const pi = new Pi(() => host.spawn, handlers());

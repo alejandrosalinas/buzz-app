@@ -7,6 +7,7 @@
 // are installed in.
 import { readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
@@ -16,16 +17,23 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   awaitWithContext,
   BACKGROUND_CONTEXT,
+  withTelemetry,
 } from "@earendil-works/chord/context";
 import {
   clampThinkingLevel,
+  createModels,
+  createProvider,
   getSupportedThinkingLevels,
   getSystemMessageText,
 } from "@earendil-works/pi-ai";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   AssistantEntry,
   createRegistry,
+  DEFAULT_COMPACTION_POLICY,
   defineDoc,
   defineExtension,
   defineTool,
@@ -33,6 +41,7 @@ import {
   hook,
   ToolTask,
   ProviderDoc,
+  ResetEntry,
   SessionFailed,
   section,
   UsageDoc,
@@ -137,6 +146,256 @@ export function protectModels(models, inspect, conversationFor) {
             return assembled;
           },
         });
+      };
+    },
+  });
+}
+
+/** How Pi's own providers reach the model gateway: each by its native
+ * protocol, under the gateway's root for Pi. A request keeps its model's
+ * own ID, which the gateway resolves; any other provider is refused there
+ * (README: "gateway mode"). */
+const PROTOCOLS = {
+  anthropic: {
+    api: "anthropic-messages",
+    path: "anthropic",
+    compat: { sendSessionAffinityHeaders: true },
+  },
+  openai: { api: "openai-responses", path: "openai/v1" },
+};
+/** A header name as the gateway compares it: ASCII lowercase, `_` as `-`. */
+const fold = (name) => name.toLowerCase().replaceAll("_", "-");
+/** Whether only Buzz may set `name` under the build's header profile: one
+ * of its context headers, or a name under one of its reserved prefixes. */
+const reserved = (profile, name) => {
+  const folded = fold(name);
+  return (
+    Object.values(profile.headers).includes(folded) ||
+    profile.reserved_prefixes.some((prefix) => folded.startsWith(prefix))
+  );
+};
+/** Headers the gateway takes a session from ahead of, or as, the affinity
+ * one, folded: any other value would attribute the request to another
+ * session. */
+const CORRELATION =
+  /^(?:x-session-affinity|x-litellm-(?:session|trace)-id|agent-session-id|(?:x-)?session-id|x-.+-session-id)$/;
+/** Caller options that carry a provider's own credential or headers: never
+ * sent to the gateway's origin. */
+const PROVIDER_ONLY = ["apiKey", "env", "headers"];
+/** The gateway's own credential stands in for this placeholder. */
+const GATEWAY_KEY = "buzz-gateway";
+/** The provider a gateway request is sent with: never listed or chosen. */
+const GATEWAY = "buzz-gateway";
+
+/** Sends a model of Pi's own providers to the gateway, with the gateway's
+ * credential in place of the provider's. */
+function gatewayCatalog() {
+  const catalog = createModels();
+  catalog.setProvider(
+    createProvider({
+      id: GATEWAY,
+      name: "Model gateway",
+      auth: {
+        apiKey: {
+          name: "Model gateway",
+          resolve: async () => ({
+            auth: { apiKey: GATEWAY_KEY },
+            source: "gateway",
+          }),
+        },
+      },
+      models: [],
+      api: {
+        "anthropic-messages": anthropicMessagesApi(),
+        "openai-responses": openAIResponsesApi(),
+      },
+    }),
+  );
+  return catalog;
+}
+
+/** `model`, one of Pi's built-in ones, as the gateway serves it under
+ * `root`: its own ID, limits and protocol, at the gateway. */
+export function gatewayModel(model, root) {
+  const protocol = PROTOCOLS[model?.provider];
+  if (!protocol || model.api !== protocol.api)
+    throw new Error(
+      `${model?.provider ?? "This provider"}/${model?.id ?? "this model"} isn't available through the model gateway. Choose an Anthropic or OpenAI model in the agent's Identity tab.`,
+    );
+  return {
+    ...model,
+    provider: GATEWAY,
+    baseUrl: `${root}/${protocol.path}`,
+    ...(protocol.compat
+      ? { compat: { ...model.compat, ...protocol.compat } }
+      : {}),
+  };
+}
+
+/** A gateway response that drops the access a request was admitted with. */
+const refused = (response) =>
+  response.status === 401 || response.status === 403;
+
+/** The final request headers: native ones, less any name the build's
+ * header `profile` reserves to Buzz, with the run's own context and the
+ * native session for affinity. A conflicting session would win over
+ * affinity at the gateway: refused. */
+export function composeGateway(profile, assembled, bundle, session) {
+  if (typeof session !== "string" || !session)
+    throw new Error("Gateway model request has no session");
+  if (!profile) throw new Error("Gateway model request has no header profile");
+  const names = Object.values(profile.headers);
+  for (const name of Object.keys(bundle ?? {}))
+    if (!names.includes(name))
+      throw new Error(
+        "A gateway bundle may only set the profile's context headers",
+      );
+  const headers = {};
+  for (const [name, value] of Object.entries(assembled ?? {})) {
+    if (reserved(profile, name)) continue;
+    const folded = fold(name);
+    if (CORRELATION.test(folded)) {
+      if (value != null && value !== session)
+        throw new Error(
+          `Gateway model request has a conflicting ${folded} header`,
+        );
+      continue;
+    }
+    headers[name] = value;
+  }
+  return { ...headers, ...bundle, "x-session-affinity": session };
+}
+
+const REQUEST = Symbol("buzz.request");
+/** The Buzz request a context's durable work serves, if it carries one. */
+export const requestOf = (telemetry) => telemetry?.[REQUEST];
+/** Telemetry that records nothing and carries only a Buzz request. Pi keeps
+ * the carrier in each submission's and task's trace and gives every model
+ * call its task's context, so a request's work, its compactions and retries,
+ * queued or continued after a restart, carries that request. An input's
+ * admission, whose parent is the root, takes its caller's request from its
+ * first link only: a later one, as a steer's to its run, never replaces it. */
+export function requestTelemetry(request) {
+  const propagation = {
+    inject: (telemetry) => {
+      const carried = requestOf(telemetry);
+      return carried === undefined ? undefined : { buzz: carried };
+    },
+    extract: (carrier) =>
+      context(typeof carrier?.buzz === "string" ? carrier.buzz : undefined),
+  };
+  const context = (request, admission = false) => {
+    let linked = false;
+    return {
+      get [REQUEST]() {
+        return request;
+      },
+      propagation,
+      startSpan: async (options, callback) =>
+        callback(
+          context(
+            request,
+            request === undefined && options.name === "pi.durable.submit",
+          ),
+        ),
+      addLink(link) {
+        if (admission && !linked) request = requestOf(link?.context);
+        linked = true;
+      },
+      addEvent() {},
+      setAttributes() {},
+      setStatus() {},
+    };
+  };
+  return context(request);
+}
+
+/** Pi's models, with each request whose Buzz request has a gateway
+ * record sent through the gateway instead: the same model, by its own ID,
+ * with its run's Buzz context, after any caller's header transform
+ * (protection's review). Every other request runs on Pi's own provider, as
+ * a turn the runner sent without the gateway does. `gatewayOf` reads a
+ * request's record and admits it, at an eligibility revision, or answers
+ * that it has none; it returns nothing at once for a request that surely
+ * has none, which is then dispatched as it is, with nothing read before
+ * it. A 401 or 403 for an admitted request is told to
+ * `denied` with that revision before its client sees the response. A
+ * gateway request's deferred and one-shot operations fail closed. */
+export function routeModels(models, gatewayOf, denied) {
+  const gateway = gatewayCatalog();
+  /** Each request method, by the stream it is the result of. */
+  const requests = {
+    stream: "stream",
+    complete: "stream",
+    streamSimple: "streamSimple",
+    completeSimple: "streamSimple",
+  };
+  const unsupported = new Set([
+    "streamDeferred",
+    "fetchDeferred",
+    "cancelDeferred",
+    "generateImages",
+    "classify",
+  ]);
+  return new Proxy(models, {
+    get(target, name) {
+      const method = Reflect.get(target, name);
+      if (unsupported.has(name))
+        return (model, input, options = {}) => {
+          const checking = gatewayOf(options ?? {});
+          if (!checking) return method.call(target, model, input, options);
+          const checked = checking.then((admitted) => {
+            if (admitted)
+              throw new Error(`Gateway mode does not support ${String(name)}`);
+            return method.call(target, model, input, options);
+          });
+          return name === "streamDeferred"
+            ? lazyStream(model, () => checked)
+            : checked;
+        };
+      const stream = requests[name];
+      if (!stream)
+        return typeof method === "function" ? method.bind(target) : method;
+      return (model, input, options = {}) => {
+        const checking = gatewayOf(options);
+        if (!checking) return method.call(target, model, input, options);
+        /** The revision this call was admitted at. */
+        let revision;
+        const streamed = lazyStream(model, async () => {
+          const admitted = await checking;
+          if (!admitted)
+            return Reflect.get(target, stream).call(
+              target,
+              model,
+              input,
+              options,
+            );
+          revision = admitted.revision;
+          const caller = options.transformHeaders;
+          const own = { ...options };
+          for (const name of PROVIDER_ONLY) delete own[name];
+          return gateway[stream](gatewayModel(model, admitted.root), input, {
+            ...own,
+            transformHeaders: async (assembled) =>
+              composeGateway(
+                admitted.profile,
+                caller ? await caller(assembled) : assembled,
+                admitted.bundle,
+                options.sessionId,
+              ),
+            // This call's own: the caller's fetch, else the global one as
+            // the client would use it, with the response untouched.
+            fetch: async (input, init) => {
+              const response = await (options.fetch ?? globalThis.fetch)(
+                input,
+                init,
+              );
+              if (refused(response)) await denied(revision);
+              return response;
+            },
+          });
+        });
+        return stream === name ? streamed : streamed.result();
       };
     },
   });
@@ -252,13 +511,39 @@ const Places = defineDoc({
   initial: () => ({}),
   checkpointWhen,
 });
-/** An Attention wake's reply destination belongs to its request, independently
+/** A request's reply destination is stored independently
  * of the conversation's tool defaults. Recorded before submission for recovery. */
 const Replies = defineDoc({
   kind: "buzz.replies",
   version: 1,
   scope: "session",
   initial: () => ({}),
+  checkpointWhen,
+});
+/** How a request ran, by its request id, for its conversation's transcript:
+ * a wake the runner sent without the gateway, which no request row notes.
+ * Display only, never model context; recorded before submission, with its
+ * prompt's entry once a transcript first finds it placed. */
+const Notices = defineDoc({
+  kind: "buzz.notices",
+  version: 1,
+  scope: "session",
+  initial: () => ({}),
+  checkpointWhen,
+});
+/** The entry a noted turn that failed before Pi placed its prompt leaves in
+ * its conversation: the notice and that failure. Pi shows a model nothing of
+ * an entry of only a kind and data. */
+const NOTICE_ENTRY = "buzz.notice";
+/** gateway mode: each conversation key's session binding; each key's reset
+ * intent, until its next binding replaces it; and each request's Buzz
+ * context, recorded before it is submitted, so its work dispatches with it,
+ * also continued after a restart. */
+const GatewayRuns = defineDoc({
+  kind: "buzz.gateway",
+  version: 1,
+  scope: "session",
+  initial: () => ({ places: {}, resets: {}, requests: {} }),
   checkpointWhen,
 });
 /** Why a run Pi cut off is unanswered, in words: Pi's detail is technical. */
@@ -268,6 +553,8 @@ const CUT_OFF = {
   interrupted:
     "Pi stopped this turn because it was cut off while the model was answering, and it had no retries left.",
 };
+/** A turn an Interrupt withdrew while it waited for a run in the other mode. */
+const WITHDRAWN = Symbol("withdrawn");
 /** The diagnostic codes of the results Pi writes itself, for a tool call
  * that did not run, or did not finish because Pi stopped it. */
 const UNRUN = new Set([
@@ -281,11 +568,55 @@ const UNRUN = new Set([
 ]);
 /** Messages that arrive while Pi works join its run at the next boundary. */
 const SETTINGS = { steeringMode: "all" };
+/** An agent's compaction at `tokens`, for every model `models` lists, so a
+ * run resumed on any of them has it: a compaction starts in the background
+ * there, or as early as Pi's own would. */
+export class Compaction {
+  tokens;
+  overrides;
+  constructor(models) {
+    this.models = models;
+  }
+  /** Compacts at `tokens`, or Pi's default when unset. */
+  use(tokens) {
+    if (tokens === this.tokens) return;
+    this.tokens = tokens;
+    this.overrides = undefined;
+  }
+  /** Pi's settings, read at each use. */
+  settings() {
+    const { tokens } = this;
+    if (!tokens) return SETTINGS;
+    const { reserveTokens, backgroundTokens } = DEFAULT_COMPACTION_POLICY;
+    this.overrides ??= Object.fromEntries(
+      this.models()
+        .filter(({ contextWindow }) => contextWindow > 0)
+        .map(({ provider, id, contextWindow }) => [
+          `${provider}/${id}`,
+          {
+            backgroundTokens: Math.max(
+              backgroundTokens,
+              contextWindow - reserveTokens - tokens,
+            ),
+          },
+        ]),
+    );
+    return { ...SETTINGS, compaction: { modelOverrides: this.overrides } };
+  }
+}
 /** Pi's own default thinking level, for a model that thinks. */
 const THINKING = "medium";
 /** A lock left by a host that was killed is taken over after this long. */
 const STALE_MS = 30_000;
 const TEST_TIMEOUT_MS = 30_000;
+/** How long a turn waits by default for a run in the other mode to show
+ * progress before it fails. */
+const PARK_MS = 15 * 60_000;
+/** How often a turn waiting only for the other mode's tasks reads them
+ * again: Pi offers no wait for a task's end. */
+const TASK_POLL_MS = 1_000;
+/** How long a gateway refusal waits for the plugin to take it. */
+const DENY_MS = 5_000;
 /** Entries a transcript reads at a time. */
 const PAGE = 200;
 /** Buzz tools are `buzz_<name>`, apart from Pi's own `read` and `edit`. */
@@ -655,16 +986,51 @@ export function serve({
   input = process.stdin,
   output = process.stdout,
   exit = () => process.exit(0),
+  /** How long a turn waits, with no activity in its conversation, for its
+   * run in the other mode to finish. */
+  parkMs = PARK_MS,
 }) {
   /** Each agent's open Harness, by membership key. */
   const agents = new Map();
   /** Agents whose storage failed and that nothing has opened again. */
   const failed = new Set();
+  /** Each agent's deliveries Pi doesn't have yet, by conversation key,
+   * listed as each arrives: an Interrupt or a Stop withdraws a gateway one. */
+  const pending = new Map();
+  /** Lists `waiting`; the result unlists it. */
+  function listed(agent, key, waiting) {
+    const keys = pending.get(agent) ?? new Map();
+    const waits = keys.get(key) ?? new Set();
+    pending.set(agent, keys.set(key, waits.add(waiting)));
+    return () => {
+      waits.delete(waiting);
+      if (!waits.size && keys.get(key) === waits) keys.delete(key);
+      if (!keys.size && pending.get(agent) === keys) pending.delete(agent);
+    };
+  }
+  /** Marks a key's pending deliveries, or only `request`'s, withdrawn. */
+  function withdrawPending(agent, key, request) {
+    for (const waiting of pending.get(agent)?.get(key) ?? [])
+      if (request === undefined || waiting.request === request) {
+        waiting.interrupted = true;
+        waiting.wake?.();
+      }
+  }
   const calls = new Map();
   const reviews = new Map();
   let called = 0;
   const write = (message) => output.write(`${JSON.stringify(message)}\n`);
   const notify = (method, params) => write({ method, params });
+  /** Tells the plugin the gateway refused one of the agent's requests at
+   * `revision`, waiting for it only so long: the request fails either way. */
+  const deny = (agent, revision) =>
+    call(
+      "gateway",
+      { op: "deny", agent, revision },
+      AbortSignal.timeout(DENY_MS),
+    ).catch((error) =>
+      console.error("Pi could not report a gateway refusal", error),
+    );
   const call = (method, params, signal) =>
     new Promise((resolve, reject) => {
       signal?.throwIfAborted();
@@ -859,7 +1225,7 @@ export function serve({
       let harness;
       const conversationFor = async (sessionId) => {
         if (typeof sessionId !== "string" || !sessionId)
-          throw new Error("Protected model request has no session");
+          throw new Error("Pi model request has no session");
         if (!sessions.has(sessionId)) {
           for (const conversation of conversations) {
             const document = await harness.snapshot(
@@ -872,22 +1238,87 @@ export function serve({
           }
         }
         if (!sessions.has(sessionId))
-          throw new Error("Protected model request has an unknown session");
+          throw new Error("Pi model request has an unknown session");
         return sessions.get(sessionId);
       };
+      /** What may have gateway state, read when the agent opened and added
+       * to before each write, never removed while it is open: requests with
+       * a record (until read, any request may), the conversations they are
+       * in, keys with a session binding, a reset intent or a gateway
+       * delivery, and keys whose reset intent's write may not be submitted.
+       * Everything else is an ordinary agent's, which runs as on `main`. */
+      const recorded = {
+        requests: new Set(),
+        read: false,
+        conversations: new Set(),
+        keys: new Set(),
+        resets: new Set(),
+      };
+      /** A request's gateway record, admitted: the Buzz context of the Buzz
+       * request its durable task serves, as the task's trace carries it,
+       * recorded before that request was submitted, and where it goes. Only
+       * while the plugin still admits the binding it was made with. None
+       * for a request with no record, which runs on Pi's own provider: at
+       * once for one that surely has none, as ordinary Pi dispatches. */
+      const gatewayOf = ({ telemetry, ...options }) => {
+        const request = requestOf(telemetry);
+        if (
+          request === undefined ||
+          (recorded.read && !recorded.requests.has(request))
+        )
+          return undefined;
+        return admit(request, options);
+      };
+      const admit = async (request, { sessionId, signal }) => {
+        const record = (await harness.snapshot(GatewayRuns, context))
+          ?.requests?.[request];
+        if (!record) return undefined;
+        if (record.conversation !== (await conversationFor(sessionId)))
+          throw new Error(
+            "Gateway model request has another conversation's Buzz context",
+          );
+        const admitted = await call(
+          "gateway",
+          { op: "admit", agent, binding: record.binding },
+          signal,
+        );
+        if (admitted?.ok !== true)
+          throw new Error(
+            admitted?.message || "This agent can't use the model gateway now",
+          );
+        return {
+          bundle: record.bundle,
+          revision: admitted.revision,
+          root: admitted.root,
+          profile: admitted.profile,
+        };
+      };
+      const routed = routeModels(models, gatewayOf, (revision) =>
+        deny(agent, revision),
+      );
       install(CodingTools);
       // Loads the Buzz tools that are deferred when the model asks for them.
       install(createToolSearchExtension());
       for (const extension of packages.extensions) install(extension);
       const storage = await openNodeSqliteStorage(path);
+      const compaction = new Compaction(() =>
+        models.getProviders().flatMap((provider) =>
+          models.getModels(provider.id).map((model) => ({
+            provider: provider.id,
+            id: model.id,
+            contextWindow: model.contextWindow,
+          })),
+        ),
+      );
       harness = await Harness.open(
         storage,
         {
           models: protectedAgent
-            ? protectModels(models, inspect, conversationFor)
-            : models,
+            ? protectModels(routed, inspect, conversationFor)
+            : routed,
           registry,
-          settings: SETTINGS,
+          settings: () => compaction.settings(),
+          telemetry: requestTelemetry(),
           // Its tools' commands, and only theirs, act as this agent.
           env: ({ cwd }) => {
             const credential = credentials.get(agent);
@@ -908,6 +1339,7 @@ export function serve({
         harness,
         storage,
         registry,
+        compaction,
         install,
         conversations,
         release,
@@ -927,6 +1359,7 @@ export function serve({
         queues: new Map(),
         /** Why each request withdrawn with a failed run is unanswered. */
         failed: new Map(),
+        recorded,
         closing: false,
       };
       const places = (await harness.snapshot(Places, context)) ?? {};
@@ -934,8 +1367,23 @@ export function serve({
         conversations.add(place.conversation);
         opened.contexts.set(place.conversation, place.context);
       }
-      for (const submission of (await harness.inspect(context)).submissions)
+      const live = await harness.inspect(context);
+      for (const submission of live.submissions)
         conversations.add(submission.conversationId);
+      await prune(harness, live);
+      const gateway = (await harness.snapshot(GatewayRuns, context)) ?? {};
+      for (const [request, record] of Object.entries(gateway.requests ?? {})) {
+        recorded.requests.add(request);
+        if (record.conversation)
+          recorded.conversations.add(record.conversation);
+      }
+      for (const key of Object.keys(gateway.places ?? {}))
+        recorded.keys.add(key);
+      for (const [key, reset] of Object.entries(gateway.resets ?? {})) {
+        recorded.keys.add(key);
+        if (!reset.written) recorded.resets.add(key);
+      }
+      recorded.read = true;
       return opened;
     } catch (error) {
       await release().catch(() => undefined);
@@ -1113,8 +1561,15 @@ export function serve({
 
   async function observe(opened, conversation) {
     let queue = Promise.resolve();
-    /** `sent`: once every event so far has gone out. */
-    const state = { busy: false, observation: undefined, sent: () => queue };
+    /** `sent`: once every event so far has gone out. `events`: how many
+     * commits it has seen, which a turn waiting for its run reads as
+     * progress. */
+    const state = {
+      busy: false,
+      observation: undefined,
+      sent: () => queue,
+      events: 0,
+    };
     // Events go out in order, each after the reads it needs. The observer
     // must not wait or call the Session, so a read is queued as a function
     // and starts only when its turn comes.
@@ -1137,6 +1592,7 @@ export function serve({
       // A run that answered keeps `run` while its `afterRun` tasks finish; a
       // new request then starts the next run, not steers this one.
       state.busy = Boolean(live.run && !live.run.afterRun);
+      if (!initial) state.events++;
       if (!live.run) {
         inputs.clear();
         calls.clear();
@@ -1311,11 +1767,261 @@ export function serve({
     return !submissions.some((s) => s.conversationId === conversation);
   }
 
+  /** Records a gateway mode request's binding and Buzz context before it is
+   * submitted, with its reply destination, in one commit. One already
+   * recorded, by a host that stopped before submitting it, is kept. A
+   * `manual` request, an owner's compaction, binds its key's session as it
+   * is and changes nothing of the key's. */
+  async function bind(
+    opened,
+    turn,
+    { key, fresh, gatewayTurn, reply, notice, conversation, manual },
+  ) {
+    const { request } = turn;
+    const { harness } = opened;
+    const doc = (await harness.snapshot(GatewayRuns, context)) ?? {};
+    let reset = key && !manual && doc.resets?.[key];
+    let persist;
+    // A request asked again keeps the mode it was bound in: one bound to the
+    // gateway never runs without it.
+    let record = doc.requests?.[request];
+    if (record && reset) {
+      // A reset since it was recorded makes it the reset's first request,
+      // unless Pi has it already: its run keeps its binding, and the reset
+      // waits for the next.
+      if (
+        await opened.storage.submissionByRequest(conversation, request, context)
+      )
+        reset = undefined;
+      else record = undefined;
+    }
+    // Only a turn the runner sent through the gateway binds.
+    if (gatewayTurn && !record) {
+      // A model the gateway doesn't take binds nothing; an owner's
+      // compaction keeps the model its conversation has.
+      if (!manual) gatewayModel((await choose(turn)).found, "");
+      const bound = await call("gateway", {
+        op: "bind",
+        agent: opened.agent,
+        event:
+          !key && !manual
+            ? "standalone"
+            : fresh
+              ? "new_generation"
+              : reset
+                ? "reset"
+                : "resume",
+        saved: key ? doc.places?.[key] : undefined,
+        turn: gatewayTurn,
+      });
+      if (bound?.ok !== true)
+        throw new Error(
+          bound?.message || "This agent can't use the model gateway now",
+        );
+      record = {
+        conversation,
+        binding: bound.binding,
+        bundle: bound.bundle,
+        ...(manual ? { manual } : {}),
+      };
+      // The key's session from now on; a record kept from before has its
+      // own, which its first commit published with it.
+      if (key && !manual && bound.persist) persist = bound.binding;
+    }
+    // A reset is done once its key has the binding that replaces it: a turn
+    // without the gateway binds nothing, and leaves it for the next.
+    if (!record) reset = undefined;
+    if (!record && !reply && !notice) return false;
+    // Known before it is written, so its requests are never dispatched as
+    // Pi's own, and its conversation's turns keep to their modes.
+    if (record) {
+      opened.recorded.requests.add(request);
+      opened.recorded.conversations.add(conversation);
+      if (key) opened.recorded.keys.add(key);
+    }
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(GatewayRuns);
+      if (record) {
+        if (persist) doc.places[key] = persist;
+        doc.requests[request] = record;
+      }
+      if (reset) delete doc.resets[key];
+      if (reply) (await tx.doc(Replies))[request] = reply;
+      if (notice) (await tx.doc(Notices))[request] = { conversation, notice };
+    }, context);
+    return Boolean(record);
+  }
+
+  /** Forgets the gateway record of a request Pi was never given, so a
+   * record outlives no turn that failed before its submission; read in the
+   * commit, so one Pi has is kept. A `withdrawn` one's notice and reply
+   * destination go with it, as nothing answers it. */
+  async function unbind(opened, conversation, request, withdrawn = false) {
+    await opened.harness.commit(async (tx) => {
+      if (await tx.submissionByRequest(conversation, request)) return;
+      delete (await tx.doc(GatewayRuns)).requests[request];
+      if (!withdrawn) return;
+      delete (await tx.doc(Notices))[request];
+      delete (await tx.doc(Replies))[request];
+    }, context);
+  }
+
+  /** Forgets the Buzz context of requests no durable work carries any
+   * longer, read from a complete picture of that work taken before Pi has
+   * scheduled any: a submitted request's once its submission settled and no
+   * task's trace has it, a manual one's once none has it. One not yet
+   * submitted, by a host that stopped before submitting it, is kept. */
+  async function prune(harness, { scheduling, tasks, submissions }) {
+    if (scheduling !== "paused") return;
+    const carried = new Set();
+    for (const { record } of tasks)
+      for (const trace of [record.trace, ...(record.links ?? [])])
+        if (typeof trace?.buzz === "string") carried.add(trace.buzz);
+    for (const submission of submissions) {
+      if (submission.requestId) carried.add(submission.requestId);
+      if (typeof submission.trace?.buzz === "string")
+        carried.add(submission.trace.buzz);
+    }
+    const { requests } = (await harness.snapshot(GatewayRuns, context)) ?? {};
+    if (!requests) return;
+    const stale = Object.keys(requests).filter((r) => !carried.has(r));
+    if (!stale.length) return;
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(GatewayRuns);
+      for (const request of stale) {
+        const record = doc.requests[request];
+        if (
+          record &&
+          (!record.conversation ||
+            record.manual ||
+            (await tx.submissionByRequest(record.conversation, request)))
+        )
+          delete doc.requests[request];
+      }
+    }, context);
+  }
+
+  /** Completes a key's `new` session: its reset intent's write, submitted
+   * by its request id, so asking again submits nothing more, then noted as
+   * written. The intent stays until the key's next binding replaces it. */
+  async function resetPending(opened, conversation, key) {
+    const { harness, recorded } = opened;
+    const reset = (await harness.snapshot(GatewayRuns, context))?.resets?.[key];
+    if (reset && !reset.written) {
+      await conversation.submit(
+        {
+          type: "write",
+          entry: { kind: ResetEntry.kind, head: "self" },
+          requestId: reset.request,
+        },
+        context,
+      );
+      await harness.commit(async (tx) => {
+        const resets = (await tx.doc(GatewayRuns)).resets;
+        if (resets[key]?.request === reset.request)
+          resets[key] = { ...resets[key], written: true };
+      }, context);
+    }
+    recorded.resets.delete(key);
+  }
+
+  /** Waits until the conversation holds no unfinished input in the other
+   * mode than `bound`, and no live task of that mode, read from Pi's storage, as Pi may hold one that no
+   * run it has been seen to start has yet. WITHDRAWN once an Interrupt or
+   * Stop came for it. Woken when such an input settles; its
+   * own wait for each asks Pi for progress, which continues work a restart
+   * left; a run Pi cuts off after repeated crashes ends its requests
+   * itself. With no run working in the conversation and no activity in it
+   * for `parkMs`, it fails: a run that works silently, as a long tool
+   * call does, never fails it. A closing agent ends the wait. */
+  async function settledMode(opened, conversation, state, bound, waiting) {
+    const closed = () => new Error("This agent was closed.");
+    let seen = state.events;
+    let since = Date.now();
+    /** Inputs whose wait here ended: only the bound wakes it for them
+     * again, so a wait that settles at once never spins. */
+    const waited = new Set();
+    for (;;) {
+      const ended = new Promise((resolve) => {
+        waiting.wake = resolve;
+      });
+      if (opened.closing) throw closed();
+      if (waiting.interrupted) return WITHDRAWN;
+      let other, tasks;
+      try {
+        const inspection = await opened.harness.inspect(context);
+        const inputs = inspection.submissions.filter(
+          (s) => s.type === "input" && s.conversationId === conversation.id,
+        );
+        // A task can outlive its input, as a background compaction whose
+        // retry sleeps does, and still make model requests. One Pi can't
+        // run makes none.
+        const live = inspection.tasks.filter(
+          ({ record, state }) =>
+            record.conversationId === conversation.id &&
+            state.kind !== "blocked",
+        );
+        if (!inputs.length && !live.length) return;
+        // Its mode is its requests': each one the gateway bound has a record.
+        // A task's request is the one its trace carries.
+        const { requests = {} } =
+          (await opened.harness.snapshot(GatewayRuns, context)) ?? {};
+        other = inputs.filter((s) => Boolean(requests[s.requestId]) !== bound);
+        tasks = live.filter(
+          ({ record }) => Boolean(requests[record.trace?.buzz]) !== bound,
+        );
+      } catch (error) {
+        // Closed while it read: the close is the reason, not the storage.
+        throw opened.closing ? closed() : error;
+      }
+      if (!other.length && !tasks.length) return;
+      if (waiting.interrupted) return WITHDRAWN;
+      // The bound runs only while no run works in the conversation.
+      if (state.busy || state.events !== seen) {
+        seen = state.events;
+        since = Date.now();
+      }
+      const left = since + parkMs - Date.now();
+      if (left <= 0)
+        throw new Error(
+          "The previous run didn't finish, so this turn didn't start. Try again, or start a new session.",
+        );
+      let timer;
+      await Promise.race([
+        ended,
+        new Promise((resolve) => {
+          timer = setTimeout(
+            resolve,
+            tasks.length ? Math.min(left, TASK_POLL_MS) : left,
+          );
+        }),
+        ...other
+          .filter((input) => !waited.has(input.id))
+          .map((input) =>
+            opened.harness
+              .submission(input.id, context)
+              .then((submission) => submission?.wait(context))
+              .catch(() => undefined)
+              .then(() => waited.add(input.id)),
+          ),
+      ]);
+      clearTimeout(timer);
+    }
+  }
+
   /** Starts a request in a conversation configured for this turn. One that
    * steers a run working in it, `busy`, changes only what its owner picked,
    * as in Claude. The agent's `core` memory read for it is the
    * conversation's latest; a failed read shows it none if not yet shown. */
-  async function submit(opened, conversation, turn, busy, refresh) {
+  async function submit(
+    opened,
+    conversation,
+    turn,
+    busy,
+    refresh,
+    accept,
+    withdrawn,
+  ) {
     opened.cores.set(conversation.id, turn.core?.text);
     const steers = busy && turn.steer;
     const chosen = await choose(turn);
@@ -1339,6 +2045,11 @@ export function serve({
       if (!prompt) return;
       turn = { ...turn, ...prompt };
     }
+    if (withdrawn?.()) return;
+    const apply = await accept?.();
+    if (withdrawn?.()) return;
+    apply?.();
+    // Its work carries its request: see `requestTelemetry`.
     const submission = await conversation.submit(
       {
         type: "input",
@@ -1346,7 +2057,7 @@ export function serve({
         whenBusy: "steer",
         requestId: turn.request,
       },
-      context,
+      withTelemetry(requestTelemetry(turn.request), context),
     );
     return { submission: submission.id, conversation: conversation.id };
   }
@@ -1424,6 +2135,7 @@ export function serve({
         auth: dir,
       };
     },
+    /** Pi's providers, as they are now. */
     async providers() {
       const providers = [];
       for (const provider of models.getProviders()) {
@@ -1498,9 +2210,11 @@ export function serve({
         : { ok: true, message: `Connected to ${model.modelId}` };
     },
     /** Opens the agent's storage, once, with its Buzz tools as they are now. */
-    async open({ agent, tools, hint, credential }) {
+    async open({ agent, tools, hint, credential, compactAt }) {
       if (credential) credentials.set(agent, credential);
       const opened = await opening(agent);
+      // Before anything resumes a run left unfinished.
+      opened.compaction.use(compactAt);
       const listed = JSON.stringify([tools, hint]);
       if (opened.tools !== listed) {
         opened.install(buzz(opened, tools, hint));
@@ -1529,6 +2243,32 @@ export function serve({
       if (!found) return { entries: [] };
       const page = await found.entries({}, PAGE, cursor, context);
       const oldest = page.items.at(-1);
+      // Each noted request's own prompt entry, once Pi placed it: looked up
+      // once, then kept on its notice, so a page reads no submission again.
+      const noted = new Map();
+      const placed = {};
+      const notices = (await harness.snapshot(Notices, context)) ?? {};
+      for (const [request, record] of Object.entries(notices)) {
+        if (record.conversation !== found.id) continue;
+        let { entry } = record;
+        if (entry === undefined) {
+          entry = (
+            await storage.submissionByRequest(found.id, request, context)
+          )?.entry;
+          if (entry !== undefined) placed[request] = entry;
+        }
+        if (entry !== undefined) noted.set(entry, record.notice);
+      }
+      if (Object.keys(placed).length)
+        await harness
+          .commit(async (tx) => {
+            const doc = await tx.doc(Notices);
+            for (const [request, entry] of Object.entries(placed))
+              if (doc[request]) doc[request] = { ...doc[request], entry };
+          }, context)
+          .catch((error) =>
+            console.warn("Pi could not keep a notice's prompt entry", error),
+          );
       return {
         // The session the page's oldest entry is in, however old its reset.
         ...(oldest
@@ -1537,6 +2277,12 @@ export function serve({
         entries: page.items.map(({ id, kind, model, data }) => ({
           id,
           kind,
+          ...(noted.has(id) && { notice: noted.get(id) }),
+          ...(kind === NOTICE_ENTRY && {
+            notice: data.notice,
+            error: data.error,
+            at: data.at,
+          }),
           // Pi writes this result itself for a call an abort cut off.
           ...(data?.diagnostics?.some?.((d) => d.code === "aborted") && {
             aborted: true,
@@ -1576,8 +2322,31 @@ export function serve({
     },
     /** A turn for a conversation key: its Pi conversation, made the first
      * time, takes the request, or steers its run if one is working. */
-    async deliver({ agent, key, at, context: tools, reply, refresh, ...turn }) {
-      const opened = await agentOf(agent);
+    async deliver({
+      agent,
+      key,
+      at,
+      context: tools,
+      reply,
+      notice,
+      refresh,
+      gatewayTurn,
+      ...turn
+    }) {
+      // Listed as it arrives, so an Interrupt or a Stop that comes while it
+      // waits, or while it is prepared, withdraws a gateway one.
+      const waiting = { request: turn.request };
+      const unlist = listed(agent, key, waiting);
+      let opened;
+      try {
+        opened = await agentOf(agent);
+      } catch (error) {
+        unlist();
+        throw error;
+      }
+      if (gatewayTurn) opened.recorded.keys.add(key);
+      // Before this turn waits on a run it resumes.
+      opened.compaction.use(turn.compactAt);
       const prior = opened.queues.get(key);
       const delivered = (async () => {
         await prior?.catch(() => undefined);
@@ -1585,6 +2354,7 @@ export function serve({
         const place = (await harness.snapshot(Places, context))?.[key];
         let conversation =
           place && (await harness.conversation(place.conversation, context));
+        const fresh = !conversation;
         if (!conversation) {
           conversation = await harness.createConversation(
             { ownership: { kind: "ownerless" } },
@@ -1603,42 +2373,164 @@ export function serve({
           }, context);
         }
         opened.conversations.add(conversation.id);
-        opened.contexts.set(conversation.id, tools);
-        const { busy } = await watch(opened, conversation.id);
-        // Read before the turn is submitted: what Pi then holds decides it.
-        const session =
-          !busy && (await firstTurn(opened, conversation.id))
-            ? await sessionOf(opened.storage, conversation.id)
-            : undefined;
-        if (reply)
+        // The conversation's tools follow a turn only once Pi takes it, so
+        // one dropped before then leaves the running turn's.
+        const accept = async () => {
+          // Tools must recover at this source even if the host stops after
+          // acceptance, before the history watermark can advance.
           await harness.commit(async (tx) => {
-            (await tx.doc(Replies))[turn.request] = reply;
+            const places = await tx.doc(Places);
+            places[key] = {
+              conversation: conversation.id,
+              context: tools,
+              seen:
+                places[key]?.conversation === conversation.id
+                  ? places[key].seen
+                  : 0,
+            };
           }, context);
-        const submitted = await submit(
-          opened,
-          conversation,
-          turn,
-          busy,
-          refresh
-            ? () => call("prompt", { agent, request: turn.request })
-            : undefined,
-        );
-        if (!submitted) return false;
-        if (session !== undefined) Object.assign(submitted, { session });
+          return () => opened.contexts.set(conversation.id, tools);
+        };
+        const state = await watch(opened, conversation.id);
         // Recorded once Pi has the turn: one that could not start leaves the
         // messages it would have been shown for the next.
-        await harness.commit(async (tx) => {
-          const places = await tx.doc(Places);
-          places[key] = {
+        const placed = async (submitted) => {
+          await harness.commit(async (tx) => {
+            const places = await tx.doc(Places);
+            places[key] = {
+              conversation: conversation.id,
+              context: tools,
+              seen: Math.max(at, places[key]?.seen ?? 0),
+            };
+          }, context);
+          return submitted;
+        };
+        const prompt = refresh
+          ? () => call("prompt", { agent, request: turn.request })
+          : undefined;
+        let bound;
+        try {
+          // A `new` session a host stopped partway through is done first.
+          if (opened.recorded.resets.has(key))
+            await resetPending(opened, conversation, key);
+          // An ordinary turn, in a conversation with no gateway work, runs
+          // as on main.
+          if (
+            !gatewayTurn &&
+            !opened.recorded.conversations.has(conversation.id)
+          ) {
+            const { busy } = state;
+            // Read before the turn is submitted: what Pi then holds decides it.
+            const session =
+              !busy && (await firstTurn(opened, conversation.id))
+                ? await sessionOf(opened.storage, conversation.id)
+                : undefined;
+            if (reply || notice)
+              await harness.commit(async (tx) => {
+                if (reply) (await tx.doc(Replies))[turn.request] = reply;
+                if (notice)
+                  (await tx.doc(Notices))[turn.request] = {
+                    conversation: conversation.id,
+                    notice,
+                  };
+              }, context);
+            const submitted = await submit(
+              opened,
+              conversation,
+              turn,
+              busy,
+              prompt,
+              accept,
+            );
+            if (!submitted) return false;
+            if (session !== undefined) Object.assign(submitted, { session });
+            return placed(submitted);
+          }
+          // A request Pi has already is answered by its own submission, in
+          // the mode it ran in: asked again, it binds and configures nothing.
+          // Its run, continuing, reads the memory and messages it was given.
+          const held = await opened.storage.submissionByRequest(
+            conversation.id,
+            turn.request,
+            context,
+          );
+          if (held) {
+            opened.cores.set(conversation.id, turn.core?.text);
+            opened.contexts.set(conversation.id, tools);
+            return placed({
+              submission: held.id,
+              conversation: conversation.id,
+            });
+          }
+          bound = await bind(opened, turn, {
+            key,
+            fresh,
+            gatewayTurn,
+            reply,
+            notice,
             conversation: conversation.id,
-            context: tools,
-            seen: Math.max(at, places[key]?.seen ?? 0),
-          };
-        }, context);
-        return submitted;
+          });
+          // A run steers only with a turn of its own mode: one through the
+          // gateway, or not, starts once Pi holds no work in the other mode.
+          const withdrawn =
+            (await settledMode(opened, conversation, state, bound, waiting)) ===
+            WITHDRAWN;
+          // Whether it steers is as on main: whether a run is working.
+          const { busy } = state;
+          const session =
+            !withdrawn && !busy && (await firstTurn(opened, conversation.id))
+              ? await sessionOf(opened.storage, conversation.id)
+              : undefined;
+          const submitted =
+            !withdrawn &&
+            (await submit(
+              opened,
+              conversation,
+              turn,
+              busy,
+              prompt,
+              accept,
+              () => waiting.interrupted,
+            ));
+          if (!submitted) {
+            // Withdrawn before Pi had it: nothing will dispatch for it, and
+            // nothing answers it.
+            await unbind(opened, conversation.id, turn.request, true);
+            return false;
+          }
+          if (session !== undefined) Object.assign(submitted, { session });
+          return placed(submitted);
+        } catch (error) {
+          // Its record goes with a turn that failed before Pi had it.
+          if (bound)
+            await unbind(opened, conversation.id, turn.request).catch(
+              () => undefined,
+            );
+          // A noted turn that failed before Pi placed its prompt shows its
+          // notice beside that failure, in an entry no model sees.
+          if (notice)
+            await conversation
+              .submit(
+                {
+                  type: "write",
+                  entry: {
+                    kind: NOTICE_ENTRY,
+                    data: {
+                      notice,
+                      error: error?.message ?? String(error),
+                      at: Date.now(),
+                    },
+                  },
+                },
+                context,
+              )
+              .catch(() => undefined);
+          throw error;
+        }
       })();
       opened.queues.set(key, delivered);
       const done = () => {
+        unlist();
         if (opened.queues.get(key) === delivered) opened.queues.delete(key);
       };
       void delivered.then(done, done);
@@ -1647,14 +2539,30 @@ export function serve({
     /** A one-off turn in a conversation of its own, with no default
      * destination for its tools. Nothing watches it: it has no other
      * requests, and no Activity. */
-    async once({ agent, ...turn }) {
+    async once({ agent, gatewayTurn, ...turn }) {
       const opened = await agentOf(agent);
+      opened.compaction.use(turn.compactAt);
       const conversation = await opened.harness.createConversation(
         { ownership: { kind: "ownerless" } },
         context,
       );
+      // Without the gateway, as on main.
+      const bound =
+        gatewayTurn &&
+        (await bind(opened, turn, {
+          gatewayTurn,
+          conversation: conversation.id,
+        }));
       opened.conversations.add(conversation.id);
-      return submit(opened, conversation, turn, false);
+      try {
+        return await submit(opened, conversation, turn, false);
+      } catch (error) {
+        if (bound)
+          await unbind(opened, conversation.id, turn.request).catch(
+            () => undefined,
+          );
+        throw error;
+      }
     },
     /** The requests of runs Pi has not finished, with where each one's tools
      * default to when the agent has a place for its conversation; a one-off
@@ -1663,16 +2571,24 @@ export function serve({
     async unfinished({ agent }) {
       const opened = await agentOf(agent);
       const { submissions } = await opened.harness.inspect(context);
+      const places = (await opened.harness.snapshot(Places, context)) ?? {};
+      const keys = new Map(
+        Object.entries(places).map(([key, place]) => [place.conversation, key]),
+      );
       const replies = (await opened.harness.snapshot(Replies, context)) ?? {};
       return {
         submissions: submissions.flatMap(
-          ({ id, conversationId, requestId }) => {
+          ({ id, type, conversationId, requestId }) => {
             const place = opened.contexts.get(conversationId);
-            return requestId
+            // A reset intent's write has a request id too.
+            return requestId && type === "input"
               ? [
                   {
                     submission: id,
                     conversation: conversationId,
+                    ...(keys.has(conversationId)
+                      ? { key: keys.get(conversationId) }
+                      : {}),
                     request: requestId,
                     ...(replies[requestId]
                       ? { reply: replies[requestId] }
@@ -1719,11 +2635,16 @@ export function serve({
         (result.status === "done" || result.status === "unanswered")
       ) {
         try {
+          // Its Buzz context stays while its work may still dispatch, as a
+          // compaction it left: `prune` forgets it.
           await opened.harness.commit(async (tx) => {
             delete (await tx.doc(Replies))[request];
           }, context);
         } catch (error) {
-          console.warn("Pi could not clear a wake's reply destination", error);
+          console.warn(
+            "Pi could not clear a request's reply destination",
+            error,
+          );
         }
       }
       return result;
@@ -1736,32 +2657,87 @@ export function serve({
      * one: `interrupt` aborts its run and any compaction, `compact` summarizes
      * it and settles once the summary is placed, and `new` starts a new
      * context, shown the whole Buzz conversation at its next turn. */
-    async session({ agent, key, action }) {
-      const { harness } = await agentOf(agent);
-      const place = (await harness.snapshot(Places, context))?.[key];
-      const conversation =
-        place && (await harness.conversation(place.conversation, context));
-      if (!conversation) return;
-      if (action === "interrupt") return conversation.abort(context);
-      if (action === "new") {
-        await conversation.reset(undefined, context);
-        await harness.commit(async (tx) => {
-          const places = await tx.doc(Places);
-          if (places[key]) places[key] = { ...places[key], seen: 0 };
-        }, context);
-        return;
-      }
-      const { outcome } = (
-        await harness.waitForTask(
+    async session({ agent, key, action, gatewayTurn }) {
+      // A gateway turn not yet submitted, waiting for the run this ends or
+      // being prepared, is withdrawn with it, as one steered into that run
+      // would end with it.
+      if (action === "interrupt") withdrawPending(agent, key);
+      const opened = await agentOf(agent);
+      const { harness } = opened;
+      const find = async () => {
+        const place = (await harness.snapshot(Places, context))?.[key];
+        return (
+          place && (await harness.conversation(place.conversation, context))
+        );
+      };
+      if (action === "interrupt") return (await find())?.abort(context);
+      // A key with no gateway state is an ordinary agent's: as on main.
+      if (!gatewayTurn && !opened.recorded.keys.has(key)) {
+        const conversation = await find();
+        if (!conversation) return;
+        if (action === "new") {
+          await conversation.reset(undefined, context);
+          await harness.commit(async (tx) => {
+            const places = await tx.doc(Places);
+            if (places[key]) places[key] = { ...places[key], seen: 0 };
+          }, context);
+          return;
+        }
+        return compacted(
+          harness,
           await conversation.compact(undefined, context),
-          context,
-        )
-      ).state;
-      if (outcome.status === "failed") throw new Error(outcome.error.message);
-      if (outcome.status !== "completed") return;
-      const { submissionId } = outcome.result;
-      if (submissionId !== undefined)
-        await (await harness.submission(submissionId, context))?.wait(context);
+        );
+      }
+      // After the key's deliveries, so none binds across the reset, and
+      // one making its conversation has.
+      const prior = opened.queues.get(key);
+      const acted = (async () => {
+        await prior?.catch(() => undefined);
+        const conversation = await find();
+        if (!conversation) return;
+        if (action === "new") {
+          // Intended in one commit with what the next turn is shown, then
+          // done: a host that stops between them does it at the next. The
+          // intent stays for the key's next binding, which it makes new.
+          opened.recorded.resets.add(key);
+          await harness.commit(async (tx) => {
+            const places = await tx.doc(Places);
+            if (places[key]) places[key] = { ...places[key], seen: 0 };
+            (await tx.doc(GatewayRuns)).resets[key] = {
+              request: `reset/${randomUUID()}`,
+            };
+          }, context);
+          return resetPending(opened, conversation, key);
+        }
+        if (opened.recorded.resets.has(key))
+          await resetPending(opened, conversation, key);
+        // The compaction's own request, which its task's trace carries.
+        const request = `manual/${randomUUID()}`;
+        await bind(
+          opened,
+          { request },
+          { key, gatewayTurn, conversation: conversation.id, manual: true },
+        );
+        return conversation.compact(
+          undefined,
+          withTelemetry(requestTelemetry(request), context),
+        );
+      })();
+      opened.queues.set(key, acted);
+      const done = () => {
+        if (opened.queues.get(key) === acted) opened.queues.delete(key);
+      };
+      void acted.then(done, done);
+      const task = await acted;
+      if (action === "new" || task === undefined) return;
+      return compacted(harness, task);
+    },
+    /** Withdraws a delivery of `request` Pi doesn't have yet, as Stop on its
+     * Activity: a gateway turn waiting for a run in the other mode, or
+     * being prepared, is never submitted. Any other is unchanged, and its
+     * run is stopped once it has one. */
+    async cancel({ agent, key, request }) {
+      if (typeof request === "string") withdrawPending(agent, key, request);
     },
     /** Closes the agent's storage. Unfinished runs stay, and continue when it
      * opens again. */
@@ -1772,6 +2748,16 @@ export function serve({
       failed.delete(agent);
     },
   };
+
+  /** Settles once compaction `task` has placed its summary. */
+  async function compacted(harness, task) {
+    const { outcome } = (await harness.waitForTask(task, context)).state;
+    if (outcome.status === "failed") throw new Error(outcome.error.message);
+    if (outcome.status !== "completed") return;
+    const { submissionId } = outcome.result;
+    if (submissionId !== undefined)
+      await (await harness.submission(submissionId, context))?.wait(context);
+  }
 
   async function shut(opened) {
     if (!opened) return;

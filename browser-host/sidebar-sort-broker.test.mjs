@@ -128,6 +128,7 @@ it("real broker sorting preserves saved-section keys in transport confirmation a
   ).toEqual({ forums: "recent", "section:work": "recent" });
   expect(h.calls.map((call) => new URL(call.url).pathname)).toEqual([
     "/query",
+    "/query",
     "/events",
     "/query",
   ]);
@@ -135,7 +136,7 @@ it("real broker sorting preserves saved-section keys in transport confirmation a
     {
       kinds: [30078],
       authors: [h.viewer],
-      "#d": ["channel-sort"],
+      "#d": ["channel-workspace-sort"],
       limit: 1,
       consistency: "strong",
     },
@@ -149,8 +150,14 @@ it("real broker sorting preserves saved-section keys in transport confirmation a
     ),
   ).toEqual({ forums: "recent" });
   const queries = h.calls.filter(({ url }) => url.endsWith("/query"));
-  expect(queries).toHaveLength(4);
-  for (const { body } of queries) expect(body).toEqual(h.calls[0].body);
+  expect(queries).toHaveLength(5);
+  expect(queries.map(({ body }) => body[0]["#d"][0])).toEqual([
+    "channel-workspace-sort",
+    "channel-sort",
+    "channel-workspace-sort",
+    "channel-workspace-sort",
+    "channel-workspace-sort",
+  ]);
 });
 
 it.each(["query", "oversized", "publication", "receipt", "conflict"])(
@@ -216,7 +223,7 @@ it("refuses invalid sort intent, excessive bodies and foreign origins before ups
   const intent = { group: "channels", mode: "recent", sectionIds: [] };
   expect((await h.post({ ...intent, mode: "random" })).status).toBe(400);
   expect((await h.post(intent, "https://foreign.invalid")).status).toBe(403);
-  expect((await h.post({ ...intent, group: "x".repeat(33000) })).status).toBe(
+  expect((await h.post({ ...intent, group: "x".repeat(66_000) })).status).toBe(
     413,
   );
   expect(h.calls).toEqual([]);

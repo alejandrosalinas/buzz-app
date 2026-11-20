@@ -3,12 +3,18 @@ import {
   DOMParser as EditorDOMParser,
   Fragment,
   type Node as EditorNode,
+  type TagParseRule,
 } from "prosemirror-model";
+import { formatItemTimestamp } from "../../shared/datetime";
 import { parseBuzzLink } from "../navigation/buzz-links";
 import { profileKey } from "../profiles/target";
 import { safeLinkUrl } from "../relay/message-content";
 import { composerSchema, projectComposerDocument } from "./composer-document";
-import { composerMarkdown } from "./composer-markdown";
+import {
+  composerMarkdown,
+  type ComposerMarkdownMode,
+} from "./composer-markdown";
+import { bareHostParts } from "./message-link-parts";
 
 /** `text` reads well outside the app; `markdown` keeps identity locators and
  * the block syntax the composer understands; `html` is the semantic `text/html`
@@ -43,7 +49,11 @@ export function serializeSelection(
       )
         wrapper = outer;
       // TR/TD/TBODY fragments lose their markup when parsed outside a table.
-      const root = wrapper ?? element?.closest("table") ?? ancestor;
+      const root =
+        wrapper ??
+        element?.closest("table") ??
+        wholeBlock(element, range) ??
+        ancestor;
       values.push(serializeNode(root, format, range));
     }
   }
@@ -58,22 +68,63 @@ export function serializeNode(
   node: Node,
   format: CopyFormat,
   range?: Range,
+  { includeHiddenBylines = true }: { includeHiddenBylines?: boolean } = {},
 ): string {
   if (format === "markdown") return markdown(node, range);
-  return serialize(node, format, range);
+  const value = serialize(node, format, range, includeHiddenBylines);
+  // A byline is the first line of the paragraph it precedes, so no consumer
+  // spaces the two apart; before any other block it is its own paragraph.
+  return format === "html"
+    ? value.replace(
+        bylineParagraph,
+        (_, line: string, next?: string) =>
+          `<p>${line}${next ? "<br>" : "</p>"}`,
+      )
+    : value;
 }
+
+// Its own text is escaped, so the first `</p>` after a byline opens is its own.
+const bylineOpen = '<p data-copy-byline="">';
+const bylineParagraph = new RegExp(`${bylineOpen}(.*?)</p>(<p>)?`, "gs");
 
 function serialize(
   node: Node,
   format: CopyFormat,
-  range?: Range,
+  range: Range | undefined,
+  includeHiddenBylines: boolean,
   inList = false,
 ): string {
   if (range && !range.intersectsNode(node)) return "";
   if (node.nodeType === Node.TEXT_NODE)
     return text(clip(node as Text, range), format);
-  if (!(node instanceof Element)) return children(node, format, range);
-  if (unselectable(node)) return "";
+  if (!(node instanceof Element))
+    return children(node, format, range, includeHiddenBylines);
+  // A message's byline copies as one line, name then time, whether the row
+  // shows it or a grouped row keeps it for assistive technology alone. A
+  // selection holding only part of it copies that text.
+  const author = node.getAttribute("data-copy-author");
+  const selectable = !unselectable(node);
+  if (author && (includeHiddenBylines || selectable) && whole(node, range)) {
+    const seconds = Number.parseFloat(
+      node.getAttribute("data-copy-time") ?? "",
+    );
+    const time = Number.isFinite(seconds)
+      ? ` ${formatItemTimestamp(seconds, { withTime: true })}`
+      : "";
+    return format === "html"
+      ? `${bylineOpen}<strong>${escapeHtml(author)}</strong>${escapeHtml(time)}</p>`
+      : author + time;
+  }
+  // Unselectable chrome that still carries context, such as reaction counts,
+  // states its copy text.
+  const copyText = node.getAttribute("data-copy-text");
+  if (copyText !== null) {
+    if (!copyText || !holds(node, range)) return "";
+    return format === "html"
+      ? `<p>${text(copyText, format)}</p>`
+      : text(copyText, format);
+  }
+  if (!selectable) return "";
   // This module's own delimiter markup; the spoiler branch writes it afresh.
   if (node.hasAttribute("data-spoiler-delimiter")) return "";
   // SVG tag names keep their case.
@@ -111,7 +162,7 @@ function serialize(
   // Element children that copy as something, so a list can tell which items
   // it keeps without serializing them again.
   const kept: Element[] = [];
-  const inner = children(node, format, range, kept);
+  const inner = children(node, format, range, includeHiddenBylines, kept);
   // A triple-click ends its range at the next block's start, often past an
   // empty reaction row, and a drag can start at a block's end. An empty layout
   // container, or a block holding none of the selection, copies as nothing,
@@ -190,7 +241,15 @@ function serialize(
           // The first item the copy keeps, not one it only touches.
           (range && kept[0] ? [...node.children].indexOf(kept[0]) : 0)
         : 1;
-    return `<${tag.toLowerCase()}${tag === "OL" && Number.isFinite(start) && start !== 1 ? ` start="${start}"` : ""}>${inner}</${tag.toLowerCase()}>`;
+    // Only this app's document payload carries list-spacing metadata.
+    const spacing = node.getAttribute("data-buzz-spread");
+    const spread =
+      /^(UL|OL|LI)$/.test(tag) &&
+      node.closest('[data-buzz-copy="document"]') &&
+      (spacing === "true" || spacing === "false")
+        ? ` data-buzz-spread="${spacing}"`
+        : "";
+    return `<${tag.toLowerCase()}${spread}${tag === "OL" && Number.isFinite(start) && start !== 1 ? ` start="${start}"` : ""}>${inner}</${tag.toLowerCase()}>`;
   }
   if (format !== "html" || !blockTag.test(tag) || node.querySelector(blocks))
     return inner;
@@ -198,9 +257,11 @@ function serialize(
   return `<${block}>${inner}</${block}>`;
 }
 
-/** Engines omit computed `user-select: none` chrome from copies; so do we. */
+/** Engines omit computed `user-select: none` chrome from copies; so do we.
+ * The macOS system webview knows only the prefixed property. */
 export function unselectable(element: Element): boolean {
-  return getComputedStyle(element).userSelect === "none";
+  const style = getComputedStyle(element);
+  return style.userSelect === "none" || style.webkitUserSelect === "none";
 }
 
 function anchor(node: Element, inner: string, format: CopyFormat): string {
@@ -217,6 +278,15 @@ function anchor(node: Element, inner: string, format: CopyFormat): string {
     return sourceTokenHtml(link("markdown", href, label || href));
   if (!label || label === href || label === node.getAttribute("href"))
     return format === "html" ? link(format, href, href) : href;
+  // A scheme-less host such as example.com is linked on display only; copy
+  // the authored text, which links again wherever it is sent.
+  const bare = bareHostParts(label);
+  if (
+    bare.length === 3 &&
+    bare[1]?.text === label &&
+    safeHref(bare[1].url ?? "") === href
+  )
+    return text(label, format);
   // Identity and channel locators read as their sigil-prefixed name alone.
   const buzz = parseBuzzLink(href);
   const plain =
@@ -273,7 +343,11 @@ function markdown(node: Node, range?: Range): string {
  * inserts and the source `markdown` serializes. Only the semantic HTML emitted
  * above reaches the editor parser. Anchors become source tokens, not
  * recipients; the paste host still owns mention acceptance. */
-export function copyDocument(node: Node, range?: Range): EditorNode {
+export function copyDocument(
+  node: Node,
+  range?: Range,
+  mode: ComposerMarkdownMode = "chat",
+): EditorNode {
   const container = (node.ownerDocument ?? document).createElement("div");
   container.innerHTML = serializeNode(node, "html", range);
   const html = container.ownerDocument;
@@ -282,9 +356,10 @@ export function copyDocument(node: Node, range?: Range): EditorNode {
     "[data-spoiler-delimiter]",
   ))
     delimiter.remove();
-  // Headings, rules and task checkboxes have no composer node. They become the
-  // Markdown source that renders them again once sent: paragraph and item text.
-  for (const heading of container.querySelectorAll("h1, h2, h3, h4, h5, h6")) {
+  // Chat keeps headings as authored Markdown; documents retain heading nodes.
+  for (const heading of mode === "document"
+    ? []
+    : container.querySelectorAll("h1, h2, h3, h4, h5, h6")) {
     const paragraph = html.createElement("p");
     if (heading.textContent)
       paragraph.append(`${"#".repeat(Number(heading.tagName.slice(1)))} `);
@@ -305,14 +380,42 @@ export function copyDocument(node: Node, range?: Range): EditorNode {
   // Rendered paragraphs are separated by blank lines; editor paragraphs are
   // individual source lines. Preserve that distinction only for timeline HTML.
   const origin = node instanceof Element ? node : node.parentElement;
-  if (origin?.closest('[data-buzz-copy="timeline"]')) {
+  if (mode === "chat" && origin?.closest('[data-buzz-copy="timeline"]')) {
     for (const paragraph of container.querySelectorAll("p + p"))
       paragraph.before(html.createElement("p"));
   }
   // Tables remain tab-separated source in the composer, whose schema has no table.
   for (const row of container.querySelectorAll("tr"))
     for (const cell of [...row.children].slice(1)) cell.prepend("\t");
+  const listRules: TagParseRule[] =
+    mode === "document"
+      ? [
+          {
+            tag: "ul",
+            node: "bullet_list",
+            getAttrs: (element) => ({
+              spread: element.getAttribute("data-buzz-spread") === "true",
+            }),
+          },
+          {
+            tag: "ol",
+            node: "ordered_list",
+            getAttrs: (element) => ({
+              order: Number(element.getAttribute("start") ?? 1),
+              spread: element.getAttribute("data-buzz-spread") === "true",
+            }),
+          },
+          {
+            tag: "li",
+            node: "list_item",
+            getAttrs: (element) => ({
+              spread: element.getAttribute("data-buzz-spread") === "true",
+            }),
+          },
+        ]
+      : [];
   const parser = new EditorDOMParser(composerSchema, [
+    ...listRules,
     {
       tag: "a",
       node: "token",
@@ -375,6 +478,22 @@ function clip(node: Text, range?: Range): string {
     : value;
 }
 
+/** The outermost block of a row whose text a range holds entirely. A
+ * triple-click ends inside a block's own text when only unselectable chrome
+ * follows it, and the block still copies as itself, a heading as a heading. */
+function wholeBlock(element: Element | null, range: Range) {
+  let block: Element | undefined;
+  for (
+    let outer = element;
+    outer && !outer.hasAttribute("data-message-id");
+    outer = outer.parentElement
+  ) {
+    if (!whole(outer, range)) break;
+    if (blockTag.test(outer.tagName)) block = outer;
+  }
+  return block;
+}
+
 /** A chip keeps its identity only when all of its text is selected. */
 function whole(element: Element, range?: Range): boolean {
   return !range || within(element, range).toString() === element.textContent;
@@ -414,17 +533,21 @@ function within(element: Element, range: Range): Range {
 function children(
   node: Node,
   format: CopyFormat,
-  range?: Range,
+  range: Range | undefined,
+  includeHiddenBylines: boolean,
   kept?: Element[],
 ): string {
   let text = "";
   let previous: Node | undefined;
+  // A row's gap, as between a byline's name and time, reads as a space.
+  let spaced: boolean | undefined;
   for (const child of node.childNodes) {
     if ((range && !range.intersectsNode(child)) || formatting(child)) continue;
     const value = serialize(
       child,
       format,
       range,
+      includeHiddenBylines,
       /^(UL|OL)$/.test(node.nodeName),
     );
     if (value && child instanceof Element) kept?.push(child);
@@ -436,7 +559,10 @@ function children(
         (value.match(/^\n*/)?.[0].length ?? 0);
       text += "\n".repeat(Math.max(0, 2 - existing));
     } else if (separator === "\t") text += separator;
-    else if (
+    else if (!separator && /\S$/.test(text) && /^\S/.test(value)) {
+      spaced ??= node instanceof Element && flexRow(node);
+      if (spaced) text += " ";
+    } else if (
       text &&
       value &&
       separator &&
@@ -476,6 +602,16 @@ const blockName = (node: Node) =>
       ? "PRE"
       : node.tagName
     : "";
+
+/** A flex row whose gap, not text, separates its items. */
+function flexRow(element: Element): boolean {
+  const style = getComputedStyle(element);
+  return (
+    /^(inline-)?flex$/.test(style.display) &&
+    !style.flexDirection.startsWith("column") &&
+    Number.parseFloat(style.columnGap) > 0
+  );
+}
 
 /** Whitespace between rendered blocks is formatting; blocks supply separators. */
 function formatting(node: Node): boolean {
@@ -542,16 +678,46 @@ function copyMessageSelection(event: ClipboardEvent) {
   event.preventDefault();
 }
 
+/** A selection begun in a message history stays in it: dragging past an edge
+ * selects to that edge, not into the sidebar, headers, composer or the other
+ * pane. Editors own their selections. */
+export function containMessageSelection() {
+  const selection = document.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed) return;
+  const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
+  const anchor = anchorNode && elementOf(anchorNode);
+  if (!anchor || !focusNode || anchor.closest(editable)) return;
+  const scope = anchor.closest("[data-message-scroller]");
+  if (!scope) return;
+  const bounds = document.createRange();
+  bounds.selectNodeContents(scope);
+  const side = bounds.comparePoint(focusNode, focusOffset);
+  if (side === 0) return;
+  selection.setBaseAndExtent(
+    anchorNode,
+    anchorOffset,
+    scope,
+    side < 0 ? 0 : scope.childNodes.length,
+  );
+}
+
 let surfaces = 0;
-/** Timeline and thread surfaces share one document listener. */
+/** Timeline and thread surfaces share one set of document listeners. */
 export function useMessageSelectionCopy() {
   useEffect(() => {
     if (typeof document === "undefined") return;
-    if (surfaces++ === 0)
+    if (surfaces++ === 0) {
       document.addEventListener("copy", copyMessageSelection, true);
+      document.addEventListener("selectionchange", containMessageSelection);
+    }
     return () => {
-      if (--surfaces === 0)
+      if (--surfaces === 0) {
         document.removeEventListener("copy", copyMessageSelection, true);
+        document.removeEventListener(
+          "selectionchange",
+          containMessageSelection,
+        );
+      }
     };
   }, []);
 }

@@ -63,12 +63,16 @@ export function plainText(content: string, options: PreviewOptions = {}) {
   // possible opener; newly saved redacted previews contain no such delimiter.
   const opener = options.storedPreview ? bounded.indexOf("||") : -1;
   if (opener >= 0) bounded = `${bounded.slice(0, opener)}[Spoiler]`;
-  const original = scanMarkdown(bounded);
-  if (original.tooDeep) return "";
-  if (!bounded.includes("||"))
-    return shortText(prose(original.tree), options.limit ?? 200);
-  const prepared = prepareMarkdown(bounded);
+  // Read the body as its conversation renders it, wrapped links repaired.
+  let scan: ReturnType<typeof scanMarkdown> | undefined;
+  const prepared = prepareMarkdown(bounded, (made) => {
+    scan = made;
+  });
   if (prepared.kind === "plain") return "";
+  const original = scan ?? scanMarkdown(prepared.content);
+  if (original.tooDeep) return "";
+  if (!prepared.content.includes("||"))
+    return shortText(prose(original.tree), options.limit ?? 200);
   // Protect only authored spoiler delimiters, using the renderer's source
   // rules. A collision-free text token survives Markdown decoding without
   // turning escaped pipes, code or table grammar into hidden content.
@@ -80,9 +84,23 @@ export function plainText(content: string, options: PreviewOptions = {}) {
   let source = prepared.content;
   for (const offset of [...prepared.spoilerDelimiters].reverse())
     source = source.slice(0, offset) + delimiter + source.slice(offset + 2);
+  return spoilerText(source, delimiter, {
+    truncated: content.length > end,
+    limit: options.limit,
+  });
+}
+
+/** Flattened, bounded prose of `source`, where `delimiter` stands for each
+ * authored spoiler delimiter; empty when it nests too deeply. */
+export function spoilerText(
+  source: string,
+  delimiter: string,
+  options: Readonly<{ truncated?: boolean; limit?: number | undefined }> = {},
+) {
   const { tree, tooDeep } = scanMarkdown(source);
-  if (!tooDeep) remarkSpoilers(delimiter, content.length > end)(tree);
-  return tooDeep ? "" : shortText(prose(tree), options.limit ?? 200);
+  if (tooDeep) return "";
+  remarkSpoilers(delimiter, options.truncated ?? false)(tree);
+  return shortText(prose(tree), options.limit ?? 200);
 }
 
 /** Bounded CommonMark text, not rendered HTML or a fetch of linked/attached content. */

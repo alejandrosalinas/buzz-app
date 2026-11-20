@@ -92,3 +92,29 @@ export function stageChatCards(
     ],
   };
 }
+
+/** Restore older attachment-style chat drafts into the ordinary editable document. */
+export function restoreChatLinks(draft: MentionDraft): MentionDraft {
+  if (!draft.chatCards?.length) return draft;
+  const { chatCards, ...caption } = draft;
+  const links = readComposerDocument(
+    {
+      text: chatCards.join("\n\n"),
+      recipients: [],
+    },
+    [],
+  );
+  const body = readComposerDocument(caption, caption.recipients);
+  const doc = links.copy(
+    draft.text
+      ? links.content
+          .addToEnd(composerSchema.nodes.paragraph.create())
+          .append(body.content)
+      : links.content,
+  );
+  return {
+    ...projectComposerDocument(doc).draft,
+    ...(draft.forward !== undefined ? { forward: draft.forward } : {}),
+    ...(draft.gifs ? { gifs: draft.gifs } : {}),
+  };
+}

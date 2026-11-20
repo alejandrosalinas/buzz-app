@@ -223,8 +223,10 @@ for (const action of ["archive", "delete"]) {
         ).toBeFocused();
         await expect(composer).toHaveCount(0);
         await expect(
-          page.getByRole("region", { name: "Archived channel", exact: true }),
-        ).toHaveText("This channel is archived");
+          page
+            .getByRole("region", { name: "Archived channel", exact: true })
+            .getByText(/^This channel is archived\b/),
+        ).toBeVisible();
         await expect(
           page.getByRole("button", { name: "Send message", exact: true }),
         ).toHaveCount(0);
@@ -247,8 +249,10 @@ for (const action of ["archive", "delete"]) {
         ).toBeVisible();
         await expect(composer).toHaveCount(0);
         await expect(
-          page.getByRole("region", { name: "Archived channel", exact: true }),
-        ).toHaveText("This channel is archived");
+          page
+            .getByRole("region", { name: "Archived channel", exact: true })
+            .getByText(/^This channel is archived\b/),
+        ).toBeVisible();
         await expect(
           page.getByRole("button", { name: "Send message", exact: true }),
         ).toHaveCount(0);
@@ -279,7 +283,7 @@ for (const action of ["archive", "delete"]) {
         });
         await expect(
           search
-            .getByRole("group", { name: "Recent activity" })
+            .getByRole("group", { name: "Recents" })
             .getByRole("option", { name: /Lifecycle channel/ }),
         ).toHaveCount(0);
         await search.getByRole("combobox").fill("Lifecycle channel");
@@ -297,8 +301,10 @@ for (const action of ["archive", "delete"]) {
         await expect(restore).toBeVisible();
         await expect(composer).toHaveCount(0);
         await expect(
-          page.getByRole("region", { name: "Archived channel", exact: true }),
-        ).toHaveText("This channel is archived");
+          page
+            .getByRole("region", { name: "Archived channel", exact: true })
+            .getByText(/^This channel is archived\b/),
+        ).toBeVisible();
         await expect(
           panel.getByRole("button", { name: "Archive channel", exact: true }),
         ).toHaveCount(0);
@@ -520,6 +526,7 @@ test.describe("owner-role agent without direct ownership", () => {
       page.locator(`[data-channel-id="${channelId}"]`),
     ).toBeVisible();
     expect(app.report.lifecyclePublications ?? []).toHaveLength(0);
+    await failure.hover();
     await failure.getByRole("button", { name: "Dismiss notification" }).click();
     await trigger.click();
     await dialog

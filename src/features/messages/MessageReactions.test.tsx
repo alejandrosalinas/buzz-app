@@ -833,6 +833,37 @@ it("shows a neutral glyph in pills and previews when media is refused or fails",
   expect(brokenPreview()?.querySelector("img")).toBeNull();
 });
 
+it("keeps a failed custom reaction's placeholder while its image retries", () => {
+  const h = harness([
+    customReaction(other, "flaky", "https://a.test/flaky.png"),
+  ]);
+  render(<h.Controls />);
+  const slot = glyph(
+    screen.getByRole("button", {
+      name: `:flaky:: ${other.pubkey.slice(0, 10)}`,
+    }),
+  );
+  const image = () => {
+    const found = slot.querySelector("img");
+    if (!found) throw new Error("Custom reaction image missing");
+    return found;
+  };
+  vi.useFakeTimers();
+  try {
+    fireEvent.error(image());
+    showsPlaceholder(slot, ":flaky:");
+    act(() => vi.advanceTimersByTime(2_000));
+    // The retry loads hidden behind the placeholder instead of blanking.
+    expect(slot.querySelector("svg")).not.toBeNull();
+    expect(image().hidden).toBe(true);
+    fireEvent.load(image());
+    expect(slot.querySelector("svg")).toBeNull();
+    expect(image().hidden).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("forwards the contributed picker into true toggles and releases confirmed writes without an echo", async () => {
   const pickerTools = registry<ComposerTool>([
     {

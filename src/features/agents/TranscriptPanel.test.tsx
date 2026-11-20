@@ -448,3 +448,45 @@ it("reads only the latest turns while working, and in full when they don't fit",
   expect(full).toHaveLength(3);
   expect(latest).toHaveLength(3);
 });
+
+it("reads only when work starts and ends without refreshWhileWorking", async () => {
+  const steps = new Set<() => void>();
+  const agents = {
+    subscribeSteps: (_agent: string, listener: () => void) => {
+      steps.add(listener);
+      return () => void steps.delete(listener);
+    },
+  } as unknown as Agents;
+  const { calls, read } = reads();
+  const view = renderHook(
+    ({ working }: { working: boolean }) =>
+      useLiveTranscript({
+        read: read("a") as unknown as (
+          signal: AbortSignal,
+        ) => Promise<Transcript | undefined>,
+        key: "a",
+        again: "",
+        working,
+        refreshWhileWorking: false,
+        agentKey: "agent",
+      }),
+    {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <AgentsContext.Provider value={agents}>
+          {children}
+        </AgentsContext.Provider>
+      ),
+      initialProps: { working: true },
+    },
+  );
+  await settle(nth(calls, 0), "a");
+  expect(steps.size).toBe(0);
+  act(() => vi.advanceTimersByTime(LIVE_READ_MS * 3));
+  expect(calls).toHaveLength(1);
+  view.rerender({ working: false });
+  expect(calls).toHaveLength(2);
+  await settle(nth(calls, 1), "b");
+  expect(view.result.current.shown.transcript).toBe("b");
+  view.rerender({ working: true });
+  expect(calls).toHaveLength(3);
+});

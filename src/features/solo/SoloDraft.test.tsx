@@ -1243,7 +1243,7 @@ it.each([false, true])(
             ],
           }),
         },
-        soloPreferences: {
+        sidebarPreferences: {
           writable: true,
           refresh: async () => {},
           snapshot: () => ({
@@ -1539,7 +1539,7 @@ it("opens and saves local draft settings in a fresh Solo project after a failed 
       .mockRejectedValueOnce(new Error("Settings unavailable"))
       .mockRejectedValueOnce(new Error("Settings unavailable"));
     Object.assign(f.session, {
-      soloPreferences: {
+      sidebarPreferences: {
         writable: true,
         refresh: refreshSolo,
         snapshot: () => ({
@@ -1671,7 +1671,7 @@ async function projectSetup(agents: string[] = []) {
   const saveCanvas = vi.fn(async () => {});
   const assign = vi.fn(async (_id: string, _sectionId?: string) => {});
   Object.assign(f.session, {
-    soloPreferences: {
+    sidebarPreferences: {
       writable: true,
       refresh: async () => {},
       snapshot: () => preferences,
@@ -2051,7 +2051,7 @@ it.each([{ fields: { name: 7 } }, { fields: { name: "x".repeat(121) } }])(
     const refreshAgents = vi.fn(async () => {});
     Object.assign(h.session, {
       channelKit: { refresh: refreshSetup },
-      soloPreferences: {
+      sidebarPreferences: {
         refresh: refreshPreferences,
         snapshot: () => ({
           data: { sections: [{ id: "work", name: "Work" }] },

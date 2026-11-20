@@ -8,7 +8,9 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { SidebarUnread, type UnreadDmPreview } from "./SidebarUnread";
+import { SidebarSection } from "./SidebarSection";
 import { UnreadBadge } from "./UnreadBadge";
 import {
   createRelaySession,
@@ -107,6 +109,41 @@ it.each([
   expect(
     screen.getByRole("button", { name: `1 unread conversation ${edge}` }),
   ).toBeVisible();
+});
+
+it("reveals the heading for an unread chat in a closed Solo workspace", async () => {
+  function Workspace() {
+    const [open, setOpen] = useState(false);
+    return (
+      <SidebarUnread>
+        <SidebarSection
+          sectionKey="group:work"
+          title="Work"
+          open={open}
+          onToggle={setOpen}
+        >
+          <button
+            type="button"
+            data-channel-id="chat"
+            data-solo-destination-id="chat"
+          >
+            Solo chat
+            <span data-channel-unread="" />
+          </button>
+        </SidebarSection>
+      </SidebarUnread>
+    );
+  }
+  render(<Workspace />);
+  const heading = screen.getByLabelText("Work");
+  heading.dataset.top = "340";
+  await measure();
+  fireEvent.click(
+    screen.getByRole("button", { name: "1 unread conversation below" }),
+  );
+  await measure();
+  expect(heading.closest("details")).not.toHaveAttribute("open");
+  expect(heading).toHaveFocus();
 });
 
 it.each([0, 1, 3, 5])(

@@ -1,0 +1,2 @@
+- Address people by the `display_name` their messages carry. When a message has none, look a name up with `users` only when you need to write it. Preserve names exactly; do not infer or expand them.
+- Praise in public; correct in the work, not the person.

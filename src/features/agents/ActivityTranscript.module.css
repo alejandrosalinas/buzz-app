@@ -209,14 +209,6 @@ html[data-keyboard-navigation] .context summary:focus-visible {
   letter-spacing: var(--text-mono--letter-spacing);
   font-weight: var(--text-mono--font-weight);
 }
-/* The code scrolls under the cap, so the copy action stays pinned. The
-   frame's borders sit outside the code, so the whole block stays at 24rem. */
-.markdown pre code {
-  max-height: calc(24rem - 2px);
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
 .diff {
   margin: var(--space-1) 0 0;
 }

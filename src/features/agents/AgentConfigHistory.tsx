@@ -10,6 +10,7 @@ import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import {
   artifactOp,
+  artifactProblem,
   type Expected,
   type SnapshotRead,
 } from "./agent-config-artifacts";
@@ -66,6 +67,7 @@ export function AgentConfigHistory({
   read,
   settings,
   onRevert,
+  revertProblem,
   title = "History",
   onHistoryChange,
   selected,
@@ -84,6 +86,8 @@ export function AgentConfigHistory({
   settings?: SettingsCheck;
   /** Signs and sends the revert; resolves to what the relay said. */
   onRevert(template: ReturnType<typeof revertTemplate>): Promise<RevertOutcome>;
+  /** Why this client cannot publish a revision over the current head. */
+  revertProblem?: string | undefined;
   /** Names the section, as which side of the config it shows. */
   title?: string;
   /** Reports loaded counts without a separate history read. */
@@ -254,6 +258,7 @@ export function AgentConfigHistory({
     head &&
     !current &&
     !deleted &&
+    !revertProblem &&
     !revisionProblem(expected, event, settings);
   return (
     <section className="contents" aria-label={title}>
@@ -318,6 +323,7 @@ export function AgentConfigHistory({
         }
       >
         <div className="grid gap-2">
+          {revertProblem && <p className="text-body-sm">{revertProblem}</p>}
           {event ? (
             deleted ? (
               <p className="m-0 text-body-sm">
@@ -371,6 +377,7 @@ export function AgentConfigVersionRow({
   const operation = artifactOp(event);
   const invalid =
     operation !== "delete" && revisionProblem(expected, event, settings);
+  const incompatible = invalid && settings && !artifactProblem(event, expected);
   const nowSeconds = Date.now() / 1000;
   const timestamp =
     nowSeconds - event.created_at < 7 * 24 * 60 * 60
@@ -402,7 +409,7 @@ export function AgentConfigVersionRow({
                   <span className="sr-only">· Current</span>
                 </>
               )}
-              {invalid ? " · Not valid" : ""}
+              {invalid && !incompatible && " · Not valid"}
             </span>
             {event.id === head?.id && (
               <span
@@ -410,6 +417,9 @@ export function AgentConfigVersionRow({
                 title="Current version"
                 aria-hidden="true"
               />
+            )}
+            {incompatible && (
+              <span className="shrink-0 text-danger">Incompatible</span>
             )}
           </span>{" "}
           <time

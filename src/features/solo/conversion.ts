@@ -2,8 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import type { ChannelDetailsDraft } from "../relay/channel-details-protocol";
 import type { RelaySession } from "../relay/session";
 
-/** In-process orchestration only. Details and Solo preferences own signed writes
- * and durable uncertainty; this receipt never authorizes either operation. */
+/** In-process orchestration. Channel details own the signed write and its recovery. */
 export type ChatConversion = {
   draft: ChannelDetailsDraft;
   converted?: true;

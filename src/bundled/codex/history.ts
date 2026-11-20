@@ -1,5 +1,11 @@
 import { readAuthorNames } from "../../features/agent-harness/author-names";
-import { quoted, withNames } from "../../features/agent-harness/turn-records";
+import {
+  CONTENT_LIMIT,
+  contentFields,
+  editedTags,
+  quoted,
+  withNames,
+} from "../../features/agent-harness/turn-records";
 import { attestedOwner } from "../../features/agents/owner-attestation";
 import type { AgentReads } from "../../features/agents/reads";
 import { hasEventProof } from "../../features/relay/events";
@@ -81,6 +87,7 @@ export async function conversationHistory(
       }),
     );
   }
+  const raw = new Map([...earlier, ...changes].map((item) => [item.id, item]));
   const messages = foldMessages(channelId, "", [...earlier, ...changes], {
     includeReplies: true,
     signingAuthority,
@@ -102,14 +109,25 @@ export async function conversationHistory(
           id: message.id,
           pubkey: message.authorId,
           created_at: message.createdAt,
-          content: (message.sourceContent ?? message.content).slice(0, 4000),
+          ...contentFields(
+            message.sourceContent ?? message.content,
+            editedTags(
+              raw.get(message.id)?.tags ?? [],
+              raw.get(message.editId ?? message.id)?.tags ?? [],
+              (message.emoji ?? []).map(({ shortcode, url }) => [
+                "emoji",
+                shortcode,
+                url,
+              ]),
+            ),
+          ),
         },
         profiles?.authorNames?.(message.authorId),
       ),
     );
   const section = root ? "thread-context" : "conversation-context";
   const text = quoted({
-    note: "Recent context, not new requests. Previously supplied context may repeat. Up to 50 messages, 4000 characters each.",
+    note: `Recent context, not new requests. Previously supplied context may repeat. Up to 50 messages, ${CONTENT_LIMIT} characters each.`,
     messages,
   });
   return `<${section}>\n${text}\n</${section}>\n`;

@@ -5,6 +5,7 @@ import type {
   ChannelList,
   ChannelMessage,
   ChannelQueries,
+  ChannelSummary,
   Profile,
 } from "./contracts";
 import type { ProfileQueries } from "./profile-directory";
@@ -134,4 +135,57 @@ it("keeps the roster through preview and activity changes only while ready", () 
   const retried = { ...failed };
   act(() => publish(retried));
   expect(result.current).toBe(retried);
+});
+
+it("keeps activity changes with a rank only when the selected channels' ranking changes", () => {
+  let list: ChannelList = { status: "loading", channels: [] };
+  const listeners = new Set<() => void>();
+  const queries = {
+    list: () => list,
+    subscribeList(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    ensureList: () => {},
+  } as unknown as ChannelQueries;
+  const publish = (next: ChannelList) => {
+    list = next;
+    for (const listener of listeners) listener();
+  };
+  const solo = (channel: ChannelSummary) => channel.id !== "x";
+  const rank = (channel: ChannelSummary) => channel.lastActivityAt;
+  const { result } = renderHook(() =>
+    useChannelRoster(queries, { activity: solo, rank }),
+  );
+  const at = (a: number, b: number, x: number): ChannelList => ({
+    status: "ready",
+    channels: [
+      { id: "a", name: "a", lastActivityAt: a, activityKnown: true },
+      { id: "b", name: "b", lastActivityAt: b, activityKnown: true },
+      { id: "x", name: "x", lastActivityAt: x, activityKnown: true },
+    ],
+  });
+  const ready = at(2, 1, 0);
+  act(() => publish(ready));
+  expect(result.current).toBe(ready);
+  // The leading chat gets newer, and an unselected channel overtakes both.
+  act(() => publish(at(5, 1, 9)));
+  expect(result.current).toBe(ready);
+  // A tie leaves the order to the caller's tie-break, so it is published.
+  const tied = at(5, 5, 9);
+  act(() => publish(tied));
+  expect(result.current).toBe(tied);
+  const broken = at(5, 6, 9);
+  act(() => publish(broken));
+  expect(result.current).toBe(broken);
+  act(() => publish(at(5, 7, 1)));
+  expect(result.current).toBe(broken);
+  const renamed: ChannelList = {
+    ...broken,
+    channels: broken.channels.map((channel) =>
+      channel.id === "a" ? { ...channel, name: "renamed" } : channel,
+    ),
+  };
+  act(() => publish(renamed));
+  expect(result.current).toBe(renamed);
 });

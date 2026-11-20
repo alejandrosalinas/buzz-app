@@ -30,7 +30,13 @@ function setup(own: boolean, reply = vi.fn()) {
     createShortcutBindings(window),
   );
   cleanups.push(
-    registerAppShortcuts(shortcuts, createAppearance(window), vi.fn(), true),
+    registerAppShortcuts(
+      shortcuts,
+      createAppearance(window),
+      vi.fn(),
+      true,
+      vi.fn(),
+    ),
   );
   const list = document.createElement("section");
   list.innerHTML =
@@ -40,6 +46,7 @@ function setup(own: boolean, reply = vi.fn()) {
   document.body.append(list);
   list.querySelector("button")?.addEventListener("click", reply);
   const controller: MessageList = {
+    scope: `https://relay.test:${"f".repeat(64)}`,
     row: (id) => ({ id }) as ChannelMessage,
     newest: () => "one",
     canEdit: () => false,
@@ -122,6 +129,14 @@ it("reacts to the latest message even while an older one is selected", () => {
 
 it("quotes selected message text with Q only when its composer can take it", () => {
   const { controller } = setup(false);
+  const id = "a".repeat(64);
+  const row = document.querySelector<HTMLElement>("[data-message-id]");
+  if (!row) throw new Error("No message row");
+  row.dataset.messageId = id;
+  vi.spyOn(controller, "row").mockReturnValue({
+    id,
+    channelId: "general",
+  } as ChannelMessage);
   const text = document.querySelector('[data-layout="timeline"]')?.firstChild;
   if (!text) throw new Error("No message text");
   const range = document.createRange();
@@ -131,7 +146,8 @@ it("quotes selected message text with Q only when its composer can take it", () 
   expect(press("q")).toBe(false);
   vi.mocked(controller.canQuote).mockReturnValue(true);
   expect(press("q")).toBe(true);
-  expect(controller.quote).toHaveBeenCalledWith(
+  expect(controller.quote).toHaveBeenCalledExactlyOnceWith(
     '<div data-buzz-copy="timeline">One</div>',
+    [`buzz://message?channel=general&id=${id}`],
   );
 });

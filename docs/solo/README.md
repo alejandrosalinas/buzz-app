@@ -19,65 +19,41 @@ channel visibility and signed membership determine access.
   conversation scope (`features/conversation/Conversation.tsx`), so every view
   of a chat (the main reader or a secondary tab) composes under the same rules.
   Other channels are threaded. Conversion to a channel clears the label.
-- **The label decides the sidebar.** Every Solo chat the viewer is a member of
-  lists under Solo: their own and any shared with them, whether added directly or
-  through an explicit membership grant. A shared chat starts in Chats and the
-  viewer may file it in one of their own workspaces; it never lists under Team.
-  Ordinary channels list under Team. Opening a chat without membership adds
-  nothing to the sidebar.
+- **The label decides chat behavior.** Solo chats appear in Starred, a personal
+  workspace, or the Solo section when unfiled. A workspace can also hold public
+  and private channels, forums, and DMs. Sidebar placement never grants access.
 - **Tags follow company.** Alone with agents, a send must tag one. Once another
-  person is a member, people can talk without a tag; agents still answer only
+  person is a member, people can talk without a tag. Agents still answer only
   when tagged. The composer reads "Message your agents" alone and "Message this
-  conversation" once shared. The sidebar's All / Solo / Team filter lists Solo workspaces and chats above
-  Team's channel sections; it never changes the open conversation. Opening a
-  destination reveals its inventory unless the filter is All; an unlisted
-  conversation waits for the channel list rather than guess. Solo is always on.
-- **Workspaces are the only private state.** The encrypted `groups:me` preference
-  record holds Solo workspaces and which chat is filed in which workspace. It never
-  decides what is Solo.
+  conversation" once shared. Focus shows only Solo chats across the sidebar.
 - **Drafts are a Messages route.** A new Solo chat is
   `{ kind: "solo-draft", project?, agent? }` on the Messages page; nothing exists
   on the relay until the first send. The retired `buzz.me/me`,
   `buzz.sessions/sessions` and channel `new-session` routes no longer exist.
-- **Workspaces** are Solo groups. Repositories, pull requests and issues are a
-  separate destination (`buzz.repos`), not a container of chats.
+- **Workspaces** organize conversations. Repositories, pull requests and issues
+  appear in the Repos destination (`buzz.repos`).
 
 Display names ("Solo", "Team", "chat", "workspace") are presentation; code keys
 behavior on the label, so a rename touches copy only.
 
 ## Current behavior
 
-- Solo workspaces and workspace filing live in the existing encrypted,
-  account/community-scoped `groups:me` preference record. Messages groups remain
-  independent. Records from before the label also list a `channels` placement
-  array; it is ignored and dropped on the next workspace write.
-- Reorder workspaces by dragging their headers, expanded or collapsed, onto
-  another workspace. The landing line and Escape cancellation match Team
-  sections. **Move up** and **Move down** in the workspace menu provide the
-  keyboard and single-pointer path. Chats stays fixed below workspaces.
-  Order saves in the existing `groups:me` array, preserving defaults, filing
-  and collapsed state. Failed saves show the previous order with **Retry move**
-  and **Dismiss**. After a failed refresh, use **Retry workspaces** before
-  retrying the move.
-- **Workspace settings** in the heading’s actions or right-click menu offers
-  **Workspace name**, saved with **Save changes**. It changes the name in that
-  encrypted record, preserving filing and order. Names are trimmed, nonempty
-  and at most 120 characters.
-  Its name draft uses the existing unsaved-edit guard and local settings draft.
-  Name and defaults save separately; if defaults fail after renaming, the error
-  says the name saved and retry does not repeat that confirmed rename.
-- Deleting a workspace tombstones its `me-section-<sha256(id)>` defaults record,
-  emptied and renamed, best effort after the groups write. If that write fails,
-  the record stays live but unreachable. A delete retried after a groups write
-  that landed unconfirmed finds the workspace gone and still writes the
-  tombstone. Saving another workspace's defaults meanwhile is unaffected.
+- Workspaces and filing use the encrypted, account- and community-scoped
+  `channel-workspaces` record. Upgraded clients read the old Solo workspaces and
+  Team channel groups. The first workspace edit saves the merged arrangement.
+- Reorder workspaces and the built-in sections by dragging their headers or
+  choosing **Move up** or **Move down** in the section menu. Order syncs with
+  the workspace arrangement. A failed move restores the previous order and
+  offers retry.
+- Open **Workspace settings** from a workspace heading to edit its name, icon,
+  folders, worktree, Canvas and default agents. Name and defaults save separately.
+  A failed defaults save keeps the draft and reports any name saved earlier.
 - **Label only:** a private channel without `buzz.solo` is an ordinary Team
   channel, whatever its `about` text. No code reads the retired
   `Buzz session (buzz.sessions/v1)` marker, and there is no migration,
   membership revocation or transcript copy for channels created before the
   label.
-- Workspaces are existing Solo workspaces, and Chats are ordinary private channels. New
-  chats use ordinary private channels. The first send creates the chat, moves
+- New chats use ordinary private channels. The first send creates the chat, moves
   the draft into that chat's ordinary composer draft, applies workspace setup
   (Canvas, workspace filing, default agents), then sends through the same
   admission as any Solo send: missing tagged agents are added, then the message
@@ -123,12 +99,11 @@ behavior on the label, so a rename touches copy only.
   caller, including the standalone stdio server: signed by the caller, with the
   label and any `members` it names. The caller is the creator, so an agent's
   key makes a chat its human members see as shared, not their own. It sends no
-  message, so no agent turn starts. Locally hosted agent runs may use
+  message, so no agent turn starts. Only locally hosted agent runs may use
   `solo_workspace_list` for their host-bound owner's personal workspace IDs and
   pass an exact `workspace` to `channel_create` with `solo: true`. Include the
   owner explicitly in `members`; filing never adds members, copies workspace
-  defaults or Canvas, or changes the creator. This capability is unavailable to
-  standalone/external connections, Nexus workers, and plugin agent handles.
+  defaults or Canvas, or changes the creator.
   Creation and filing are not atomic. A known refusal before assignment reports
   the created ID and “created, not filed.” After assignment starts, failure reports
   placement unconfirmed: it may already be durable or pending delivery. Inspect
@@ -167,10 +142,10 @@ behavior on the label, so a rename touches copy only.
   Rename (where editable), Chat settings and Move to, then Share access, Copy link
   and Convert to channel (where eligible), then Archive chat and Delete chat. Opening a row
   menu does not select the row.
-  A chat can also be dragged with a pointer onto another workspace or **Chats**;
+  A chat can also be dragged with a pointer onto another workspace or **Solo**;
   the drop is the same Move to intent, with the same gate, optimistic placement,
   rollback notice and Retry. Like Messages' empty Starred, a hidden empty
-  **Chats** section is not revealed during a drag.
+  **Solo** section is not revealed during a drag.
 - **Archive chat** (⌃⌘A on Apple platforms, Ctrl+Shift+E elsewhere; rebindable in
   Settings → Shortcuts) opens the Chat actions Archive confirmation for the open
   chat, including from the composer, after a fresh permission read; it does
@@ -262,8 +237,8 @@ behavior on the label, so a rename touches copy only.
 - Solo rows share Team's working-agent signal, animated indicator and activity
   popover, including owned-agent typing in threads and unread-thread actions.
   Agent activity opens the agent's profile in the conversation's panel workspace;
-  exact-message/thread actions use the canonical channel reader. Solo workspaces and
-  row menus remain independent of Team's sections.
+  exact-message/thread actions use the canonical channel reader. Chat-specific
+  settings and sharing stay available wherever the chat is filed.
 - A Solo chat uses the Messages conversation page: the same secondary
   conversation/tool/panel tabs, pane geometry and tab persistence as any channel.
   Its main timeline is full width, with no main-pane tabs, so its threads open
@@ -276,31 +251,22 @@ behavior on the label, so a rename touches copy only.
 
 ## Organization, settings and recovery
 
-Solo workspaces, assignments and workspace defaults never fall back to Messages defaults.
+A workspace supplies its own defaults.
 Workspace folders, optional worktree/base branch and Canvas are instructions saved
 in ordinary Canvas Markdown; saving settings does not create a worktree or change
-an agent process. Templates are copied into each new chat, not live-linked.
+an agent process. New chats and channels get a copy of the selected defaults.
 Switching a draft to another workspace reloads its Workspace/Canvas defaults while
 retaining its independent name and lifetime. Moving
 a saved chat only changes its workspace assignment. Saved conversation
 settings retain the existing Canvas revision checks and explicit conflict recovery.
 
-Solo workspaces use one bounded 16 KiB recipe record. Only workspace assignments
-occupy it, so unfiled chats cost nothing; a full record refuses the filing and
-keeps the chat. **Convert to channel** is a
-separate, owner/admin-confirmed action for Solo chats, available from
-Share and the existing menus. Its Private / View only / Public choice starts from
-the chat's current access, with the same descriptions as channel general access.
-It appears in Messages with the same ID, history, Canvas, membership, labels and
-lifetime.
-Conversion is one signed details edit that clears `buzz.solo` (keeping any other
-labels) and applies the chosen visibility and admission policy; the chat moves to
-Team for everyone.
-It then removes the chat's workspace assignment, if any, and opens the channel in
-Messages. Share alone never does this. If unfiling fails, Finish conversion
-retries only that step. The existing preference owner preserves other workspaces
-and assignments. Deleted/archived chats can still hold an assignment. No
-cross-device atomicity, automatic compaction or new storage protocol is claimed.
+Workspace records have a byte limit. An over-limit save reports an error and
+keeps the saved arrangement. **Convert to channel** is an owner- or
+admin-confirmed action, available from Share and the chat menus. Its Private /
+View only / Public choice starts from the chat's current access.
+Conversion clears `buzz.solo` and applies the chosen admission policy in one
+signed details edit. The conversation keeps its ID, history, Canvas, membership,
+other labels, lifetime and workspace. An unfiled chat moves from Solo to Team.
 
 Share attempts retain in-process intent plus durable per-operation Outbox receipts,
 not a persisted composite transaction. Start over forgets settled choices, not
@@ -393,9 +359,8 @@ it. Chosen names are recorded using the existing NIP-CL channel label
 `buzz.session.named`, added on explicitly named creation or an actual saved name
 change. Existing labels are preserved. This requires relay channel-label support;
 unsupported chosen-name writes fail before signing. Automatic-name reset remains
-deferred. Older chats without this label use a short ID in shared cards until
-a name change records the chosen name; the app does not infer provenance from a
-prompt or historical title.
+deferred. The app does not infer chosen-name provenance from a prompt or
+historical title.
 Clearing a saved name silently preserves the last confirmed title without a name
 write or validation error. Other settings can still save.
 The form uses the shared content-sized dialog and its normal footer spacing, with
@@ -411,22 +376,16 @@ is checked without republishing or implicitly saving newer Canvas drafts.
 Synthetic signed create/rename/readback coverage is not live cross-version-client
 acceptance.
 
-Generated sharing messages use `[Chat: <chosen name or short ID>](buzz://channel/<id>)`.
-The chat's current name, including its starting title from the first prompt,
-replaces the ID. Existing signed messages
-and recovery receipts keep their original bytes, including legacy `Session ·` labels;
-retry matching uses the original chat destination rather than regenerating the
-current name. Authorized viewers can see the current chosen name in the card.
+Generated sharing messages use `[<chat title>](buzz://channel/<id>)`. The link
+uses the chat's current name, including an automatic first-prompt title, with a
+short ID as fallback. Existing signed messages and recovery receipts retain their
+original labels and destinations, including legacy `Chat:` and `Session ·` labels.
 
-Links to Solo chats render as document cards outside the message bubble, before
-any caption, with the fixed `Chat:` label, a chat bubble and a trailing chevron when readable.
-Unavailable cards retain a lock. Legacy Session-labelled cards remain supported.
-In the composer, references are staged
-above the caption editor with a remove control and saved in the same draft. Sending
-serializes the references before the caption as ordinary Markdown links. Selected
-mention identities remain bound to caption text; quoted, list, code and hidden
-references stay in their original context. Replies, reactions, copy and actions
-remain owned by the original message. Navigation and access rules are unchanged.
+Links to Solo chats stay inline in the composer and in sent messages. A readable
+chat uses the round chat bubble, and an unavailable destination shows a lock.
+Saved drafts with chat attachments reopen with those links in the editor. Links
+in lists are eligible for the same sharing confirmation as links in paragraphs.
+Sharing changes access only after the owner confirms it.
 
 ## Owners and validation limits
 
@@ -435,7 +394,7 @@ Solo treatment (`SoloHeading`, the shared `ChannelMembersDialog`) and drafts; `S
 `bundled/channels/SoloInventory.tsx` own the Solo half of
 `app/shell/PrimarySidebar.tsx`. Drafting, settings, sharing and conversion live
 in `src/features/solo`; Solo workspaces use
-`src/features/relay/solo-preferences.ts` and the existing recipe capability.
+`src/features/relay/sidebar-preferences*.ts` and the existing recipe capability.
 `src/features/solo/labels.ts` owns the Solo label (`SOLO_LABEL`,
 `soloLabels`, `ownSolo`). Existing channel,
 membership, signing and Outbox owners retain their authority.

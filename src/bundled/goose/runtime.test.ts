@@ -1,3 +1,4 @@
+import { memoryStorage } from "../../features/agents/test-fakes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import {
@@ -78,7 +79,7 @@ function setup(
     hold?: boolean;
     reply?: string;
     thread?: readonly EventData[];
-    scope?: "thread" | "channel";
+    scope?: "thread" | "channel" | "community";
     /** The agent's `core` memory as the host keeps it. */
     core?: string | null;
     /** The channel's Canvas. */
@@ -184,13 +185,16 @@ function setup(
   };
   // A reconnect is a new session to the same community.
   let connected = session;
+  const state = { status: "ready" };
   const relay = {
     snapshot: () => ({
-      status: "ready",
-      session: connected,
+      status: state.status,
+      session: state.status === "ready" ? connected : undefined,
       viewer: alice,
+      origin: "https://goose.example",
       scope: `https://goose.example:${alice}`,
     }),
+    subscribe: () => () => {},
   } as unknown as RelayData;
   const core = vi.fn(async () => options.core);
   const data = new Map<string, string>();
@@ -205,7 +209,7 @@ function setup(
     storage,
     () => options.added ?? [],
     options.repositories,
-    undefined,
+    memoryStorage(),
     options.recommended,
   );
   const published: { kind: number; content: string; tags: string[][] }[] = [];
@@ -214,6 +218,7 @@ function setup(
     pubkey: self,
     name: "Gander",
     owner: alice,
+    relay: "wss://goose.example",
     ...(options.protection && { protection: options.protection }),
     publish: vi.fn(async (template: (typeof published)[number]) => {
       published.push(template);
@@ -250,6 +255,7 @@ function setup(
       prompt: async () => prompt,
     } as unknown as Parameters<GooseRuntime["runOnce"]>[0]);
   return {
+    state,
     agent,
     core,
     deliver,
@@ -262,6 +268,7 @@ function setup(
     readFile,
     runtime,
     spawn,
+    session,
     memoryOpen: session.agentMemories.open,
     reconnect: () => {
       connected = { ...session };
@@ -615,6 +622,7 @@ it("drops a delivery queued while its agent retires, without posting that goose 
     await f.deliver(message("1", "threaded work"));
     await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
     await f.run({ ...pluginWake(), topLevel: true }, {
+      effort: "high",
       agent: { ...f.agent, restoreNotes },
     } as unknown as Partial<Delivery>);
     const retiring = f.runtime.retire(f.agent.key);
@@ -1192,6 +1200,26 @@ describe("GooseRuntime", () => {
     ]);
   });
 
+  it("builds the session's prompt with the owner's base section choices", async () => {
+    const { agent, deliver, goose } = setup();
+    Object.assign(agent, {
+      promptSections: () => ({
+        owner: {
+          etiquette: { mode: "custom", text: "Be brief." },
+          progress: { mode: "off" },
+        },
+      }),
+    });
+    await deliver(message("1", "@Gander hi"));
+    const prompt = () => [...(goose()?.prompts.values() ?? [])].join();
+    await vi.waitFor(() =>
+      expect(prompt()).toContain(
+        '## Etiquette\n<owner-section id="etiquette">\nBe brief.\n</owner-section>',
+      ),
+    );
+    expect(prompt()).not.toContain("## Progress");
+  });
+
   it("starts a session from the host's core memory, reading none from the relay", async () => {
     const { core, deliver, goose, memoryOpen } = setup({
       core: "I am Gander.",
@@ -1292,6 +1320,52 @@ describe("GooseRuntime", () => {
       "session-1",
     ]);
     expect(goose?.configured).toEqual(["session-1 provider=openai"]);
+  });
+
+  it("starts goose at a saved compaction threshold, keeping an open thread's session when it changes", async () => {
+    const { agent, deliver, fake, runtime } = setup();
+    const saved = (compactAt: string) =>
+      runtime.sync([
+        {
+          ...agent,
+          config: { ...DEFAULT_CONFIG, compactAt },
+        } as unknown as Agent,
+      ]);
+    saved("150000");
+    const first = message("1", "@Gander summarize this");
+    await deliver(first);
+    await flush(100);
+    expect(fake.geese[0]?.env.GOOSE_AUTO_COMPACT_TOKEN_LIMIT).toBe("150000");
+    saved("120000");
+    await deliver(
+      message("2", "@Gander and now?", {
+        tags: [
+          ["h", channel],
+          ["e", first.id, "", "reply"],
+          ["p", self],
+        ],
+      }),
+    );
+    await flush(100);
+    // The thread keeps its session, in the goose it opened in.
+    expect(fake.geese).toHaveLength(1);
+    expect(fake.geese[0]?.closed).toEqual([]);
+    expect(fake.geese[0]?.turns.map((turn) => turn.sessionId)).toEqual([
+      "session-1",
+      "session-1",
+    ]);
+    // Another thread's opens in a goose started at the new threshold.
+    await deliver(message("3", "@Gander something else"));
+    await flush(100);
+    expect(fake.geese[1]?.env.GOOSE_AUTO_COMPACT_TOKEN_LIMIT).toBe("120000");
+    expect(fake.geese[1]?.turns).toHaveLength(1);
+    // An invalid saved value leaves goose its own.
+    saved("50");
+    await deliver(message("4", "@Gander one more"));
+    await flush(100);
+    expect(fake.geese[2]?.env).not.toHaveProperty(
+      "GOOSE_AUTO_COMPACT_TOKEN_LIMIT",
+    );
   });
 
   it.each(["", "openai"])(
@@ -1859,6 +1933,56 @@ it("gives the workflow reason for its owner's workflow mention that doesn't name
   expect(f.goose()).toBeUndefined();
 });
 
+it("waits for a workflow mention's community, not for its owner's", async () => {
+  const relay = keypair();
+  const f = setup({ workflowAuthority: relay.pubkey });
+  f.state.status = "connecting";
+  // The owner's own mention settles without waiting for the community.
+  await f.deliver(message("1", "Say hi"));
+  const stop = new AbortController();
+  const workflow = f.deliver(
+    eventDto(
+      signed(relay, {
+        kind: 9,
+        content: "@Agent workflow",
+        tags: [
+          ["h", channel],
+          ["p", self],
+          ["buzz:workflow", "true"],
+          ["buzz:workflow-owner", alice],
+        ],
+      }),
+    ),
+    { signal: stop.signal },
+  );
+  stop.abort();
+  await expect(workflow).rejects.toThrow("Workflow request could not start");
+});
+
+it("ignores a workflow mention whose agent was replaced during the wait", async () => {
+  const relay = keypair();
+  const f = setup({ workflowAuthority: relay.pubkey });
+  const ignored = vi.fn();
+  // The community is ready, so the wait ends at once; the agent is gone by then.
+  await f.deliver(
+    eventDto(
+      signed(relay, {
+        kind: 9,
+        content: "@Agent workflow",
+        tags: [
+          ["h", channel],
+          ["p", self],
+          ["buzz:workflow", "true"],
+          ["buzz:workflow-owner", alice],
+        ],
+      }),
+    ),
+    { ignored, current: () => false },
+  );
+  expect(ignored).toHaveBeenCalledExactlyOnceWith();
+  expect(f.goose()).toBeUndefined();
+});
+
 it("takes a wake with no thread only in a Solo chat", async () => {
   const ignored = vi.fn();
   const stream = setup();
@@ -2280,7 +2404,7 @@ it("delivers a rootless subscription to its channel without publishing its ancho
   expect(JSON.stringify(f.published)).not.toContain(WAKE_ID);
 });
 
-it("keeps a shared session's posting policy until its active turn settles", async () => {
+it("steers a channel session across threaded and top-level requests", async () => {
   const f = setup({ hold: true, scope: "channel" });
   f.agent.query.mockResolvedValue([message("1", "threaded work")]);
   try {
@@ -2298,6 +2422,11 @@ it("keeps a shared session's posting policy until its active turn settles", asyn
       text: "channel work",
     });
     await next;
+    await vi.waitFor(() =>
+      expect(process.turns[0]?.steered).toEqual([
+        expect.stringContaining("channel work"),
+      ]),
+    );
     const reply = await process.mcp(
       process.turns[0]?.sessionId ?? "",
       "tools/call",
@@ -2306,18 +2435,54 @@ it("keeps a shared session's posting policy until its active turn settles", asyn
         arguments: {
           audience: "everyone",
           text: "thread reply",
-          final: true,
           reply: "1".repeat(64),
         },
       },
     );
     expect(reply.result).not.toMatchObject({ isError: true });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const topLevelReply = await process.mcp(
+      process.turns[0]?.sessionId ?? "",
+      "tools/call",
+      {
+        name: "send",
+        arguments: { channel, audience: "everyone", text: "channel reply" },
+      },
+    );
+    expect(topLevelReply.result).not.toMatchObject({ isError: true });
+    expect(
+      f.published.map((post) => [
+        post.content,
+        post.tags.filter(([tag]) => tag === "e"),
+      ]),
+    ).toEqual([
+      ["thread reply", [["e", "1".repeat(64), "", "reply"]]],
+      ["channel reply", []],
+    ]);
     expect(process.turns).toHaveLength(1);
+    process.turns[0]?.finish();
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
+it("finishes a Solo turn under its policy when the chat is shared mid-turn", async () => {
+  const solo = new Set([channel]);
+  const f = setup({ hold: true, scope: "channel", solo });
+  f.agent.query.mockResolvedValue([message("2", "after share")]);
+  try {
+    await f.deliver(message("1", "solo work"));
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const process = f.goose();
+    if (!process) throw new Error("Expected Goose process");
+    solo.delete(channel);
+    await f.deliver(message("2", "after share"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // It waits for the Solo turn rather than steering into it.
     expect(process.turns[0]?.steered).toEqual([]);
+    expect(process.turns).toHaveLength(1);
     process.turns[0]?.finish();
     await vi.waitFor(() => expect(process.turns).toHaveLength(2));
-    expect(process.turns[1]?.text).toContain("channel work");
+    expect(process.turns[1]?.text).toContain("after share");
     process.turns[1]?.finish();
   } finally {
     f.runtime.dispose();
@@ -2332,15 +2497,18 @@ it("session Interrupt discards a channel wake queued behind threaded work", asyn
     await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
     const process = f.goose();
     if (!process) throw new Error("Expected Goose process");
-    await f.run({
-      type: "plugin",
-      plugin: "example",
-      channel,
-      topLevel: true,
-      id: "f".repeat(64),
-      at: 200_000,
-      text: "channel work",
-    });
+    await f.run(
+      {
+        type: "plugin",
+        plugin: "example",
+        channel,
+        topLevel: true,
+        id: "f".repeat(64),
+        at: 200_000,
+        text: "channel work",
+      },
+      { effort: "high" },
+    );
     await f.runtime.session(
       {
         ...f.agent,
@@ -2373,6 +2541,7 @@ it("Interrupt during a queued prompt rebuild restores notes without starting a t
     const process = f.goose();
     if (!process) throw new Error("Expected Goose process");
     await f.run({ ...pluginWake(), topLevel: true }, {
+      effort: "high",
       agent: { ...f.agent, notes, restoreNotes },
       workingUntil,
     } as unknown as Partial<Delivery>);
@@ -2412,6 +2581,37 @@ it("Interrupt during a queued prompt rebuild restores notes without starting a t
   }
 });
 
+it("keeps steering a turn's effort through a follow-up without a pick", async () => {
+  const f = setup({ hold: true, scope: "channel" });
+  try {
+    await f.deliver(message("1", "threaded work"), { effort: "high" });
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const process = f.goose();
+    if (!process) throw new Error("Expected Goose process");
+    const wake = (id: string, text: string) => ({
+      type: "plugin" as const,
+      plugin: "example",
+      channel,
+      topLevel: true as const,
+      id: id.repeat(64),
+      at: 200_000,
+      text,
+    });
+    await f.run(wake("e", "no pick"));
+    await f.run(wake("f", "high again"), { effort: "high" });
+    await vi.waitFor(() =>
+      expect(process.turns[0]?.steered).toEqual([
+        expect.stringContaining("no pick"),
+        expect.stringContaining("high again"),
+      ]),
+    );
+    expect(process.turns).toHaveLength(1);
+    process.turns[0]?.finish();
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
 it("keeps a queued Goose prompt in its admitted scope after settings change", async () => {
   const f = setup({ hold: true, scope: "channel" });
   try {
@@ -2419,7 +2619,7 @@ it("keeps a queued Goose prompt in its admitted scope after settings change", as
     await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
     const process = f.goose();
     if (!process) throw new Error("Expected Goose process");
-    await f.deliver(message("1", "threaded work"));
+    await f.deliver(message("1", "threaded work"), { effort: "high" });
     f.runtime.sync([
       {
         ...f.agent,
@@ -2475,6 +2675,7 @@ it("keeps an accepted policy wait after its handover deadline and reconfiguratio
     await f.run(
       { ...pluginWake(), topLevel: true },
       {
+        effort: "high",
         signal: handover.signal,
         workingUntil,
       },
@@ -2511,6 +2712,7 @@ it("refreshes a queued subscription's instructions when its policy wait ends", a
     await f.deliver(message("1", "threaded work"));
     await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
     await f.run({ ...pluginWake(), topLevel: true, text: instructions }, {
+      effort: "high",
       wakeText: async () => instructions,
     } as unknown as Partial<Delivery>);
     instructions = "Updated Interest instructions";
@@ -2639,3 +2841,1021 @@ it("runs an agent on Recommended on the current candidate", () => {
   expect(running(saved, null)).toEqual(saved);
   expect(running(DEFAULT_CONFIG, candidate)).toEqual(DEFAULT_CONFIG);
 });
+
+it.each([
+  ["mention", false],
+  ["mention", true],
+  ["attention", false],
+  ["plugin", false],
+] as const)(
+  "steers one community session across source channels with %s (scope changed: %s)",
+  async (type, changed) => {
+    const f = setup({
+      hold: true,
+      scope: "community",
+      solo: new Set([channel]),
+      canvas: "SOURCE_CANVAS",
+    });
+
+    const conversationInstructions = vi.fn((source: string, root?: string) =>
+      source === channel && !root
+        ? { plugin: "acme.tasks", text: "SOURCE_ONLY" }
+        : undefined,
+    );
+    Object.assign(f.agent, { conversationInstructions });
+    const listed = f.session.channels.list();
+    const firstChannel = listed.channels[0];
+    if (!firstChannel) throw new Error("Expected the source channel");
+    vi.spyOn(f.session.channels, "list").mockImplementation(() => ({
+      ...listed,
+      status: "ready",
+      channels: [
+        ...listed.channels,
+        { ...firstChannel, id: "other", channelType: "stream" },
+      ],
+    }));
+    try {
+      await f.deliver(message("1", "first"));
+      await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+      const process = f.goose();
+      if (!process) throw new Error("No Goose process");
+      const second = message("2", "second", {
+        tags: [
+          ["h", "other"],
+          ["p", self],
+        ],
+      });
+      if (type === "mention") await f.deliver(second, { channelId: "other" });
+      else
+        await f.run(
+          {
+            ...pluginWake(second.id),
+            ...(type === "attention" ? { type } : { type, plugin: "github" }),
+            channel: "other",
+            text: "second",
+          },
+          { channelId: "other" },
+        );
+      await vi.waitFor(() => expect(process.turns[0]?.steered).toHaveLength(1));
+      if (changed)
+        f.runtime.sync([
+          {
+            ...f.agent,
+            config: {
+              ...DEFAULT_CONFIG,
+              scope: "thread",
+            },
+          } as unknown as Agent,
+        ]);
+      expect(process.turns).toHaveLength(1);
+      const steered = process.turns[0]?.steered[0];
+      expect(steered).toContain("Session scope: community");
+      expect(steered).toContain("other");
+      expect(process.turns[0]?.text).toContain("SOURCE_ONLY");
+      expect(process.turns[0]?.text).toContain("SOURCE_CANVAS");
+      expect(steered).toContain("Disregard any earlier workspace Canvas");
+      expect(steered).toContain("Disregard any earlier <owner-instructions>");
+      expect(conversationInstructions).toHaveBeenCalledWith(channel, undefined);
+      process.turns[0]?.finish();
+    } finally {
+      f.runtime.dispose();
+    }
+  },
+);
+
+it("interrupts an executing community wake when its deadline expires", async () => {
+  const f = setup({ hold: true, scope: "community" });
+  const abort = new AbortController();
+  const done = f.runtime.runOnce({
+    delivery: {
+      agent: f.agent,
+      config: { ...DEFAULT_CONFIG, scope: "community" },
+      current: () => true,
+    },
+    key: "deadline",
+    signal: abort.signal,
+    prompt: async () => "check",
+  } as unknown as Parameters<GooseRuntime["runOnce"]>[0]);
+  void done.catch(() => {});
+  try {
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    abort.abort(new Error("deadline"));
+    await vi.waitFor(() => expect(f.goose()?.cancelled).toHaveLength(1));
+  } finally {
+    f.goose()?.turns[0]?.finish();
+    await done.catch(() => {});
+    f.runtime.dispose();
+  }
+});
+
+it("stops only the queued community request selected by the user", async () => {
+  const f = setup({ hold: true, scope: "community" });
+  const interruptible = vi.fn();
+  const workingUntil = vi.fn<Delivery["workingUntil"]>();
+  const queuedPublish = vi.fn((...args: Parameters<typeof f.agent.publish>) =>
+    f.agent.publish(...args),
+  );
+  try {
+    await f.deliver(message("1", "first"), { workingUntil });
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const worker = f.goose();
+    if (!worker) throw new Error("No Goose process");
+    await f.deliver(message("2", "queued"), {
+      effort: "high",
+      interruptible,
+      workingUntil,
+      agent: {
+        ...f.agent,
+        publish: queuedPublish,
+      } as unknown as Delivery["agent"],
+    });
+    const before = worker.received.filter(
+      (i) => i.method === "session/cancel",
+    ).length;
+    await interruptible.mock.calls[0]?.[0]();
+    expect(
+      worker.received.filter((i) => i.method === "session/cancel"),
+    ).toHaveLength(before);
+    const sessionId = worker.turns[0]?.sessionId;
+    if (!sessionId) throw new Error("missing session");
+    await worker.mcp(sessionId, "tools/call", {
+      name: "send",
+      arguments: { text: "active reply", audience: "everyone" },
+    });
+    expect(queuedPublish).not.toHaveBeenCalled();
+    expect(f.agent.publish).toHaveBeenCalled();
+    worker.turns[0]?.finish();
+    await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+    expect(worker.turns).toHaveLength(1);
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
+it("keeps tool defaults with the running community turn when a follow-up from another channel is dropped", async () => {
+  const f = setup({ hold: true, scope: "community" });
+  const listed = f.session.channels.list();
+  const first = listed.channels[0];
+  if (!first) throw new Error("missing channel");
+  vi.spyOn(f.session.channels, "list").mockReturnValue({
+    ...listed,
+    channels: [...listed.channels, { ...first, id: "other" }],
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let refreshing!: () => void;
+  const started = new Promise<void>((resolve) => {
+    refreshing = resolve;
+  });
+  let builds = 0;
+  const wakeText = async () => {
+    if (++builds === 2) {
+      refreshing();
+      await gate;
+    }
+    return "Attention work";
+  };
+  let live = true;
+  try {
+    await f.deliver(message("1", "first"));
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const worker = f.goose();
+    const sessionId = worker?.turns[0]?.sessionId;
+    if (!worker || !sessionId) throw new Error("No Goose turn");
+    await f.run(
+      { ...pluginWake("a".repeat(64)), channel: "other" },
+      {
+        config: { ...DEFAULT_CONFIG, scope: "community" },
+        channelId: "other",
+        wakeText,
+        current: () => live,
+      },
+    );
+    // The wake is withdrawn while its prompt is built again for delivery.
+    await started;
+    live = false;
+    release();
+    await flush(10);
+    await worker.mcp(sessionId, "tools/call", {
+      name: "send",
+      arguments: { text: "Still here", audience: "everyone" },
+    });
+    expect(
+      f.published.find((event) => event.content === "Still here")?.tags,
+    ).toContainEqual(["h", channel]);
+  } finally {
+    release();
+    f.goose()?.turns[0]?.finish();
+    f.runtime.dispose();
+  }
+});
+
+it("keeps the active Solo Canvas when a speculative community request is stopped", async () => {
+  const f = setup({
+    scope: "community",
+    hold: true,
+    solo: new Set([channel]),
+    canvas: "SOURCE_CANVAS",
+  });
+  const workingUntil = vi.fn<Delivery["workingUntil"]>();
+  const interruptible = vi.fn();
+  const listed = f.session.channels.list();
+  const first = listed.channels[0];
+  if (!first) throw new Error("missing channel");
+  vi.spyOn(f.session.channels, "list").mockReturnValue({
+    ...listed,
+    channels: [
+      ...listed.channels,
+      { ...first, id: "other", channelType: "stream" },
+    ],
+  });
+  try {
+    await f.deliver(message("1", "first"), { workingUntil });
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const worker = f.goose();
+    if (!worker) throw new Error("missing worker");
+    await f.deliver(
+      message("2", "cancelled", {
+        tags: [
+          ["h", "other"],
+          ["p", self],
+        ],
+      }),
+      { channelId: "other", interruptible, workingUntil },
+    );
+    await interruptible.mock.calls[0]?.[0]();
+    worker.turns[0]?.finish();
+    await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+    f.session.canvas.read.mockRejectedValue(new Error("offline"));
+    await f.deliver(message("3", "same Solo"), { workingUntil });
+    await vi.waitFor(() => expect(worker.turns).toHaveLength(2));
+    expect(worker.turns[1]?.text).toContain("SOURCE_CANVAS");
+    worker.turns[1]?.finish();
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
+it("retains a community wake deadline after final publication until native idle", async () => {
+  const f = setup({ hold: true, scope: "community" });
+  f.agent.query.mockResolvedValue([message("1", "origin")]);
+  const abort = new AbortController();
+  const settled = vi.fn();
+  const done = f.runtime
+    .runOnce({
+      delivery: {
+        agent: f.agent,
+        config: { ...DEFAULT_CONFIG, scope: "community" },
+        current: () => true,
+      },
+      key: "deadline",
+      signal: abort.signal,
+      prompt: async () => "check",
+    } as unknown as Parameters<GooseRuntime["runOnce"]>[0])
+    .then(settled);
+  void done.catch(() => {});
+  try {
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const process = f.goose();
+    if (!process) throw new Error("missing process");
+    const reply = await process.mcp(
+      process.turns[0]?.sessionId ?? "",
+      "tools/call",
+      {
+        name: "send",
+        arguments: {
+          channel,
+          reply: "1".repeat(64),
+          text: "Done",
+          audience: "everyone",
+          final: true,
+        },
+        _meta: { "agent-tool-call-request-id": "wake-final" },
+      },
+    );
+    expect(reply.result).not.toMatchObject({ isError: true });
+    await vi.waitFor(() =>
+      expect(f.published.some((event) => event.kind === 9)).toBe(true),
+    );
+    expect(settled).not.toHaveBeenCalled();
+    process.silent.add("session/cancel");
+    abort.abort(new Error("deadline"));
+    await vi.waitFor(() =>
+      expect(
+        process.received.some((wire) => wire.method === "session/cancel"),
+      ).toBe(true),
+    );
+    await done;
+    expect(settled).toHaveBeenCalledWith({ ok: true });
+    const workingUntil = vi.fn<Delivery["workingUntil"]>();
+    await f.deliver(message("2", "after completed wake"), { workingUntil });
+    await flush(10);
+    expect(process.turns).toHaveLength(1);
+    process.turns[0]?.finish();
+    await vi.waitFor(() => expect(process.turns).toHaveLength(2));
+    process.turns[1]?.finish();
+    await Promise.all(workingUntil.mock.calls.map(([work]) => work));
+  } finally {
+    f.goose()?.turns[0]?.finish();
+    await done.catch(() => {});
+    f.runtime.dispose();
+  }
+});
+
+it("retains the Solo Canvas when a stopped admitted source finishes preparation", async () => {
+  const f = setup({
+    scope: "community",
+    solo: new Set([channel, "other"]),
+    canvas: "RETAINED_CANVAS",
+  });
+  const workingUntil = vi.fn<Delivery["workingUntil"]>();
+  const interruptible = vi.fn();
+
+  const listed = f.session.channels.list();
+  const firstChannel = listed.channels[0];
+  if (!firstChannel) throw new Error("missing channel");
+  vi.spyOn(f.session.channels, "list").mockReturnValue({
+    ...listed,
+    channels: [
+      ...listed.channels,
+      { ...firstChannel, id: "other", channelType: "solo" },
+    ],
+  });
+
+  let release!: () => void;
+  try {
+    await f.deliver(message("1", "first"), { workingUntil });
+    await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+    const read = f.session.canvas.read.getMockImplementation();
+    if (!read) throw new Error("Missing Canvas reader");
+    let reads = 0;
+    const started = vi.fn();
+    f.session.canvas.read.mockImplementation((...args) => {
+      if (++reads === 1)
+        return new Promise((resolve) => {
+          started();
+          release = () => resolve(null);
+        });
+      return read(...args);
+    });
+    const pending = f.deliver(
+      message("2", "cancel", {
+        tags: [
+          ["h", "other"],
+          ["p", self],
+        ],
+      }),
+      { channelId: "other", interruptible, workingUntil },
+    );
+    await vi.waitFor(() => expect(started).toHaveBeenCalled());
+    await interruptible.mock.calls[0]?.[0]();
+    release();
+    await pending;
+    await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+    f.session.canvas.read.mockRejectedValue(new Error("offline"));
+    await f.deliver(message("3", "same Solo"), { workingUntil });
+    await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+    expect(f.goose()?.turns.at(-1)?.text).toContain("RETAINED_CANVAS");
+  } finally {
+    release?.();
+    f.runtime.dispose();
+  }
+});
+
+it("keeps addressed community admission ahead of a later wake during compaction", async () => {
+  const f = setup({
+    hold: true,
+    scope: "community",
+    reply: "Compaction complete",
+  });
+  const config = { ...DEFAULT_CONFIG, scope: "community" as const };
+  const agent = { ...f.agent, config } as unknown as Agent;
+  let wake: Promise<unknown> | undefined;
+  try {
+    await f.deliver(message("1", "first"));
+    await vi.waitFor(() => expect(!!f.goose()?.turns.length).toBe(true));
+    const worker = f.goose();
+    if (!worker) throw new Error("missing worker");
+    worker.turns[0]?.finish();
+    await vi.waitFor(() =>
+      expect(f.runtime.sessionState(agent, { channelId: channel })).toBe(
+        "idle",
+      ),
+    );
+    const compacted = f.runtime.session(
+      agent,
+      { channelId: channel },
+      "compact",
+    );
+    await vi.waitFor(() => expect(worker.turns[1]?.text).toBe("/compact"));
+    await f.deliver(message("2", "ADDRESSED_BEFORE_WAKE"));
+    vi.useFakeTimers();
+    wake = f.runtime
+      .runOnce({
+        delivery: {
+          agent: f.agent as unknown as Delivery["agent"],
+          config,
+          current: () => true,
+        },
+        key: "later-wake",
+        signal: new AbortController().signal,
+        prompt: async () => "WAKE_AFTER_ADDRESSED",
+      } as unknown as Parameters<typeof f.runtime.runOnce>[0])
+      .catch((error) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+    worker.turns[1]?.finish();
+    await compacted;
+    await vi.waitFor(() => expect(worker.turns.length).toBe(3));
+    expect(worker.turns[2]?.text).toContain("ADDRESSED_BEFORE_WAKE");
+    worker.turns[2]?.finish();
+    await vi.waitFor(() => expect(worker.turns.length).toBe(4));
+    expect(worker.turns[3]?.text).toContain("WAKE_AFTER_ADDRESSED");
+    worker.turns[3]?.finish();
+    await wake;
+  } finally {
+    vi.useRealTimers();
+    f.runtime.dispose();
+    await wake;
+  }
+});
+
+it("prepares an idle community wake only for handoff and native refresh", async () => {
+  const f = setup({ hold: true, scope: "community" });
+  const wakeText = vi.fn(async () => "CURRENT_INTEREST");
+  try {
+    const workingUntil = vi.fn<Delivery["workingUntil"]>();
+    await f.deliver(message("1", "first"), { workingUntil });
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    f.goose()?.turns[0]?.finish();
+    await workingUntil.mock.calls.at(-1)?.[0];
+    await f.run({ ...pluginWake(), topLevel: true }, {
+      wakeText,
+    } as unknown as Partial<Delivery>);
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(2));
+    expect(f.goose()?.turns[1]?.text).toContain("CURRENT_INTEREST");
+    expect(wakeText).toHaveBeenCalledTimes(2);
+    f.goose()?.turns[1]?.finish();
+  } finally {
+    f.runtime.dispose();
+  }
+});
+
+it("reserves community work before source preparation", async () => {
+  const f = setup({ scope: "community" });
+  const config = { ...DEFAULT_CONFIG, scope: "community" as const };
+  let release!: () => void;
+  let mark!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    mark = resolve;
+  });
+  const original = (
+    f.runtime as unknown as { follow(raw: unknown): Promise<void> }
+  ).follow;
+  let held = false;
+  Object.assign(f.runtime, {
+    follow: async (raw: unknown) => {
+      if (!held) {
+        held = true;
+        mark();
+        await gate;
+      }
+      return original.call(f.runtime, raw);
+    },
+  });
+  let wake: Promise<unknown> | undefined;
+  const turn = f.deliver(message("1", "ADDRESSED_BEFORE_SOURCE_WAKE"));
+  try {
+    await entered;
+    wake = f.runtime.runOnce({
+      delivery: { agent: f.agent, config, current: () => true },
+      key: "source",
+      signal: new AbortController().signal,
+      prompt: async () => "WAKE_AFTER_SOURCE",
+    } as unknown as Parameters<typeof f.runtime.runOnce>[0]);
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+    release();
+    await turn;
+    await wake;
+    await vi.waitFor(() => expect(f.goose()?.turns.length).toBe(2));
+    expect(f.goose()?.turns[0]?.text).toContain("ADDRESSED_BEFORE_SOURCE_WAKE");
+    expect(f.goose()?.turns[1]?.text).toContain("WAKE_AFTER_SOURCE");
+  } finally {
+    vi.useRealTimers();
+    release();
+    f.runtime.dispose();
+    await Promise.allSettled([turn, wake]);
+  }
+});
+
+it("keeps deferred community admission in its captured session scope after settings change", async () => {
+  const f = setup({ scope: "community" });
+  let release!: () => void;
+  let mark!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    mark = resolve;
+  });
+  const runtime = f.runtime as unknown as {
+    turn(...args: unknown[]): Promise<{ key: string }>;
+  };
+  const original = runtime.turn;
+  const keys: string[] = [];
+  let held = false;
+  vi.spyOn(runtime, "turn").mockImplementation(async (...args) => {
+    if (!held) {
+      held = true;
+      mark();
+      await gate;
+    }
+    const result = await original.apply(f.runtime, args);
+    keys.push(result.key);
+    return result;
+  });
+  const first = f.deliver(message("1", "FIRST_SCOPE"));
+  let second: ReturnType<typeof f.deliver> | undefined;
+  try {
+    await entered;
+    second = f.deliver(message("2", "DEFERRED_SCOPE"));
+    await second;
+    f.runtime.sync([
+      {
+        ...f.agent,
+        config: { ...DEFAULT_CONFIG, scope: "thread" },
+      } as unknown as Agent,
+    ]);
+    release();
+    await first;
+    await vi.waitFor(() => expect(keys.length).toBeGreaterThanOrEqual(2));
+    expect(keys.every((key) => key === "@community")).toBe(true);
+  } finally {
+    release();
+    f.runtime.dispose();
+    await Promise.allSettled([first, second]);
+  }
+});
+
+it.each(["community", "thread"] as const)(
+  "uses the admitted %s scope for a standalone wake despite newer settings",
+  async (scope) => {
+    const f = setup();
+    const config = { ...DEFAULT_CONFIG, scope };
+    const newer = {
+      ...DEFAULT_CONFIG,
+      scope: scope === "community" ? "thread" : "community",
+    };
+    (
+      f.runtime as unknown as {
+        entry(agent: unknown, config: unknown): unknown;
+      }
+    ).entry(f.agent.key, newer);
+    try {
+      await expect(
+        f.runtime.runOnce({
+          delivery: { agent: f.agent, config, current: () => true },
+          key: "captured-scope",
+          signal: new AbortController().signal,
+          prompt: async () => "CAPTURED_STANDALONE_SCOPE",
+        } as unknown as Parameters<typeof f.runtime.runOnce>[0]),
+      ).resolves.toMatchObject({ ok: true });
+      const text = f.goose()?.turns[0]?.text ?? "";
+      expect(text.includes("Session scope: community")).toBe(
+        scope === "community",
+      );
+    } finally {
+      f.runtime.dispose();
+    }
+  },
+);
+
+it.each(["mention", "attention", "thread", "channel"] as const)(
+  "keeps active community ownership and unsuccessful queued %s completion after scope sync and Stop",
+  async (kind) => {
+    const f = setup({ hold: true, scope: "community" });
+    const config = { ...DEFAULT_CONFIG, scope: "community" as const };
+    const queuedPublish = vi.fn((...args: Parameters<typeof f.agent.publish>) =>
+      f.agent.publish(...args),
+    );
+    const agent = {
+      ...f.agent,
+      publish: queuedPublish,
+    } as unknown as Delivery["agent"];
+    const held: PromiseLike<unknown>[] = [];
+    const workingUntil: Delivery["workingUntil"] = (done) => held.push(done);
+    const interruptible = vi.fn<NonNullable<Delivery["interruptible"]>>();
+    await f.deliver(message("1", "held first"));
+    await vi.waitFor(() => expect(f.goose()).toBeDefined());
+    const worker = f.goose();
+    if (!worker) throw new Error("Missing active native worker");
+    try {
+      f.runtime.sync([
+        {
+          ...f.agent,
+          config: {
+            ...config,
+            scope: kind === "channel" ? "channel" : "thread",
+          },
+        } as unknown as Agent,
+      ]);
+      await f.runtime.run({
+        trigger:
+          kind !== "attention"
+            ? { type: "mention", event: message("2", "queued second") }
+            : {
+                type: "attention",
+                channel,
+                root: message("2", "").id,
+                id: "f".repeat(64),
+                at: 200_000,
+                text: "queued second",
+              },
+        channelId: channel,
+        signal: new AbortController().signal,
+        config:
+          kind === "thread" || kind === "channel"
+            ? { ...config, scope: kind }
+            : config,
+        agent,
+        interruptible,
+        workingUntil,
+      } as unknown as Delivery);
+      await interruptible.mock.calls[0]?.[0]();
+      await worker.mcp(worker.turns[0]?.sessionId ?? "", "tools/call", {
+        name: "send",
+        arguments: { text: "active owner reply", audience: "everyone" },
+      });
+      expect(queuedPublish).not.toHaveBeenCalled();
+      expect(f.agent.publish).toHaveBeenCalled();
+      worker.turns[0]?.finish();
+      const results = await Promise.all(held);
+      if (kind === "mention" || kind === "attention")
+        expect(results).toContainEqual(expect.objectContaining({ ok: false }));
+      expect(worker.turns).toHaveLength(1);
+    } finally {
+      worker?.turns[0]?.finish();
+      f.runtime.dispose();
+    }
+  },
+);
+
+it.each(["thread", "channel"] as const)(
+  "preserves active community publication ownership when a promptless %s wake starts",
+  async (scope) => {
+    const f = setup({ hold: true, scope: "community" });
+    await f.deliver(message("1", "active community"));
+    await vi.waitFor(() => expect(f.goose()).toBeDefined());
+    const worker = f.goose();
+    if (!worker) throw new Error("Missing active native worker");
+    try {
+      let reached!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const runtime = f.runtime as unknown as {
+        entry(...args: unknown[]): unknown;
+      };
+      const original = runtime.entry.bind(runtime);
+      vi.spyOn(runtime, "entry").mockImplementation((...args) => {
+        const entry = original(...args);
+        reached();
+        return entry;
+      });
+      const prompt = vi.fn(async () => undefined);
+      const wakePublish = vi.fn((...args: Parameters<typeof f.agent.publish>) =>
+        f.agent.publish(...args),
+      );
+      const wake = f.runtime.runOnce({
+        delivery: {
+          agent: { ...f.agent, publish: wakePublish },
+          config: { ...DEFAULT_CONFIG, scope },
+          current: () => true,
+        },
+        key: "independent-wake",
+        signal: new AbortController().signal,
+        prompt,
+      } as unknown as Parameters<typeof f.runtime.runOnce>[0]);
+      await entered;
+      await worker.mcp(worker.turns[0]?.sessionId ?? "", "tools/call", {
+        name: "send",
+        arguments: { text: "active reply", audience: "everyone" },
+      });
+      expect(wakePublish).not.toHaveBeenCalled();
+      expect(f.agent.publish).toHaveBeenCalled();
+      worker.turns[0]?.finish();
+      await expect(wake).resolves.toMatchObject({ ok: true });
+      expect(prompt).toHaveBeenCalledOnce();
+    } finally {
+      worker.turns[0]?.finish();
+      f.runtime.dispose();
+    }
+  },
+);
+
+it.each(["thread", "channel"] as const)(
+  "drains an active %s standalone wake before community ownership changes",
+  async (scope) => {
+    const f = setup({ hold: true });
+    const wake = f.runtime.runOnce({
+      delivery: {
+        agent: f.agent,
+        config: { ...DEFAULT_CONFIG, scope },
+        current: () => true,
+      },
+      key: "old-scope-wake",
+      signal: new AbortController().signal,
+      prompt: async () => "held standalone wake",
+    } as unknown as Parameters<typeof f.runtime.runOnce>[0]);
+    await vi.waitFor(() => expect(f.goose()).toBeDefined());
+    const worker = f.goose();
+    if (!worker) throw new Error("Missing standalone native worker");
+    const queuedPublish = vi.fn((...args: Parameters<typeof f.agent.publish>) =>
+      f.agent.publish(...args),
+    );
+    const config = { ...DEFAULT_CONFIG, scope: "community" as const };
+    try {
+      f.runtime.sync([{ ...f.agent, config } as unknown as Agent]);
+      await f.deliver(message("2", "community second"), {
+        config,
+        agent: {
+          ...f.agent,
+          publish: queuedPublish,
+        } as unknown as Delivery["agent"],
+      });
+      await worker.mcp(worker.turns[0]?.sessionId ?? "", "tools/call", {
+        name: "send",
+        arguments: {
+          text: "standalone owner output",
+          channel,
+          audience: "everyone",
+        },
+      });
+      expect(queuedPublish).not.toHaveBeenCalled();
+      expect(f.agent.publish).toHaveBeenCalled();
+      worker.turns[0]?.finish();
+      await expect(wake).resolves.toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(worker.turns).toHaveLength(2));
+    } finally {
+      for (const turn of worker.turns) turn.finish();
+      f.runtime.dispose();
+      await wake.catch(() => {});
+    }
+  },
+);
+
+it.each(["effort admission", "native prompt rejection", "rejected wake"])(
+  "retains the Solo Canvas after %s",
+  async (failure) => {
+    const f = setup({
+      scope: "community",
+      solo: new Set([channel]),
+      canvas: "RETAINED_CANVAS",
+    });
+    const listed = f.session.channels.list();
+    const first = listed.channels[0];
+    if (!first) throw new Error("missing channel");
+    vi.spyOn(f.session.channels, "list").mockReturnValue({
+      ...listed,
+      channels: [
+        ...listed.channels,
+        { ...first, id: "other", channelType: "stream" },
+      ],
+    });
+    const workingUntil = vi.fn<Delivery["workingUntil"]>();
+    try {
+      await f.deliver(message("1", "first"), { workingUntil });
+      await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+      if (failure !== "effort admission") {
+        const worker = f.fake.geese.find((process) => process.turns.length);
+        if (!worker) throw new Error("missing worker");
+        worker.rejectPrompt = true;
+      }
+      if (failure === "rejected wake") {
+        await expect(
+          f.runtime.runOnce({
+            delivery: {
+              agent: f.agent,
+              config: { ...DEFAULT_CONFIG, scope: "community" },
+              current: () => true,
+            },
+            key: "rejected",
+            signal: new AbortController().signal,
+            prompt: async () => "check",
+          } as unknown as Parameters<GooseRuntime["runOnce"]>[0]),
+        ).resolves.toMatchObject({ ok: false });
+      } else {
+        await f.deliver(
+          message("2", "refused", {
+            tags: [
+              ["h", "other"],
+              ["p", self],
+            ],
+          }),
+          {
+            channelId: "other",
+            ...(failure === "effort admission"
+              ? { synced: { effort: "high" } }
+              : {}),
+            workingUntil,
+          },
+        );
+        await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+      }
+      expect(f.fake.geese.flatMap((p) => p.turns)).toHaveLength(1);
+      f.session.canvas.read.mockRejectedValue(new Error("offline"));
+      await f.deliver(message("3", "back"), { workingUntil });
+      await Promise.all(workingUntil.mock.calls.map(([done]) => done));
+      expect(f.fake.geese.flatMap((p) => p.turns).at(-1)?.text).toContain(
+        "RETAINED_CANVAS",
+      );
+    } finally {
+      f.runtime.dispose();
+    }
+  },
+);
+
+it.each(["updated", "cleared"])(
+  "retains a %s Solo Canvas after stopping its native turn",
+  async (change) => {
+    const f = setup({
+      scope: "community",
+      hold: true,
+      solo: new Set([channel]),
+      canvas: "PREVIOUS_CANVAS",
+    });
+    const config = { ...DEFAULT_CONFIG, scope: "community" as const };
+    const agent = { ...f.agent, config } as unknown as Agent;
+    try {
+      await f.deliver(message("1", "first"));
+      await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+      const worker = f.goose();
+      if (!worker) throw new Error("missing Goose");
+      worker.turns[0]?.finish();
+      const head = await f.session.canvas.read();
+      if (!head) throw new Error("missing Canvas");
+      f.session.canvas.read.mockResolvedValue(
+        change === "cleared"
+          ? null
+          : {
+              ...head,
+              created_at: 2,
+              content: "UPDATED_CANVAS",
+            },
+      );
+      await f.deliver(message("2", "refresh Canvas"));
+      await vi.waitFor(() => expect(worker.turns).toHaveLength(2));
+      await f.runtime.session(agent, { channelId: channel }, "interrupt");
+      expect(worker.cancelled).toHaveLength(1);
+      f.session.canvas.read.mockRejectedValue(new Error("offline"));
+      await f.deliver(message("3", "after Stop"));
+      await vi.waitFor(() => expect(worker.turns).toHaveLength(3));
+      const text = worker.turns[2]?.text;
+      expect(text).not.toContain("PREVIOUS_CANVAS");
+      expect(text).toContain(
+        change === "cleared"
+          ? "Disregard any earlier workspace Canvas"
+          : "UPDATED_CANVAS",
+      );
+      worker.turns[2]?.finish();
+    } finally {
+      f.runtime.dispose();
+    }
+  },
+);
+
+it("reaps an unresponsive Goose community wake after its deadline", async () => {
+  const f = setup({ hold: true, scope: "community" });
+  const config = { ...DEFAULT_CONFIG, scope: "community" as const };
+  const abort = new AbortController();
+  const done = f.runtime.runOnce({
+    delivery: { agent: f.agent, config, current: () => true },
+    key: "stalled",
+    signal: abort.signal,
+    prompt: async () => "check",
+  } as unknown as Parameters<GooseRuntime["runOnce"]>[0]);
+  void done.catch(() => {});
+  try {
+    await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+    const worker = f.goose();
+    if (!worker) throw new Error("missing Goose");
+    worker.silent.add("session/cancel");
+    vi.useFakeTimers();
+    abort.abort(new Error("deadline"));
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect(worker.killed).toBe(true);
+    vi.useRealTimers();
+    await done.catch(() => {});
+    await f.deliver(message("2", "next"));
+    await vi.waitFor(() =>
+      expect(f.fake.geese.flatMap((p) => p.turns)).toHaveLength(2),
+    );
+  } finally {
+    vi.useRealTimers();
+    f.goose()?.turns[0]?.finish();
+    await done.catch(() => {});
+    f.runtime.dispose();
+  }
+});
+
+it.each(["thread", "channel", "community"] as const)(
+  "keeps queued Goose work separate from compaction cancellation (%s)",
+  async (scope) => {
+    const f = setup({ hold: true, scope, reply: "Compaction complete" });
+    const root = message("1", "first");
+    const config = { ...DEFAULT_CONFIG, scope };
+    const agent = { ...f.agent, config } as unknown as Agent;
+    const place = { channelId: channel, root: root.id };
+    const held: PromiseLike<unknown>[] = [];
+    try {
+      await f.deliver(root, { config });
+      await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+      const worker = f.goose();
+      if (!worker) throw new Error("Expected harness process");
+      worker.turns[0]?.finish();
+      await vi.waitFor(() =>
+        expect(f.runtime.sessionState(agent, place)).toBe("idle"),
+      );
+      const compacted = f.runtime
+        .session(agent, place, "compact")
+        .catch((error) => error);
+      await vi.waitFor(() => expect(worker.turns[1]?.text).toBe("/compact"));
+      const reply = message("2", "queued after cancelled compaction", {
+        tags: [
+          ["h", channel],
+          ["e", root.id, "", "reply"],
+        ],
+      });
+      await f.deliver(reply, {
+        config,
+        workingUntil: (done) => held.push(done),
+      });
+      await f.runtime.session(agent, place, "interrupt");
+      worker.turns[1]?.finish();
+      await compacted;
+      await vi.waitFor(() =>
+        expect(worker.turns[2]?.text).toContain(
+          "queued after cancelled compaction",
+        ),
+      );
+      worker.turns[2]?.finish();
+      await Promise.all(held);
+    } finally {
+      f.runtime.dispose();
+    }
+  },
+);
+
+it.each(["thread", "channel"] as const)(
+  "stops only queued Goose work while compaction owns the harness (%s)",
+  async (scope) => {
+    const f = setup({ hold: true, scope, reply: "Compaction complete" });
+    const root = message("1", "first");
+    const config = { ...DEFAULT_CONFIG, scope };
+    const agent = { ...f.agent, config } as unknown as Agent;
+    const place = { channelId: channel, root: root.id };
+    const held: PromiseLike<unknown>[] = [];
+    const interruptible = vi.fn<NonNullable<Delivery["interruptible"]>>();
+    try {
+      await f.deliver(root, { config });
+      await vi.waitFor(() => expect(f.goose()?.turns).toHaveLength(1));
+      const worker = f.goose();
+      if (!worker) throw new Error("Expected harness process");
+      worker.turns[0]?.finish();
+      await vi.waitFor(() =>
+        expect(f.runtime.sessionState(agent, place)).toBe("idle"),
+      );
+      const compacted = f.runtime
+        .session(agent, place, "compact")
+        .catch((error) => error);
+      await vi.waitFor(() => expect(worker.turns[1]?.text).toBe("/compact"));
+      const reply = message("2", "stopped queued input", {
+        tags: [
+          ["h", channel],
+          ["e", root.id, "", "reply"],
+        ],
+      });
+      await f.deliver(reply, {
+        config,
+        interruptible,
+        workingUntil: (done) => held.push(done),
+      });
+      await vi.waitFor(() => expect(interruptible).toHaveBeenCalledOnce());
+      await interruptible.mock.calls[0]?.[0]();
+      expect(worker.cancelled).toHaveLength(0);
+      worker.turns[1]?.finish();
+      expect(await compacted).toBeUndefined();
+      await Promise.all(held);
+      expect(worker.turns).toHaveLength(2);
+    } finally {
+      f.runtime.dispose();
+    }
+  },
+);

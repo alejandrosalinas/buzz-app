@@ -34,7 +34,10 @@
     opacity: 0;
   }
 
-  .member:is(:hover, :focus-within) .memberAction,
+  /* Standalone :focus-within: compounded with :is() or :not(), WebKit
+     restyles the whole document on every focus change. */
+  .member:hover .memberAction,
+  .member:focus-within .memberAction,
   .memberAction:has([aria-expanded="true"]) {
     opacity: 1;
   }
@@ -82,7 +85,8 @@
     pointer-events: none;
   }
 
-  .inviteQr:is(:hover, :focus-within) .qrShare {
+  .inviteQr:hover .qrShare,
+  .inviteQr:focus-within .qrShare {
     opacity: 1;
     pointer-events: auto;
   }

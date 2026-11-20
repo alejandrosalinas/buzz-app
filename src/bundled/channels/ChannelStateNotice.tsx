@@ -1,7 +1,4 @@
 import { useId, type ReactNode } from "react";
-import type { ChannelSummary } from "../../features/relay/contracts";
-import { Button } from "../../shared/design-system/ui/Button";
-import { useLifecycleOffer, type LifecycleSession } from "./useLifecycleOffer";
 import styles from "./ChannelStateNotice.module.css";
 
 /** The pane's one live region for channel state. It stays mounted, so a
@@ -16,9 +13,7 @@ export function ChannelStateRegion({ children }: { children?: ReactNode }) {
   );
 }
 
-/** A lasting state of the open channel, named at the top of its pane, above
- * the history it affects. The lower composer notice says what that state does
- * to writing; this one says what the channel is and what can change it.
+/** A lasting state of the open channel, named above the history it affects.
  * Render it inside `ChannelStateRegion`, which announces it. */
 export function ChannelStateNotice({
   title,
@@ -41,43 +36,5 @@ export function ChannelStateNotice({
       </div>
       {children}
     </section>
-  );
-}
-
-/** Archived channels stay readable; owners and admins can restore them here.
- * The offer comes from live channel state; confirmation rechecks the relay. */
-export function ArchivedChannelNotice({
-  channel,
-  session,
-  unarchive,
-}: {
-  channel: ChannelSummary;
-  session: LifecycleSession;
-  unarchive(trigger: HTMLElement): void;
-}) {
-  const offer = useLifecycleOffer(session, channel);
-  // A preview reader never had it in their sidebar. Cached membership and
-  // guests are members, so readOnly alone does not mean a preview.
-  const preview =
-    channel.readOnly && !channel.cached && channel.viewerRole !== "guest";
-  return (
-    <ChannelStateNotice
-      title="Archived · view only"
-      detail={
-        preview
-          ? undefined
-          : "It’s hidden from the sidebar until it’s unarchived."
-      }
-    >
-      {offer?.canUnarchive && session.channelLifecycle.available && (
-        <Button
-          type="button"
-          size="sm"
-          onClick={(event) => unarchive(event.currentTarget)}
-        >
-          Unarchive
-        </Button>
-      )}
-    </ChannelStateNotice>
   );
 }

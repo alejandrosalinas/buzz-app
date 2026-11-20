@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { activityPresentation } from "./activity-presentation";
-import { activityRuns } from "./activity-groups";
+import { activityRuns, relayedRuns } from "./activity-groups";
 import type { ChannelMessage } from "../relay/contracts";
 
 const activity = (
@@ -465,3 +465,52 @@ it.each(["working", "waiting", "error"] as const)(
       expect(projection.byRow.get(step.id)?.ownsLive).toBe(true);
   },
 );
+
+it("folds two or more consecutive verified relayed messages in one conversation and day", () => {
+  const relayed = (
+    id: string,
+    patch: Partial<ChannelMessage> = {},
+  ): ChannelMessage =>
+    publicMessage(id, {
+      authorId: "owner",
+      relayedFrom: { agent: "zerk", verified: true },
+      ...patch,
+    });
+  const ids = (rows: ChannelMessage[]) =>
+    relayedRuns(rows).map((run) => run.ids);
+  expect(ids([relayed("a"), relayed("b"), relayed("c")])).toEqual([
+    ["a", "b", "c"],
+  ]);
+  // One relayed message stays its own line.
+  expect(ids([relayed("a")])).toEqual([]);
+  // Any other row breaks the run, as do unverified claims and agent-only rows.
+  for (const breaker of [
+    publicMessage("x"),
+    activity("x"),
+    relayed("x", { relayedFrom: { agent: "zerk", verified: false } }),
+    { ...relayed("x"), audience: "agents" as const },
+    relayed("x", { replyCount: 2 }),
+  ])
+    expect(
+      ids([relayed("a"), relayed("b"), breaker, relayed("c"), relayed("d")]),
+    ).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+    ]);
+  expect(ids([relayed("a"), relayed("b", { threadRootId: "root" })])).toEqual(
+    [],
+  );
+  // The first unread message starts its own run.
+  expect(
+    relayedRuns(
+      [relayed("a"), relayed("b"), relayed("c"), relayed("d")],
+      "c",
+    ).map((run) => run.ids),
+  ).toEqual([
+    ["a", "b"],
+    ["c", "d"],
+  ]);
+  expect(
+    ids([relayed("a"), relayed("b", { createdAt: 100 + 2 * 24 * 60 * 60 })]),
+  ).toEqual([]);
+});

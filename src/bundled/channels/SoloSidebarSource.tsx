@@ -1,4 +1,5 @@
 import { useContext } from "react";
+import { useSoloNavigation } from "../../features/channel-navigation/solo-navigation-react";
 import {
   MessagesSidebarEnvironment,
   type MessagesSidebarState,
@@ -8,6 +9,19 @@ import { SoloInventory } from "./SoloInventory";
 import { SoloRegions } from "./SoloRegions";
 
 function SoloSidebarContents(props: MessagesSidebarState) {
+  const { regions } = useSoloNavigation(props.session);
+  if (!regions.length) return null;
+  if (!props.workspaceComposition.sections.size)
+    return (
+      <SoloRegions
+        session={props.session}
+        scope={props.scope}
+        navigator={props.navigator}
+        target={props.target}
+        sidebar={props.sidebar}
+        pendingClick={props.workspaceComposition.pendingChatClick}
+      />
+    );
   return (
     <SoloInventory
       session={props.session}
@@ -17,33 +31,16 @@ function SoloSidebarContents(props: MessagesSidebarState) {
       chatIcons={props.chatIcons}
       chatMenus={props.chatMenus}
       sidebarRows={props.sidebarRows}
-      renderContents={(ordinary, header, pendingClick, composeOrdinary) => (
+      workspaceComposition={props.workspaceComposition}
+      renderContents={(_ordinary, _header, pendingClick, composeOrdinary) => (
         <SoloRegions
           session={props.session}
           scope={props.scope}
           navigator={props.navigator}
           target={props.target}
           sidebar={props.sidebar}
-          ordinary={ordinary}
           composeOrdinary={composeOrdinary}
           pendingClick={pendingClick}
-          groupDisclosure={
-            props.filter === "all"
-              ? {
-                  sectionKey: "scope:solo",
-                  title: props.soloTitle,
-                  open: !props.sidebar.collapsed.includes("scope:solo"),
-                  onToggle: (open) => props.sidebar.toggle("scope:solo", open),
-                }
-              : undefined
-          }
-          hidePrimaryHeading={props.filter === "solo"}
-          fallback={
-            <>
-              {header}
-              {ordinary}
-            </>
-          }
         />
       )}
     />
@@ -60,7 +57,7 @@ export const soloSidebarSource: SidebarSectionSource = {
       throw new Error("Solo navigation requires its Messages context");
     return render([
       {
-        id: "solo",
+        id: "solo-regions",
         defaultPosition: 0,
         element: <SoloSidebarContents {...environment} />,
       },

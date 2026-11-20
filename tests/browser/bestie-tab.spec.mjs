@@ -18,6 +18,10 @@ for (const [variant, query] of [
     await expect(
       page.getByText("Private channels", { exact: false }).first(),
     ).toBeVisible();
+    // The Cost row has read the week before its width is measured.
+    await expect(
+      page.getByRole("button", { name: "Open Usage" }),
+    ).toBeVisible();
     for (const width of ["28rem", "20rem"]) {
       for (const fontSize of ["16px", "20px"]) {
         await page.evaluate(

@@ -224,22 +224,53 @@ pub(crate) async fn byte_admission(
 // App-wide, conservative deletion exclusion: any plugin's host.readFile call or
 // process named read/read-protected blocks every plugin's managed deletion.
 // Leases outlive async waiters until the actual blocking/process work completes.
-static FILE_READS: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
-pub(crate) struct FileReadLease;
+static FILE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const READ_EXCLUSIVE: usize = usize::MAX;
+pub(crate) struct FileReadLease(());
 impl FileReadLease {
     pub(crate) fn new() -> Result<Self, String> {
-        let mut reads = FILE_READS
-            .lock()
-            .map_err(|_| "File read admission unavailable")?;
-        *reads = reads.checked_add(1).ok_or("Too many file reads")?;
-        Ok(Self)
+        FILE_READS
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |reads| (reads < READ_EXCLUSIVE - 1).then(|| reads + 1),
+            )
+            .map_err(|reads| {
+                if reads == READ_EXCLUSIVE {
+                    "File reads are busy; try again later"
+                } else {
+                    "Too many file reads"
+                }
+            })?;
+        Ok(Self(()))
     }
 }
 impl Drop for FileReadLease {
     fn drop(&mut self) {
-        if let Ok(mut reads) = FILE_READS.lock() {
-            *reads -= 1;
-        }
+        FILE_READS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+// A single nonblocking transition excludes new readers only when no real work
+// holds a lease. Pinned rustc E0277 confirms std::sync::RwLockReadGuard is !Send;
+// these leases must move into actual blocking-read/process-monitor work and outlive
+// timed-out waiters. No mutex in async admission.
+struct FileReadExclusion(());
+impl FileReadExclusion {
+    fn new() -> Result<Self, String> {
+        FILE_READS
+            .compare_exchange(
+                0,
+                READ_EXCLUSIVE,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .map_err(|_| "Managed file is in use by a file read")?;
+        Ok(Self(()))
+    }
+}
+impl Drop for FileReadExclusion {
+    fn drop(&mut self) {
+        FILE_READS.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 }
 const MAX_SAVE_BYTES: usize = 16 * 1024 * 1024;
@@ -256,6 +287,8 @@ pub(crate) struct SavedBytes {
     size: usize,
     sha256: String,
     expires_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_after_send: Option<bool>,
 }
 
 fn managed_granted(
@@ -291,29 +324,383 @@ pub(crate) async fn plugin_host_save_bytes<R: tauri::Runtime>(
 ) -> Result<SavedBytes, String> {
     use tauri::Manager as _;
     let deadline = std::time::Instant::now() + SAVE_WINDOW;
-    // Refuse JSON fallback before any body clone or filesystem operation.
     let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
         return Err("Managed save body must be raw bytes; outcome may be unknown".into());
     };
     let id = save_header(&request, "x-buzz-plugin-id", 256)?;
     let revision = save_header(&request, "x-buzz-plugin-revision", 128)?;
     let hash = save_header(&request, "x-buzz-sha256", 64)?;
+    let release = match request.headers().get("x-buzz-release-after-send") {
+        None => false,
+        Some(value) if value.as_bytes() == b"1" => true,
+        _ => return Err("Invalid managed save release flag".into()),
+    };
     validate_save(body, &hash)?;
-    let place = byte_admission(tokio::time::Instant::from_std(deadline)).await?;
-    let manager = manager.0.clone()?;
+    let registry = app.state::<ManagedFiles>().inner().clone();
+    let identity = release.then(|| app.state::<crate::identity::IdentityHost>().inner().clone());
     let root = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("plugin-artifacts");
-    let bytes = body.clone();
-    let writer = managed_writer(place, move || {
-        save_managed(&root, &bytes, &hash, deadline, &manager, &id, &revision)
-    });
-    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), writer)
+    // The outer future owns this guard before its first await. Renderer disposal
+    // is not a native cancellation signal; timeout/drop here is.
+    let eligibility = SaveEligibility::default();
+    let operation = async {
+        let owner = match identity.as_ref() {
+            Some(identity) => Some(identity.viewer().await?),
+            None => None,
+        };
+        #[cfg(test)]
+        if let Some(entered) = registry.1.lock().unwrap().captured.take() {
+            let _ = entered.send(());
+        }
+        let place = byte_admission(tokio::time::Instant::from_std(deadline)).await?;
+        let manager = manager.0.clone()?;
+        let bytes = body.clone();
+        let consent = identity.zip(owner).map(|(identity, owner)| SaveConsent {
+            identity,
+            owner,
+            registry: registry.clone(),
+            eligibility: eligibility.0.clone(),
+        });
+        managed_writer(place, move || {
+            save_managed(ManagedSave {
+                root: &root,
+                bytes: &bytes,
+                hash: &hash,
+                deadline,
+                manager: &manager,
+                id: &id,
+                revision: &revision,
+                registry: Some(&registry),
+                consent: consent.as_ref(),
+            })
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), operation)
         .await
         .map_err(|_| "Managed save timed out; outcome unknown")?
-        .map_err(|e| e.to_string())?
+}
+
+// Command-owned cancellation races atomically with the short identity/map commit.
+// Neither a lost reply nor JS-local retirement is evidence this guard was dropped.
+#[derive(Default)]
+struct SaveEligibility(std::sync::Arc<std::sync::atomic::AtomicU8>);
+impl Drop for SaveEligibility {
+    fn drop(&mut self) {
+        let _ = self.0.compare_exchange(
+            0,
+            2,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+}
+struct SaveConsent {
+    identity: crate::identity::IdentityHost,
+    owner: String,
+    registry: ManagedFiles,
+    eligibility: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+
+// One actual app owns one root and at most ROOT_FILES compact process-local records.
+// Never adopt a filename after restart. No bytes, sidecars, timers or public release command.
+#[derive(Clone, Default)]
+pub(crate) struct ManagedFiles(
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, Consent>>>,
+    #[cfg(test)] std::sync::Arc<std::sync::Mutex<ManagedGates>>,
+);
+#[cfg(test)]
+#[derive(Default)]
+struct ManagedGates {
+    released: Option<tokio::sync::oneshot::Sender<()>>,
+    captured: Option<tokio::sync::oneshot::Sender<()>>,
+    save: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+    hash: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+}
+#[cfg(test)]
+fn gated_work(
+    gate: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+) {
+    if let Some((entered, release)) = gate {
+        let _ = entered.send(());
+        release
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("managed work barrier watchdog");
+    }
+}
+#[derive(Clone)]
+struct Consent {
+    root: PathBuf,
+    saver: String,
+    owner: String,
+    hash: String,
+    size: u64,
+    identity: Option<(u64, u64)>,
+}
+fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+impl ManagedFiles {
+    // Only called inside admitted work with the root lock held. No map -> root/identity order.
+    fn removed(&self, path: &Path) {
+        if let Ok(mut records) = self.0.try_lock() {
+            records.remove(path);
+        }
+    }
+    fn prune(&self, root: &Path) -> Result<(), String> {
+        let stale: Vec<_> = {
+            let records = self.0.try_lock().map_err(|_| "Managed consent is busy")?;
+            records
+                .keys()
+                .filter(|path| path.parent() == Some(root))
+                .cloned()
+                .collect()
+        };
+        // Filesystem I/O never holds the map mutex.
+        for path in stale {
+            if std::fs::symlink_metadata(&path)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                self.removed(&path);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ManagedAttachment {
+    path: String,
+    sha256: String,
+    size: u64,
+    url: String,
+}
+fn confirmed_candidates(
+    signed: &serde_json::Value,
+    hints: Option<serde_json::Value>,
+) -> Vec<ManagedAttachment> {
+    if signed.get("kind").and_then(serde_json::Value::as_u64) != Some(9) {
+        return vec![];
+    }
+    let Some(serde_json::Value::Array(hints)) = hints else {
+        return vec![];
+    };
+    if hints.len() > ROOT_FILES {
+        return vec![];
+    }
+    let Some(tags) = signed.get("tags").and_then(serde_json::Value::as_array) else {
+        return vec![];
+    };
+    let mut candidates: Vec<Option<ManagedAttachment>> = vec![];
+    let mut paths = std::collections::HashMap::new();
+    for hint in hints {
+        let Ok(candidate) = serde_json::from_value::<ManagedAttachment>(hint) else {
+            return vec![];
+        };
+        if candidate.path.is_empty()
+            || candidate.path.len() > 4096
+            || candidate.path.contains('\0')
+            || candidate.url.is_empty()
+            || candidate.url.len() > 8192
+            || candidate.size == 0
+            || candidate.size > MAX_SAVE_BYTES as u64
+            || validate_save(&[1], &candidate.sha256).is_err()
+        {
+            return vec![];
+        }
+        let matches = tags.iter().any(|tag| {
+            let Some(tag) = tag.as_array() else {
+                return false;
+            };
+            tag.first().and_then(serde_json::Value::as_str) == Some("imeta")
+                && [
+                    format!("url {}", candidate.url),
+                    format!("x {}", candidate.sha256),
+                    format!("size {}", candidate.size),
+                ]
+                .iter()
+                .all(|field| tag.iter().any(|value| value.as_str() == Some(field)))
+        });
+        if let Some(&index) = paths.get(&candidate.path) {
+            let previous: &mut Option<ManagedAttachment> = &mut candidates[index];
+            if !matches
+                || previous.as_ref().is_none_or(|previous| {
+                    previous.sha256 != candidate.sha256 || previous.size != candidate.size
+                })
+            {
+                *previous = None;
+            }
+        } else {
+            paths.insert(candidate.path.clone(), candidates.len());
+            candidates.push(matches.then_some(candidate));
+        }
+    }
+    candidates.into_iter().flatten().collect()
+}
+
+/// Called only after the full evidence-wrapped exact-ID post has succeeded.
+/// Invalid hints and every cleanup failure preserve that original send success.
+pub(crate) fn release_after_send(
+    registry: ManagedFiles,
+    root: PathBuf,
+    owner: String,
+    signed: serde_json::Value,
+    hints: Option<serde_json::Value>,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    // Capture before detaching: scheduling never grants a fresh 30-second budget.
+    let deadline = tokio::time::Instant::now() + SAVE_WINDOW;
+    async move {
+        let candidates = confirmed_candidates(&signed, hints);
+        if candidates.is_empty() {
+            return;
+        }
+        let budget = SaveEligibility::default();
+        let active = budget.0.clone();
+        #[cfg(test)]
+        let completion = registry.clone();
+        let _ = delete_with_admission(deadline, move || {
+            release_batch(
+                &registry,
+                &root,
+                &owner,
+                &candidates,
+                deadline.into_std(),
+                &active,
+            )
+        })
+        .await;
+        #[cfg(test)]
+        {
+            let released = completion.1.lock().unwrap().released.take();
+            if let Some(released) = released {
+                let _ = released.send(());
+            }
+        }
+    }
+}
+
+fn release_batch(
+    registry: &ManagedFiles,
+    root: &Path,
+    owner: &str,
+    candidates: &[ManagedAttachment],
+    deadline: std::time::Instant,
+    active: &std::sync::atomic::AtomicU8,
+) -> Result<(), String> {
+    use sha2::{Digest as _, Sha256};
+    let _lock = managed_lock(root)?;
+    let _reads = FileReadExclusion::new()?;
+    for candidate in candidates {
+        if std::time::Instant::now() >= deadline
+            || active.load(std::sync::atomic::Ordering::SeqCst) != 0
+        {
+            break;
+        }
+        // One refusal never authorizes another path or prevents later safe candidates.
+        let _ = (|| -> Result<(), String> {
+            let path = Path::new(&candidate.path);
+            if path.parent() != Some(root)
+                || path
+                    .file_name()
+                    .is_none_or(|name| root.join(name).as_os_str() != path.as_os_str())
+            {
+                return Err("Invalid managed attachment path".into());
+            }
+            let record = registry
+                .0
+                .try_lock()
+                .map_err(|_| "Managed consent is busy")?
+                .get(path)
+                .cloned();
+            let Some(record) = record else {
+                return Ok(());
+            };
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("Invalid managed attachment name")?;
+            if record.root != root
+                || record.owner != owner
+                || record.hash != candidate.sha256
+                || record.size != candidate.size
+                || artifact_expiry(name).is_none()
+                || !name.ends_with(&format!("-{}", managed_owner(&record.saver)))
+            {
+                return Err("Managed attachment consent mismatch".into());
+            }
+            let metadata = private_metadata(path, false)?;
+            let mut file = private_options().open(path).map_err(|e| e.to_string())?;
+            let opened = file.metadata().map_err(|e| e.to_string())?;
+            if record.identity.is_none()
+                || record.identity != file_identity(&metadata)
+                || record.identity != file_identity(&opened)
+                || opened.len() != record.size
+            {
+                return Err("Managed attachment changed".into());
+            }
+            #[cfg(test)]
+            {
+                let gate = registry.1.lock().unwrap().hash.take();
+                gated_work(gate);
+            }
+            let mut hash = Sha256::new();
+            let mut buffer = [0; 64 * 1024];
+            let mut size = 0u64;
+            loop {
+                let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                size += count as u64;
+                if size > record.size {
+                    return Err("Managed attachment grew".into());
+                }
+                hash.update(&buffer[..count]);
+            }
+            if size != record.size || format!("{:x}", hash.finalize()) != record.hash {
+                return Err("Managed attachment content changed".into());
+            }
+            // Keep the descriptor, root and reader exclusion through final identity/unlink.
+            let final_metadata = private_metadata(path, false)?;
+            let final_opened = file.metadata().map_err(|e| e.to_string())?;
+            if file_identity(&final_metadata) != record.identity
+                || file_identity(&final_opened) != record.identity
+                || final_metadata.len() != size
+                || final_opened.len() != size
+            {
+                return Err("Managed attachment changed".into());
+            }
+            // This is already-dispatched work. Timeout may have answered the sender,
+            // but the writer retains all admission until actual completion.
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            registry.removed(path);
+            Ok(())
+        })();
+    }
+    Ok(())
 }
 
 /// The writer owns admission until actual completion, not merely until await ends.
@@ -479,6 +866,7 @@ fn delete_managed(
     manager: &buzzodz_plugins::Manager,
     id: &str,
     revision: &str,
+    registry: Option<&ManagedFiles>,
 ) -> Result<(), String> {
     managed_granted(manager, id, revision)?;
     let path = Path::new(path);
@@ -493,15 +881,14 @@ fn delete_managed(
         return Err("Managed file is not owned by this plugin".into());
     }
     let _lock = managed_lock(root)?;
-    let reads = FILE_READS
-        .try_lock()
-        .map_err(|_| "Managed file is in use by a file read")?;
-    if *reads != 0 {
-        return Err("Managed file is in use by a file read".into());
-    }
+    let _reads = FileReadExclusion::new()?;
     private_metadata(path, false)?;
     managed_granted(manager, id, revision)?;
-    std::fs::remove_file(path).map_err(|e| e.to_string())
+    std::fs::remove_file(path).map_err(|e| e.to_string())?;
+    if let Some(registry) = registry {
+        registry.removed(path);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -520,8 +907,9 @@ pub(crate) async fn plugin_host_delete_managed_file<R: tauri::Runtime>(
         .map_err(|e| e.to_string())?
         .join("plugin-artifacts");
     let manager = manager.0.clone()?;
+    let registry = app.state::<ManagedFiles>().inner().clone();
     delete_with_admission(deadline, move || {
-        delete_managed(&root, &path, &manager, &id, &revision)
+        delete_managed(&root, &path, &manager, &id, &revision, Some(&registry))
     })
     .await
 }
@@ -583,26 +971,10 @@ fn managed_capacity(root: &Path, now: u64, incoming: usize) -> Result<(), String
     Ok(())
 }
 
-fn save_managed(
-    root: &Path,
-    bytes: &[u8],
-    hash: &str,
-    deadline: std::time::Instant,
-    manager: &buzzodz_plugins::Manager,
-    id: &str,
-    revision: &str,
-) -> Result<SavedBytes, String> {
+fn save_managed(input: ManagedSave<'_>) -> Result<SavedBytes, String> {
     use std::io::Write as _;
     save_managed_with_io(
-        ManagedSave {
-            root,
-            bytes,
-            hash,
-            deadline,
-            manager,
-            id,
-            revision,
-        },
+        input,
         |file, bytes| file.write_all(bytes),
         std::fs::File::sync_all,
         |root| {
@@ -623,6 +995,8 @@ struct ManagedSave<'a> {
     manager: &'a buzzodz_plugins::Manager,
     id: &'a str,
     revision: &'a str,
+    registry: Option<&'a ManagedFiles>,
+    consent: Option<&'a SaveConsent>,
 }
 
 // Keep OS operations private and local; admission, result and cleanup stay in one sequence.
@@ -641,6 +1015,8 @@ fn save_managed_with_io(
         manager,
         id,
         revision,
+        registry,
+        consent,
     } = input;
     validate_save(bytes, hash)?;
     managed_granted(manager, id, revision)?;
@@ -650,7 +1026,11 @@ fn save_managed_with_io(
         .checked_add(RETENTION_MS)
         .filter(|n| *n <= 9_007_199_254_740_991)
         .ok_or("Invalid managed file expiry")?;
-    managed_capacity(root, now, bytes.len())?;
+    let capacity = managed_capacity(root, now, bytes.len());
+    if let Some(registry) = registry {
+        registry.prune(root)?;
+    }
+    capacity?;
     let path = root.join(format!(
         "{expiry}-{}-{}",
         uuid::Uuid::new_v4(),
@@ -679,11 +1059,57 @@ fn save_managed_with_io(
         if std::time::Instant::now() >= deadline {
             return Err("Managed save expired".into());
         }
+        #[cfg(test)]
+        if let Some(registry) = registry {
+            let gate = registry.1.lock().unwrap().save.take();
+            gated_work(gate);
+        }
+        if let Some(consent) = consent {
+            let metadata = private_metadata(&path, false)?;
+            let opened = file.metadata().map_err(|e| e.to_string())?;
+            if file_identity(&metadata) != file_identity(&opened)
+                || metadata.len() != bytes.len() as u64
+            {
+                return Err("Managed file changed before consent".into());
+            }
+            let record = Consent {
+                root: root.to_owned(),
+                saver: id.into(),
+                owner: consent.owner.clone(),
+                hash: hash.into(),
+                size: bytes.len() as u64,
+                identity: file_identity(&opened),
+            };
+            consent
+                .identity
+                .try_commit_managed_consent(&consent.owner, || {
+                    let mut records = consent
+                        .registry
+                        .0
+                        .try_lock()
+                        .map_err(|_| "Managed consent is busy")?;
+                    if records.len() >= ROOT_FILES || std::time::Instant::now() >= deadline {
+                        return Err("Managed consent expired or full".into());
+                    }
+                    consent
+                        .eligibility
+                        .compare_exchange(
+                            0,
+                            1,
+                            std::sync::atomic::Ordering::SeqCst,
+                            std::sync::atomic::Ordering::SeqCst,
+                        )
+                        .map_err(|_| "Managed save cancelled")?;
+                    records.insert(path.clone(), record);
+                    Ok(())
+                })?;
+        }
         Ok(SavedBytes {
             path: path_text,
             size: bytes.len(),
             sha256: hash.into(),
             expires_at: expiry,
+            release_after_send: consent.map(|_| true),
         })
     })();
     drop(file);

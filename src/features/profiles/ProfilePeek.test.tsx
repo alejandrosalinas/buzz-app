@@ -17,6 +17,7 @@ import { createAgentLibrary } from "../agents/library";
 import { localAgentsFixture } from "../agents/local-testing";
 import { createRelaySession, type RelaySession } from "../relay/session";
 import { PREVIEW_REST_MS } from "../../shared/design-system/ui/hoverIntent";
+import { newMessageLink } from "../direct-messages/message-person";
 import { ProfilePeek } from "./ProfilePeek";
 
 beforeEach(() => {
@@ -39,8 +40,14 @@ afterEach(() => {
 });
 const person = "a".repeat(64);
 const viewer = "b".repeat(64);
-function fixture(agent = false, agentChoices?: RelaySession["agentChoices"]) {
+/** Without `dm`, the viewer has no DM with the person yet. */
+function fixture(
+  agent = false,
+  agentChoices?: RelaySession["agentChoices"],
+  dm = true,
+) {
   const owner = createRelaySession(null);
+  const list = owner.session.channels.list();
   const open =
     vi.fn<(keys: readonly string[], signal: AbortSignal) => Promise<string>>();
   const onOpen = vi.fn(() => true);
@@ -48,6 +55,22 @@ function fixture(agent = false, agentChoices?: RelaySession["agentChoices"]) {
     ...owner.session,
     agentChoices: agentChoices ?? owner.session.agentChoices,
     directMessages: { ...owner.session.directMessages, available: true, open },
+    channels: {
+      ...owner.session.channels,
+      list: () => ({
+        ...list,
+        channels: dm
+          ? [
+              {
+                id: "dm-1",
+                name: "Morgan",
+                channelType: "dm" as const,
+                participants: [person],
+              },
+            ]
+          : [],
+      }),
+    },
   };
   const view = render(
     <>
@@ -202,6 +225,24 @@ it("cancels a pending open when the preview is dismissed and ignores its late re
     expect(f.onOpen).not.toHaveBeenCalled();
   } finally {
     resolve?.("dm-1");
+    f.view.unmount();
+    f.owner.dispose();
+  }
+});
+
+it("opens a draft to someone without a DM, creating nothing until it is sent", async () => {
+  const f = fixture(false, undefined, false);
+  const user = userEvent.setup();
+  try {
+    await user.tab();
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Message" }));
+    await waitFor(() =>
+      expect(f.onOpen).toHaveBeenCalledExactlyOnceWith(newMessageLink(person)),
+    );
+    expect(f.open).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  } finally {
     f.view.unmount();
     f.owner.dispose();
   }

@@ -60,6 +60,12 @@
   margin-top: var(--space-1);
   margin-bottom: var(--space-1);
 }
+/* WebKit fills a selection across the padding, borders and empty space of
+   these boxes, leaving slabs and slivers around the text. It paints no such
+   fill inside a transformed box, so only the selected text highlights. */
+.document :is(blockquote, pre, .codeFrame, pre code, th, td) {
+  translate: 0 0;
+}
 .document blockquote {
   position: relative;
   padding: var(--space-half) 0 var(--space-half) var(--space-3);
@@ -99,6 +105,14 @@
   line-height: var(--text-mono-sm--line-height);
   letter-spacing: var(--text-mono-sm--letter-spacing);
 }
+/* Inline snippets keep their filled, rounded ends on every wrapped fragment. */
+.inline code,
+.document :not(pre) > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
 /* The code scrolls inside its frame so the copy action stays in the corner.
    A plugin-presented block keeps the same frame and action. */
 .document :is(pre, .codeFrame) {
@@ -107,22 +121,28 @@
   overflow: hidden;
   border: 1px solid var(--border-standard);
   border-radius: var(--radius-row);
-  background: var(--surface-panel);
+  background: var(--affordance-subtle);
 }
 .document pre code {
   display: block;
-  overflow-x: auto;
+  /* Leave half a line below the cap as a cue that more code follows. */
+  max-height: calc(var(--space-3) + 16.5lh);
+  overflow: auto;
   border-radius: 0;
   background: transparent;
   padding: var(--space-3) var(--space-3);
   scrollbar-width: thin;
-  white-space: pre;
-  overflow-wrap: normal;
-}
-/* Source shown in place of a rejected document wraps like prose. */
-.document pre.source code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* Inline snippets follow the table's non-wrapping column policy. */
+.document table code {
+  white-space: inherit;
+  overflow-wrap: inherit;
+}
+/* A rejected document remains a wrapping source view, rather than a code fence. */
+.document pre.source code {
+  max-height: none;
 }
 /* Keep every line end reachable beside the pinned action. */
 .document pre:has(> .codeActions) code {
@@ -139,12 +159,20 @@ html[data-keyboard-navigation] .document pre code:focus-visible {
   top: var(--space-1);
   inset-inline-end: var(--space-1);
   border-radius: var(--radius-icon-button);
-  background: var(--surface-panel);
+  background: var(--affordance-subtle);
   user-select: none;
 }
 @media (hover: hover) and (pointer: fine) {
-  .document :is(pre, .codeFrame):not(:hover, :focus-within) .codeActions {
+  /* Standalone :focus-within: compounded with :is() or :not(), WebKit
+     restyles the whole document on every focus change. */
+  .document :is(pre, .codeFrame) .codeActions {
     opacity: 0;
+  }
+  .document pre:hover .codeActions,
+  .document pre:focus-within .codeActions,
+  .document .codeFrame:hover .codeActions,
+  .document .codeFrame:focus-within .codeActions {
+    opacity: 1;
   }
 }
 .document table {
@@ -200,15 +228,15 @@ html[data-keyboard-navigation] .document pre code:focus-visible {
   vertical-align: middle;
   accent-color: var(--affordance-prominent);
 }
-.document a:not([data-solo-link]),
-.inline a:not([data-solo-link]) {
+.document a,
+.inline a {
   color: var(--text-link);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
-.document a:not([data-solo-link]):hover,
-.inline a:not([data-solo-link]):hover {
+.document a:not([aria-disabled="true"]):hover,
+.inline a:not([aria-disabled="true"]):hover {
   text-decoration-thickness: 2px;
 }
 .imageAlt {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   advanceRead,
-  changeOverride,
   effectiveFrontier,
   EMPTY_READ_STATE,
   mergeReadStates,
@@ -11,10 +10,15 @@ import {
   readCoordinate,
   readVersion,
   READ_STATE_MAX,
+  unreadBlob,
+  unreadStamp,
 } from "./read-state-model";
 
+// Aggregate (journal) parsing: frontiers and groups without wire pairing.
 const parse = (contexts: Record<string, unknown>) =>
-  parseReadBlob({ v: 1, client_id: "test", contexts }).state;
+  parseReadBlob({ v: 2, client_id: "test", contexts }, true).state;
+const wire = (contexts: Record<string, unknown>) =>
+  parseReadBlob({ v: 2, client_id: "test", contexts }).state;
 describe("NIP-RS read-state algebra", () => {
   it("is commutative, associative and idempotent across frontier and override replays", () => {
     const a = parse({
@@ -66,22 +70,92 @@ describe("NIP-RS read-state algebra", () => {
     }
   });
   it("retains canonical permanent clear floors against stale live registers", () => {
-    const set = changeOverride(parse({ room: 10 }), "room", true, 10);
+    const set = parse({
+      room: 10,
+      "ov_s:room": 5,
+      "ov_c:room": 0,
+      "ov_b:room": 10,
+    });
     expect(overrideActive(set.overrides.room, 10)).toBe(true);
     const clear = advanceRead(set, "room", 11);
-    const canonical = readBlob("test", clear, (key) =>
-      effectiveFrontier(clear, key),
+    const canonical = unreadBlob(
+      "test",
+      clear.overrides,
+      (key) => effectiveFrontier(clear, key),
+      5,
     );
-    expect(canonical.contexts).toEqual({ room: 11, "ov_c:room": 1 });
+    expect(canonical.contexts).toEqual({ room: 11, "ov_c:room": 5 });
     expect(
       overrideActive(
         mergeReadStates(parseReadBlob(canonical).state, set).overrides.room,
         10,
       ),
     ).toBe(false);
-    expect(() =>
-      changeOverride(parse({ "ov_c:room": READ_STATE_MAX }), "room", true, 10),
-    ).toThrow("exhausted");
+    expect(
+      unreadStamp(
+        parse({ "ov_c:room": READ_STATE_MAX }).overrides.room,
+        READ_STATE_MAX,
+      ),
+    ).toBeNull();
+  });
+  it("never imports version-1 override groups", () => {
+    const groups = { room: 4, "ov_s:room": 3, "ov_c:room": 0, "ov_b:room": 4 };
+    expect(
+      parseReadBlob({ v: 1, client_id: "a", contexts: groups }).state,
+    ).toEqual({ frontiers: { room: 4 }, overrides: {} });
+    expect(parse(groups).overrides.room).toEqual({
+      set: 3,
+      clear: 0,
+      baseline: 4,
+    });
+  });
+  it.each([
+    [
+      "a group with no frontier",
+      { "ov_s:room": 3, "ov_c:room": 0, "ov_b:room": 4 },
+    ],
+    [
+      "a group with an invalid frontier",
+      { room: -1, "ov_s:room": 3, "ov_c:room": 0, "ov_b:room": 4 },
+    ],
+    ["a frontier-only entry", { other: 9 }],
+    [
+      "a non-channel group",
+      {
+        "thread:x": 2,
+        "ov_s:thread:x": 3,
+        "ov_c:thread:x": 0,
+        "ov_b:thread:x": 2,
+      },
+    ],
+  ])("a version-2 record drops %s", (_name, extra) => {
+    const paired = { side: 0, "ov_s:side": 5, "ov_c:side": 0, "ov_b:side": 0 };
+    expect(wire({ ...paired, ...extra })).toEqual({
+      frontiers: { side: 0 },
+      overrides: { side: { set: 5, clear: 0, baseline: 0 } },
+    });
+  });
+  it("a version-2 record pairs a group with its escaped frontier key", () => {
+    expect(
+      wire({
+        "esc:ov_room": 4,
+        "ov_s:ov_room": 5,
+        "ov_c:ov_room": 0,
+        "ov_b:ov_room": 4,
+      }),
+    ).toEqual({
+      frontiers: { ov_room: 4 },
+      overrides: { ov_room: { set: 5, clear: 0, baseline: 4 } },
+    });
+  });
+  it("a version-2 record keeps a tombstone with its paired frontier, and version 1 keeps frontiers", () => {
+    expect(wire({ room: 7, "ov_c:room": 3, other: 9 })).toEqual({
+      frontiers: { room: 7 },
+      overrides: { room: { set: 0, clear: 3, baseline: 0 } },
+    });
+    expect(
+      parseReadBlob({ v: 1, client_id: "a", contexts: { other: 9 } }).state,
+    ).toEqual({ frontiers: { other: 9 }, overrides: {} });
   });
   it("escapes reserved IDs once and accepts prototype-looking IDs as ordinary data", () => {
     const state = parse(
@@ -94,7 +168,7 @@ describe("NIP-RS read-state algebra", () => {
     expect(parseReadBlob(blob).state).toEqual(state);
   });
   it("validates version, capacities, UTF-8 bytes and uint32 entries", () => {
-    expect(() => parseReadBlob({ v: 2, client_id: "a", contexts: {} })).toThrow(
+    expect(() => parseReadBlob({ v: 3, client_id: "a", contexts: {} })).toThrow(
       "Unsupported",
     );
     expect(

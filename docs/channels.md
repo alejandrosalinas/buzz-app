@@ -36,7 +36,10 @@ Normal and modified clicks are unchanged. In Messages, `buzz://` message links
 expose **Open link** and **Copy link** the same ways. **Open link** opens the
 linked thread as a tab in the current channel's workspace without navigating;
 another channel's thread uses the side pane. When that channel isn't readable
-there, it opens as a click would. Other internal `buzz://` links and links outside
+there, it opens as a click would. When the linked channel is withheld from the
+reader, the link, its preview card and **Open link** don't open anything, while
+**Copy link** and selection copy keep the URL; the link opens again once a recheck
+admits the reader. Other internal `buzz://` links and links outside
 message content retain their existing behavior. Copy failures show a dismissible
 notice and can be retried from the link menu.
 
@@ -96,7 +99,7 @@ connection generation. This resets their session-owned state on switching or
 reconnecting, not unrelated page drafts;
 drafts, channel selection and reading geometry retain their stable scope keys.
 
-Saved sidebar groups, ordering, assignments, stars, mutes and sorting live in the
+Saved workspaces, section order, assignments, stars, mutes and sorting live in the
 session's `sidebarPreferences` snapshot, not in the mounted Messages page. `ensure()` shares
 one initial read; `refresh()` explicitly reloads/retries while retaining the last
 good snapshot through loading/errors. Page exits neither restart nor cancel that
@@ -122,7 +125,7 @@ retry. Group/star writes use their separate narrow commands;
 
 Rows expose mute/read actions through right-click/long-press, Shift+F10, or the
 Context Menu key. They extend the persistent sidebar’s existing menu after
-**Move channel**; DM removal stays separate.
+**Move to…**. DM removal stays separate.
 Mute closes immediately and optimistically changes the next menu action, not
 unread truth or notification policy before confirmation. Failure rolls back to
 confirmed state and shows an app notification with Retry (same intent) and Dismiss.
@@ -142,70 +145,38 @@ preferences relocated it during the transaction. Read actions require
 The packaged host decodes verified self-encrypted sidebar records and signs
 only validated sidebar coordinates; it uses its signed HTTP writer and confirms
 via readback. Sidebar records and channel recipes share kind 30078, so that
-writer selects the admission contract by the event's `d` coordinate: the five
-sidebar coordinates must match what the sidebar signer produces, and every
-other coordinate must satisfy the recipe contract.
+writer selects the admission contract by the event's `d` coordinate. The
+sidebar coordinates must match what the sidebar signer produces, and recipe
+coordinates must satisfy the recipe contract.
 
-Move channel, Create new, exclusive Starred placement and startup presentation also
-belong to this persistent sidebar. Rows in saved groups, **Starred**, **Channels**
-and **Direct messages** can also be dragged with a pointer onto another saved
-group or **Starred**, or back to their own home section: channels to **Channels**
-and DMs to **Direct messages**. Neither home section accepts the other's rows. The
-drop is the same Move intent, with the same gate, optimistic placement, rollback
-notice and Retry.
-The **Channels** ellipsis menu also offers **Create section**, which creates an
-empty section without moving a channel. All four custom Team section creation
-routes, including **New → Team → New section**, offer optional Unicode or community
-emoji through the shared picker beside the name. **Remove emoji** at the top of the picker clears only the
-emoji. The dialog retains the name, selected emoji and section ID after an
-attempted write fails and waits for confirmation before closing. The submitted
-name stays read-only and focused, and emoji controls stay disabled; a rejected
-gate that attempted no write leaves the draft editable. Failed confirmation uses plain copy and
-offers Retry preferences whenever preferences are unavailable, with Create
-disabled until recovery. After a failed creation,
-the session refreshes preferences from the writer before allowing dismissal so
-an accepted save stays visible even after Cancel. If that read fails too, new
-creation is gated across menu, drop and create-and-move paths, and Retry retains
-writer routing until reconciliation succeeds. Recovery waits for all queued
-preference writes and repeats a writer read invalidated by a concurrent write.
-Ordinary startup remains replica-eligible. Dragging a channel or DM into
-the gap above the first custom section expands an **Add to new section** drop
-target inside the sidebar. With no custom sections, the target is above
-**Channels**; **Starred** keeps its pinned position. The created section appears
-at that same first position. The target stays revealed for the rest of that drag, with
-reduced motion opening it immediately; other section destinations remain available.
-Dropping there opens the existing create-and-move dialog; cancelling leaves the
-channel in place, and no preference is written until submission. These entry
-points supplement the per-channel **Move channel → Create new…** route and use
-the existing gated preference queue and encrypted section record.
-Only a row's select surface starts a drag, the surface its row menu wraps.
-**Starred** accepts drops only when it is already visible; starting a drag does
-not reveal an empty section. Use the row menu to star the first channel.
-Dropping into Starred stars the channel; dropping out assigns the destination
-and clears its star, just like the row menu. Forums take no part in dragging,
-and the row menu remains the keyboard path.
-A saved group also drags by its header, expanded or collapsed, onto another saved
-group; an accent line shows where it lands, and Escape cancels. Its section menu's
-**Move up** and **Move down** are the keyboard and single-pointer path. Each move
-rewrites every live section's `order` register with one stamp, so channels, sort
-and collapsed state stay with the group's id; the order shows optimistically and
-a failure rolls back with the same move notice and Retry. **Rename section**
-in the same menu changes the name, emoji, or both through **Rename**. Emoji-only
-changes do not resend the name; omitted fields preserve their latest values, and
-**Remove emoji** writes an explicit null icon register. Changed name/icon leaves
-share one atomic register edit, leaving channels, order, sort and unrelated
-preferences intact. The dialog keeps the draft and shows the error if the save
-fails; saving an unchanged draft closes without a write. The shared picker is a
-transient nested surface: Escape closes only the picker and returns focus to its
-trigger, without creating a history visit. The
-session serializes placement, sort and mute writes through one queue, retaining
-one confirmed preferences snapshot beneath
-pending Move and Sort projections. Each confirmation updates only its owned fields
-before reapplying pending intent; failure cannot roll back unrelated confirmed
-state. Field-only confirmations cannot recover a failed full preference read or
-hide its Retry. Move stays gated until that read succeeds. Mute optimism remains
-presentation-only; notification policy continues to use confirmed mutes. This
-composition does not change the whole-record cross-device limitation below.
+Enabled sidebar pages such as Activity stay fixed above the scrolling conversation
+list. When the pinned rows run out of vertical space, scroll their area to see
+the rest. The conversation sections default to **Solo**, **Starred**,
+workspaces, **Team**, **Forums**, and **Direct messages**. After an upgrade from
+the separate Solo and Team sidebars, the previous Solo workspaces come first,
+then **Solo**, **Starred**, the previous Team workspaces and **Team**.
+Reorder them by dragging their headings or using **Move up** and **Move down**.
+The saved order syncs with workspace placement.
+
+**Solo** and the workspaces listed in the legacy Solo record start capped at
+their newest 7 rows. **Show more** reveals the next hidden rows, up to 10;
+**Show fewer** returns to 7. Other sections, including workspaces created after
+the upgrade, start fully listed and offer **Show fewer** past 7 rows. The open
+chat, unread chats and chats an agent is working in stay listed past the cap.
+Limits are device-local view state; a Solo workspace's starting limit is saved
+there once the legacy Solo record has been read, with any step v1.0.5 saved.
+
+Drag a chat, channel, forum or DM into any workspace, into Starred, or back to
+its home section. The row’s **Move to…** menu offers the same destinations.
+Moving out of Starred clears the star. The drop target above the first
+workspace opens **Move to new workspace**. **New workspace** in the creation
+menu uses the same settings form and leaves existing placements in place.
+
+Each workspace heading has a compact creation control. Its arrow opens
+**New chat**, **New channel**, and **New DM**. The last choice becomes that
+workspace’s primary action on this device. The floating **New options** button
+at the end of the sidebar list also offers **New workspace** and stays
+available during Focus.
 
 Sections collapse and expand through their headers; the ellipsis menu does not
 repeat that action. Collapsed section keys and sidebar scroll remain separate, scoped view intent.
@@ -213,21 +184,25 @@ They survive page switches in the same mounted sidebar, are saved when that
 sidebar exits its session, and restore before paint when the roster and groups
 are available; navigation history does not own them. Search lives in the top-bar
 palette; legacy sidebar filters are ignored. Each section's ellipsis menu offers
-**Filter → All, Unreads, Active in the last**. Unreads shows channels with observed or
-manually marked unread messages or unread thread activity. Muted channels with retained unread backlog remain eligible even when their ordinary sidebar cues are quiet: mute does not mark messages read. Active in the last opens a compact,
-content-sized dialog with visible 1-, 7-, 30-, and 90-day text-only radio tiles in two columns.
+**Filter → All, Unreads, Active**. Unreads shows channels with observed or
+manually marked unread messages or unread thread activity. Muted channels with
+retained unread backlog remain eligible even when their ordinary sidebar cues
+are quiet: mute does not mark messages read. Active opens the compact
+**Active in the last** dialog with 1-, 7-, 30-, and 90-day text-only radio tiles
+in two columns.
 Apply saves the selected rolling window and activates the filter;
 Cancel leaves the saved choice unchanged. The dialog retains its draft after a
 failed save, and the menu shows the selected window. Activity uses verified timestamps, including your own messages once the relay accepts them. Channels with unknown activity remain visible until their activity is read. Activity applies in one update when a read finishes; a read that fails partway still applies what it read, and channels it did not reach stay available alongside the activity Retry warning. These filters are encrypted account preferences on the current relay, using a
-separate kind-30078 `channel-filter` record. They leave saved sorting and section
+separate kind-30078 `channel-workspace-filter` record. They leave saved sorting and section
 membership unchanged; earlier device-only filter choices are ignored, not automatically published.
 Filtered sections with no visible channels show only their header, retaining their expanded/collapsed state and menu access to hidden channels.
 The currently open channel remains visible in its section regardless of its filter,
 however it was opened. Navigating away removes that exception. When a filter hides
 channels, the **Filter** submenu appends those eligible channels below its three
-options and a separator, in the existing section order; choosing one opens
-the section and channel without changing the filter. Choices reuse the sidebar's
-channel-type icons, unread emphasis, attention/thread dots and working-agent
+options and a separator, in the existing section order. Choosing a Solo chat
+opens the chat and preserves the section's disclosure. Choosing another channel
+opens both the section and channel. The filter stays in place. Choices reuse
+the sidebar's channel-type icons, unread emphasis, attention/thread dots and working-agent
 indicators. The temporarily visible open channel is excluded. Empty filtered sections retain
 their header and menu so the filter can be changed or a hidden row opened.
 Read-only hosts disable the filter choices while keeping hidden-channel navigation available. The saved-groups
@@ -235,8 +210,9 @@ browser regression records every visible return frame and holds the redundant
 decode path, so eventual restoration cannot conceal a fallback-group/scroll jump.
 
 Channel row actions share one sidebar-owned `ContextMenuRoot` / `MenuPopup`, labelled
-`Actions for <channel>`. **Move channel** comes first when placement is writable; additional sidebar actions
-should extend that popup, with a separator only when another action group follows.
+`Actions for <channel>`. **Move to…** appears when saved preferences are
+writable and the conversation can move. Additional sidebar actions extend
+that popup with separators between action groups.
 `ChannelSidebarItem` owns the context trigger inside its memo boundary, using stable
 `onOpenMenu` props. It wraps the activity select surface rather than merging popup
 props onto the activity button.
@@ -271,10 +247,10 @@ conversation content and unmount when leaving Messages.
 
 Each sidebar section can independently select **A–Z** (the default) or **Recent**.
 The development broker and packaged native host save these choices in the desktop-compatible encrypted
-kind-30078 `channel-sort` record: `{ version: 1, groups: { ... }, meta: { v: 1, g: { ... } } }`.
+kind-30078 `channel-workspace-sort` record: `{ version: 1, groups: { ... }, meta: { v: 1, g: { ... } } }`.
 A–Z writes a null register and removes that group's legacy override.
-Filters use the same bounded group-register shape in a separate `channel-filter`
-coordinate: Unreads is `unreads`, Active in the last is `active`, and All
+Filters use the same bounded group-register shape in a separate `channel-workspace-filter`
+coordinate: Unreads is `unreads`, Active is `active`, and All
 writes a null reset tombstone. An optional top-level `activeWindowSeconds` map
 stores each group’s duration in whole-day seconds; absence means 30 days. Presets
 and custom values share this representation. Apply publishes mode and duration
@@ -289,51 +265,34 @@ removing the section. A saved startup copy is display-only until relay reads rec
 Like sorting, this is whole-record last-write-wins; another client sees changes
 when it loads or refreshes preferences, without a new automatic reconciliation loop.
 
-Sections use
-`meta: { v: 1, s: { ... }, a: { ... } }`: per-section name/icon/order/live registers
-and per-channel assignments. Upgraded readers project metadata as authoritative;
-writers regenerate the legacy fields and preserve unrelated registers, including
-section deletion (`live=false`) and assignment/sort reset (`null`) tombstones.
-Stars and mutes keep their existing `updatedAt` entries, not this register schema.
+Workspaces use a compact encrypted `channel-workspaces` record with sections,
+assignments, section order, and removal markers. Until that record exists,
+the sidebar shows the combined legacy projection, in the upgrade order above.
+The first edit of any kind saves that projection, including its section
+order, so the order no longer depends on the legacy records. Loading never
+saves. A saved record without a section order, such as one saved by an earlier
+build, uses the default order. Older desktop and mobile clients read their
+original coordinates. Their writes cannot replace the unified record. An
+upgraded client can import previously unseen workspaces and filings. A saved
+unified placement or removal of a known legacy entry takes precedence, even
+if the older client had already removed that entry before the unified save. The fallback stops adding
+legacy data when the unified record reaches 200 workspaces or 2,000 filings,
+respectively. Excess entries stay available in the original legacy records.
+If migration provenance or removal history would exceed the signing budget,
+Buzz can finish import once a complete legacy read confirms every legacy entry
+is represented or deliberately removed. The unified layout then keeps those choices without
+reading in future changes from older clients. A confirmed deletion attempts to
+clear its filing in the background. If that
+fails, a later filing can reuse the slot while this session still has proof of
+the deletion.
+The relay selects one whole record when same-account writers race, so
+confirmation can precede a later replacement of the same edit.
 
-A register is `[version, device, value]`, with a nonnegative safe-integer millisecond
-version and 16 lowercase hex device ID. Meta-less relay heads import at event
-seconds × 1,000 with the zero device ID. Edits exceed every observed register
-version and use a random in-memory device ID. Sections sort by canonical `(order,id)`
-and project dense display orders; menu-created sections append after the canonical
-live maximum, while drop-created sections precede the live minimum. Orphan
-assignments are omitted from the legacy projection, not deleted
-from metadata. Read projection accepts Desktop string values on retained section
-name/icon registers; only projected live text receives UI length limits. Already
-satisfied intents return without rewriting the head, including assignment removal
-when its register is absent, explicitly null, or points to a nonprojecting section.
-Actual rewrites still reject
-out-of-policy retained values rather than dropping or truncating them.
-Unsupported/malformed metadata fails closed, including unknown fields;
-this is not general forward-schema salvage. Live projection caps remain 100
-sections, 1,000 assignments and 104 overrides per section-choice record; retained tombstones are bounded
-by the existing 128 KiB plaintext budget, not live counts. Native signing/admission
-additionally requires legacy fields to equal the validated register projection.
-
-Saving preserves unrelated top-level fields and known register choices present in
-the strong head read before publication. This is wire-format compatibility, not
-the older Desktop's local-authoritative register cache or automatic reconciler.
-
-Persistence is **whole-record last-write-wins**, not conflict-safe per-section
-merging. Two devices can read the same record and save different sections; the
-winning replacement can silently erase the other device's choice even when both
-saves report success. The broker's mutation queue serializes its own writes only.
-Read-back checks the requested section at that moment; it cannot detect an unseen
-choice overwritten in another section or guarantee preservation against later
-writes. “Independent” describes selecting a mode per section, not simultaneous
-cross-device save guarantees. Retaining the shared record preserves compatibility
-with existing desktop writers; convergence across unseen heads would require a
-separately designed reconciliation lifecycle or atomic relay support.
-
-`browser-host/sidebar-sort.test.mjs` deterministically exercises that accepted limitation
-through the real mutation helper: another section saves and confirms between a
-read and publication, then the stale whole-record replacement wins and also
-confirms. This is contract coverage, not a concurrency fix.
+A cold load or uncached reconnect gap starts three preference reads in parallel,
+with seven filters total. If the unified sort or filter is absent, a fourth
+read requests the missing legacy coordinates with one or two more filters.
+These counts are before scheduler caching and coalescing. A continuous
+reconnect does not force a preference reread.
 
 ## Starting a direct message
 
@@ -465,7 +424,7 @@ The conversation header’s **Channel actions** ellipsis opens the shared, defau
 Channel Settings tab; selecting it again never closes the pane. Editing is available
 from that pane, not directly from the menu. **View canvas** is Channels’
 [channel menu panel](plugin-architecture.md#optional-channel-menu-panels) and opens a
-Canvas tab in the side pane. **Move channel**, **Mute/Unmute**, and **Mark as read/unread**
+Canvas tab in the side pane. **Move to…**, **Mute/Unmute**, and **Mark as read/unread**
 reuse the sidebar’s action composition and persistent mutation/recovery owners.
 Permission-gated lifecycle
 actions follow in **Leave → Archive → Delete** order, with Delete in the shared
@@ -487,7 +446,7 @@ preview are omitted from Channel Settings; opening details does not read Canvas.
 ## Channel lifecycle
 
 Lifecycle actions extend the persistent sidebar’s existing context popup after
-Move channel and the mute/read group. Lifecycle items use shared leading icons and
+**Move to…** and the mute/read group. Lifecycle items use shared leading icons and
 a separator only when there are lifecycle items and earlier actions exist. Right-click
 and keyboard access reuse the existing row trigger; no ⋮ control or second popup
 is added. Attention actions keep their existing owners. Solo chats in
@@ -564,21 +523,20 @@ fallback if that entry has gone away). Archive retains the current conversation,
 messages, membership and open Settings, replacing Archive with Unarchive once
 the confirmed metadata arrives. The conversation stays selected after reload; archived
 write restrictions still apply. Archived conversations and their threads replace the
-message composer with the lower archived-channel notice. If that composer owned
+message composer with an archive notice in the footer. If that composer owned
 focus, focus moves to the retained message history. Nonempty unsent text, including
 an in-progress message edit, is offered through a host-owned **Copy text** toast;
 empty composers and focus elsewhere do not trigger it. Copy failure retains a retry
-action, and recovery stays available until used or dismissed. Above the history, an
-archived channel also shows an **Archived · view only** notice that names the
-state and, for members, says it is hidden from the sidebar until it is unarchived.
-A preview reader, who never had it in their sidebar, sees the title alone. Solo
-chats omit it because their header already marks them archived. Where live
-channel state already allows Unarchive (a direct owner/admin, or owner-agent
-evidence), the notice offers **Unarchive**, which opens the same confirmation as
-Settings and rechecks the relay when confirmed. Cancelling returns focus to that
-button; confirming removes it, so the restored composer takes focus. Archived
-and read-only histories drop the empty state's “Start the conversation below.”
-hint. Unarchiving restores the
+action, and recovery stays available until used or dismissed. The thread footer
+shows the archive status. The main channel footer explains that the channel
+is read-only and, for members, hidden from the sidebar until unarchived. Preview
+readers see that the archived channel is read-only. Where live channel state
+allows it (a direct owner/admin, or owner-agent evidence), the main channel
+footer offers **Unarchive**, which opens the same confirmation as Settings and
+rechecks the relay when confirmed. Cancelling returns focus to that button.
+Confirming removes it, so the restored composer takes focus. Solo chats
+keep their existing header actions. Archived and read-only histories drop the
+empty state's “Start the conversation below.” hint. Unarchiving restores the
 composer and its saved text draft. A remote unarchive in the same open conversation
 preserves the reader's focus instead of autofocus moving it into the restored composer.
 When refreshed Settings actions remount, focus
@@ -699,7 +657,12 @@ New message from previewing the DM's history (see
 refreshes with the channel roster, preserves the last good set on failure and
 rejects older snapshots. Live cross-device visibility updates are deferred; any
 confirmed `41010` open, including New message Send, unhides the DM, and its row
-returns when visibility next refreshes.
+returns when visibility next refreshes. A new message from another member also
+unhides it on the relay, which republishes the snapshot before the message fans
+out, so its arrival in a hidden DM refreshes visibility and the row returns.
+Reconnect replay counts as an arrival, and one that lands before the first
+visibility read finishes waits for that read to classify it. A message only for
+agents (`audience: agents`) leaves the DM hidden.
 
 A definitive rejection offers retry without optimistic removal. If publication or
 confirmation has an uncertain outcome, the dialog warns that the command may have
@@ -841,15 +804,14 @@ text, effective duration and, for Create, staged privacy. Reverting
 all fields removes the warning. Pending operations still block dismissal; once
 settled, closing abandons any uncertain Create. Returning from a discard confirmation focuses Name and retains the draft.
 
-Create has no destination picker. Opening from a saved group's sidebar + fixes
-that destination for the draft and titles the modal **Create a channel in [icon]
-[group name]**, reusing the sidebar's decorative Unicode/custom-emoji renderer.
-Opening from the general Channels section stays ungrouped and uses **Create a
-channel**. Opening from Starred titles the modal **Create a channel in [star icon]
-Starred** and saves Starred placement with the creation intent. In the sidebar,
-the filled Tabler star retains the section emoji artwork size and is centered in
-the channel icon column. The creation heading reuses the decorative emoji slot
-and inherits the heading's typography.
+The **Destination workspace** picker files the channel in a workspace or leaves
+it unfiled. Opening from a workspace selects that workspace and its defaults.
+Choose a different destination or template in the dialog. The workspace's default
+agents can be included in setup. Select **Copy workspace instructions to the
+shared Canvas** to share ordinary instructions. Managed folders and worktree
+settings stay local, and an unparseable workspace block remains private.
+The heading uses the selected workspace's decorative emoji. Opening from
+**Team** starts unfiled. Opening from **Starred** starts with Starred placement.
 Group and Starred placement use the existing preference writer and normally
 apply before the new channel opens, so its first sidebar row is already in its
 destination; placement that must first re-read preferences can list the row
@@ -861,9 +823,9 @@ placement failure reports partial setup without creating a second channel; an
 unconfirmed create reports only its own failure. An identical retry rechecks its
 Create without continuing the template's setup writes; agents or Canvas that
 changed underneath an untouched form do not count as new details.
-Group placement remains managed through the left-nav Move action.
-Unavailable groups block a new create rather than silently falling back to a
-different destination.
+Use **Move to…** to change a channel’s workspace after creation. If the
+selected workspace becomes unavailable, choose another workspace or **Team**
+before creating.
 
 Create's session and existing creation helper also use `canonicalDetailsName`,
 including identical-retry matching. Signed names retain the relay's Unicode rules: trim Unicode White_Space and leading
@@ -945,7 +907,10 @@ preserved while private; explicitly choosing Public or View only selects the
 corresponding admission default without a metadata migration.
 
 Readers see General access as plain text from verified channel discovery metadata,
-without calling the editing capability. Guests and readers of Guest-default channels
+without calling the editing capability. Owners and admins see the editable policy
+from the live channel summary the same way, with no read when the dialog opens;
+choosing a change reads fresh signed details before the confirmation, and saving
+verifies their version. Guests and readers of Guest-default channels
 see “Viewing only. Ask an owner or admin to participate.” A nonmember previewing a
 Member-default channel instead sees “New people can participate. People already in
 the channel keep their access.” Other previews identify defaults that could not be
@@ -1048,8 +1013,10 @@ to its underlying conversation/message without that panel.
 
 The header **Access** button opens the one access dialog every conversation uses.
 It is titled **Channel access** in channels and **Chat access** in a Solo chat (see
-[Sharing a Solo chat](solo/sharing.md)). A Solo chat owner can remove people and
-agents there but cannot change roles.
+[Sharing a Solo chat](solo/sharing.md)). A Solo chat owner can remove current
+non-owner members. In a Private Solo chat on a relay that supports role updates,
+the owner can lower their access, restore participation for verified agents,
+and grant Admin to their own verified agents.
 One search field, with an accessible name but no visible label, filters current
 members and lists people, agents and Teams to invite under **Not in this channel**.
 With an empty query, channels and Solo chats show invitations only when the viewer is
@@ -1306,18 +1273,21 @@ disposal, but cannot retract a request already sent. Unsent work is canceled;
 recovery is in-memory, not durable across session disposal or restart.
 
 The development broker and native transport advertise a separate
-`memberAdministration` capability and admit only exact `9000` Admin/Member/Guest
-changes, the signer's own ownership transfer or `9001` other-member removals
-through purpose-bound routes. Generic
-invitation signing is unchanged; the relay still enforces the authoritative ACL.
+`memberAdministration` capability. Its purpose-bound routes admit ordinary
+channel `9000` Admin/Member/Guest changes and the signer's own ownership transfer,
+as well as `9001` other-member removals. The relay enforces the authoritative ACL.
 Hosts without this writer can read verified roles but expose no management controls.
 Native support requires a rebuilt binary; no unrestricted writer fallback is used.
 
-**Accepted protocol limitation:** role commands are existing relay upserts, not
-conditional updates. A departure after final preflight can be undone by the role
-command re-adding the target; a concurrent role edit can be overwritten. Client
-checks/readback reduce uncertainty but do not provide atomic conflict rejection.
-Preventing these races requires separately scoped relay support.
+In Private Solo chats, the writer uses kind `9050` for role changes when the
+relay advertises `buzz-solo-member-role` in its NIP-11 information document.
+The command includes the target's expected current role. The relay updates an
+existing member only if that role still matches, so it rejects the edit if the
+member left or their role changed before the write.
+
+Ordinary channel `9000` role changes are unconditional relay upserts. A command
+can re-add a member who departed after the final preflight or overwrite a
+concurrent role edit. Client checks and readback reduce uncertainty.
 
 Regression coverage lives in `administration.test.ts`,
 `MemberAdministration.test.tsx`, `native.test.ts`, and `browser-host/relay-broker-api.test.mjs`;
@@ -1812,8 +1782,8 @@ terminal, which keeps Escape and Option+Arrow for the shell.
   conversation** (Option+Shift+Up/Down) step through the sidebar's rendered order,
   Solo chats and team rows alike. As in Slack, plain Option+Up/Down steps from the
   composer only while its draft is empty; with text it moves the caret by paragraph
-  instead. `conversation-rows.ts` scans the sidebar's `Subscribed channels` list, so sorting, sections, filters and the All/Solo/Team pane
-  are already applied; rows in a collapsed section or the inactive pane are skipped. A
+  instead. `conversation-rows.ts` scans the rendered sidebar order after workspace
+  placement, sorting and filters. It skips collapsed sections. A
   row is unread when it shows the unread or thread-activity marker that
   `SidebarUnread` also reads. The open conversation is the row marked `aria-current`.
   Plain stepping does not wrap, and at either end it does nothing; unread stepping

@@ -6,7 +6,11 @@ import {
 } from "../src/features/relay/sidebar-edits.ts";
 import { projectSidebarRecord } from "../src/features/relay/sidebar-registers.ts";
 import { finalizeEvent, getPublicKey, nip44, verifyEvent } from "nostr-tools";
-import { projectSidebarPreferences } from "../src/features/relay/sidebar-preferences.ts";
+import {
+  projectSidebarPreferences,
+  WORKSPACE_SORT_COORDINATE,
+  WORKSPACE_FILTER_COORDINATE,
+} from "../src/features/relay/sidebar-preferences.ts";
 import { SIDEBAR_REQUEST_BYTES } from "./sidebar-preferences.mjs";
 
 export const {
@@ -25,8 +29,29 @@ export const {
   "filters",
 );
 
+export const { mutate: mutateWorkspaceSort } = sectionChoice(
+  "channel-sort",
+  validSidebarSort,
+  editSidebarSort,
+  "sort",
+  WORKSPACE_SORT_COORDINATE,
+);
+export const { mutate: mutateWorkspaceFilter } = sectionChoice(
+  "channel-filter",
+  validSidebarFilter,
+  editSidebarFilter,
+  "filters",
+  WORKSPACE_FILTER_COORDINATE,
+);
+
 // Both section choices use the same bounded encrypted read/edit/confirm contract.
-function sectionChoice(coordinate, validIntent, edit, field) {
+function sectionChoice(
+  coordinate,
+  validIntent,
+  edit,
+  field,
+  wire = coordinate,
+) {
   const label = field === "sort" ? "sort" : "filter";
   const project = (blob, sectionIds) =>
     projectSidebarPreferences(
@@ -36,6 +61,7 @@ function sectionChoice(coordinate, validIntent, edit, field) {
       field === "sort" ? blob : undefined,
       sectionIds,
       field === "filters" ? blob : undefined,
+      wire !== coordinate,
     );
 
   function assertIntent(intent) {
@@ -82,7 +108,7 @@ function sectionChoice(coordinate, validIntent, edit, field) {
       event?.kind !== 30078 ||
       event.pubkey !== viewer ||
       tags?.length !== 1 ||
-      tags[0]?.[1] !== coordinate ||
+      (tags[0]?.[1] !== wire && tags[0]?.[1] !== coordinate) ||
       typeof event.content !== "string" ||
       !verifyEvent(event)
     )
@@ -141,8 +167,8 @@ function sectionChoice(coordinate, validIntent, edit, field) {
           content,
           created_at: Math.max(Math.floor(now / 1000), current.createdAt + 1),
           tags: [
-            ["d", coordinate],
-            ["t", coordinate],
+            ["d", wire],
+            ["t", wire],
           ],
         },
         secret,
@@ -151,7 +177,12 @@ function sectionChoice(coordinate, validIntent, edit, field) {
   }
   async function mutate(intent, secret, readHead, publish) {
     assertIntent(intent);
-    const draft = prepare(await readHead(), intent, secret);
+    const current = await readHead();
+    const base =
+      wire !== coordinate && !current.length
+        ? await readHead(coordinate)
+        : current;
+    const draft = prepare(base, intent, secret);
     const result = (value) =>
       field === "filters"
         ? {

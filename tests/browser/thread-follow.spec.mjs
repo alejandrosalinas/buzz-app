@@ -25,13 +25,18 @@ test("Follow thread makes a peer thread's replies unread across reload, and Unfo
     page.locator(`[data-channel-timeline] [data-message-id="${root.id}"]`);
   const thread = (root) =>
     row(root).getByRole("button", { name: /^View thread:/ });
-  const choose = async (root, name) => {
+  const actions = async (root) => {
     await hoverMessage(row(root));
     await row(root)
       .getByRole("button", { name: "More message actions" })
       .click();
+  };
+  const choose = async (root, name) => {
+    await actions(root);
     await page.getByRole("menuitem", { name, exact: true }).click();
   };
+  const offers = (name) =>
+    expect(page.getByRole("menuitem", { name, exact: true })).toBeVisible();
   const [own, peer] = roots;
   // The owned thread's dot proves unread evaluation finished for the channel.
   await expect(thread(own)).toHaveAccessibleName(/Observed unread replies/);
@@ -49,12 +54,14 @@ test("Follow thread makes a peer thread's replies unread across reload, and Unfo
   // The viewer's own thread also carries a broadcast reply, which stays
   // unread like a mention, so its saved label is the observable choice.
   await choose(own, "Unfollow thread");
+  // The menu changes once the choice is saved; reloading before then can
+  // discard it.
+  await actions(own);
+  await offers("Follow thread");
+  await page.keyboard.press("Escape");
   await page.reload();
   await expect(thread(peer)).toHaveAccessibleName("View thread: 23 replies");
   await settle(page);
-  await hoverMessage(row(own));
-  await row(own).getByRole("button", { name: "More message actions" }).click();
-  await expect(
-    page.getByRole("menuitem", { name: "Follow thread", exact: true }),
-  ).toBeVisible();
+  await actions(own);
+  await offers("Follow thread");
 });

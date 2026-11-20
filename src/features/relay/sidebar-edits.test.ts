@@ -88,7 +88,7 @@ it("validates bounded unique section orders", () => {
   expect(validSidebarSectionOrder(["a", "a"])).toBe(false);
   expect(validSidebarSectionOrder([""])).toBe(false);
   expect(
-    validSidebarSectionOrder(Array.from({ length: 101 }, (_, i) => `${i}`)),
+    validSidebarSectionOrder(Array.from({ length: 201 }, (_, i) => `${i}`)),
   ).toBe(false);
 });
 
@@ -107,6 +107,11 @@ it("validates create-section policy separately from the host envelope", () => {
   expect(validSidebarAssignment({ channelId: "c", createSection })).toBe(true);
   expect(
     validSidebarAssignment({
+      createSection: { ...createSection, id: "fixture-workspace" },
+    }),
+  ).toBe(true);
+  expect(
+    validSidebarAssignment({
       channelId: "c",
       createSection: { ...createSection, position: "first" },
     }),
@@ -115,7 +120,7 @@ it("validates create-section policy separately from the host envelope", () => {
   for (const intent of [
     { channelId: "c", sectionId: "" },
     { channelId: "c", sectionId: "existing", createSection },
-    { channelId: "c", createSection: { ...createSection, id: "bad" } },
+    { channelId: "c", createSection: { ...createSection, id: "__proto__" } },
     { channelId: "c", createSection: { ...createSection, name: " " } },
     { channelId: "c", createSection: { ...createSection, icon: " " } },
     {
@@ -141,7 +146,7 @@ it("validates create-section policy separately from the host envelope", () => {
 });
 
 it("retains built-in and known-section sorting limits", () => {
-  for (const group of ["starred", "channels", "forums", "dms"])
+  for (const group of ["starred", "solo", "channels", "forums", "dms"])
     for (const mode of ["alpha", "recent"] as const)
       expect(validSidebarSort(group, mode, [])).toBe(true);
   const section = "x".repeat(256);
@@ -152,10 +157,10 @@ it("retains built-in and known-section sorting limits", () => {
   expect(
     validSidebarSort(`section:${section}x`, "recent", [`${section}x`]),
   ).toBe(false);
-  expect(validSidebarSort("channels", "alpha", Array(100).fill("s"))).toBe(
+  expect(validSidebarSort("channels", "alpha", Array(200).fill("s"))).toBe(
     true,
   );
-  expect(validSidebarSort("channels", "alpha", Array(101).fill("s"))).toBe(
+  expect(validSidebarSort("channels", "alpha", Array(201).fill("s"))).toBe(
     false,
   );
   expect(validSidebarSort("channels", "recent", [" "])).toBe(false);

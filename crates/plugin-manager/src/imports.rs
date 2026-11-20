@@ -152,7 +152,25 @@ impl PreparedImport {
             .artifacts
             .get(path)
             .ok_or("Choose a listed plugin folder")?;
-        let source = self
+        manager.install_artifact(release, self.source(path)?)
+    }
+    /// Installs the plugin at `path` only if `check` allows it under the registry
+    /// lock; see `Manager::install_artifact_if`.
+    pub(crate) fn install_if(
+        &self,
+        manager: &Manager,
+        path: &str,
+        check: impl FnOnce(&crate::Registry) -> Result<Option<bool>>,
+        committed: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
+        let release = self
+            .artifacts
+            .get(path)
+            .ok_or("Choose a listed plugin folder")?;
+        manager.install_artifact_if(release, self.source(path)?, check, committed)
+    }
+    fn source(&self, path: &str) -> Result<Option<InstallSource>> {
+        Ok(self
             .folder_root
             .clone()
             .map(|root| ReloadSource::folder(root, path.to_owned()).map(InstallSource::Folder))
@@ -163,8 +181,7 @@ impl PreparedImport {
                     InstallSource::Git(source)
                 })
             })
-            .or_else(|| self.url_source.clone().map(InstallSource::Url));
-        manager.install_artifact(release, source)
+            .or_else(|| self.url_source.clone().map(InstallSource::Url)))
     }
 }
 
@@ -637,6 +654,38 @@ pub fn valid_sha256(digest: &str) -> bool {
         && digest
             .bytes()
             .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Downloads a URL import's artifact over HTTPS. The bytes are untrusted until
+/// [`prepare_url`] matches them to the pinned SHA-256. Blocks; never call it on an
+/// async runtime thread.
+pub fn download(url: &str) -> Result<Vec<u8>> {
+    let url = plugin_url(url)?;
+    let failed = |e: reqwest::Error| format!("Could not download the plugin: {e}");
+    let mut response = reqwest::blocking::Client::builder()
+        .https_only(true)
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(failed)?
+        .get(&url)
+        .send()
+        .map_err(failed)?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Could not download the plugin: HTTP {}",
+            response.status()
+        ));
+    }
+    let mut body = vec![];
+    (&mut response)
+        .take(LIMIT + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| format!("Could not download the plugin: {e}"))?;
+    if body.len() as u64 > LIMIT {
+        return Err("Plugin artifact exceeds 8 MiB".into());
+    }
+    Ok(body)
 }
 
 /// Previews a downloaded artifact. The caller fetches `bytes` from `url`; nothing is

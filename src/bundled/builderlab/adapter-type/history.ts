@@ -1,7 +1,10 @@
 // A remote agent's stored sessions as the host's turn-transcript model.
 // Builderlab keeps the messages; nothing here writes or keeps them.
+import { npubEncode } from "nostr-tools/nip19";
 import { isMessageTool } from "../../../buzz-mcp/message-tools";
+import { readEventBody } from "../../../features/agent-harness/turn-records";
 import {
+  type PromptSection,
   promptMessage,
   promptSections,
   STEER,
@@ -52,11 +55,19 @@ const REMOVAL_STATES = [
 /** The prompt composer escapes these in every value it writes. */
 const decodeEntities = (text: string) =>
   text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-/** The composer writes a sender as its label, then its keys, then whether
- * they are the owner: `Name (username: …, npub: …, hex: …). This sender …`. */
-const SENDER =
-  /^From: (.+?)(?: \((?:username: [^,()]*, )?(?:npub: [^,()]*, )?hex: ([0-9a-f]{64})\))?\. This sender .*$/gm;
-const EVENT_ID = /^Event ID: (\S+)$/gm;
+/** A prompt's Buzz event, as the server read it from the prompt it composed. */
+type PromptEvent = Readonly<{ pubkey?: string; label?: string }>;
+const PUBKEY = /^[0-9a-f]{64}$/;
+/** For a server that does not read senders, only the keys of the prompt's
+ * exact event records; its other text could name anyone. */
+const recordedSenders = (sections: readonly PromptSection[]) =>
+  sections.flatMap(({ tag, body }): PromptEvent[] => {
+    const record =
+      tag === "buzz-event" || tag === STEER ? readEventBody(body) : undefined;
+    return record && PUBKEY.test(record.pubkey)
+      ? [{ pubkey: record.pubkey }]
+      : [];
+  });
 /** Tool results are text, or other content shown as JSON. */
 const resultText = (results: unknown) =>
   list(results)
@@ -67,16 +78,35 @@ const resultText = (results: unknown) =>
     .filter(Boolean)
     .join("\n");
 
-function prompt(id: string, at: number, raw: string, name?: Names) {
+/** Each sender by local name, else the label it had, else its npub, so a
+ * batch lists every author. A sender without a key or label, like a
+ * scheduled workflow, is left out. */
+function senders(events: readonly PromptEvent[], name?: Names) {
+  const names = events.flatMap((event) => {
+    const label =
+      (event.pubkey && name?.(event.pubkey)) ||
+      event.label ||
+      (event.pubkey && npubEncode(event.pubkey));
+    return label ? [label] : [];
+  });
+  const keys = new Set(events.map((event) => event.pubkey));
+  return {
+    author: [...new Set(names)].join(", ") || undefined,
+    authorPubkey: keys.size === 1 ? [...keys][0] : undefined,
+  };
+}
+
+function prompt(
+  id: string,
+  at: number,
+  raw: string,
+  name?: Names,
+  events?: readonly PromptEvent[],
+) {
   const sections = promptSections(raw);
-  // Each sender is read as its name alone, so a batch lists every author.
-  const senders = raw.replace(
-    SENDER,
-    (_, label: string, pubkey?: string) =>
-      `From: ${(pubkey && name?.(pubkey)) || label}`,
-  );
-  const { text, author, authorPubkey } = promptMessage(
-    promptSections(senders),
+  const { text } = promptMessage(sections, name);
+  const { author, authorPubkey } = senders(
+    events ?? recordedSenders(sections),
     name,
   );
   const item: TranscriptItem = {
@@ -84,7 +114,7 @@ function prompt(id: string, at: number, raw: string, name?: Names) {
     at,
     type: "prompt",
     text: text ? decodeEntities(text) : raw,
-    ...(author ? { author: decodeEntities(author) } : {}),
+    ...(author ? { author } : {}),
     ...(authorPubkey ? { authorPubkey } : {}),
     sections,
     steer: sections.some((section) => section.tag === STEER),
@@ -92,10 +122,10 @@ function prompt(id: string, at: number, raw: string, name?: Names) {
   return item;
 }
 
-/** A stored session's turns, oldest first. Messages carry no turn: a prompt
- * joins the turn its mention started, and any other message the latest turn
- * started at or before it, never one before the last prompt's. A message
- * older than every turn joins the first. */
+/** A stored session's turns, oldest first. Each turn lists its messages, and
+ * the server reads each prompt's senders from the events it carries. A
+ * message no turn lists, as from a server that does not list them, joins the
+ * latest turn started at or before it, else the first. */
 export function sessionTurns(
   session: AgentSession,
   response: Json,
@@ -133,43 +163,45 @@ export function sessionTurns(
   if (turns[0]) turns[0].newSession = true;
   const tools = new Map<string, ToolItem>();
   const sends = new Map<string, { posted?: boolean }>();
-  const mentioned = new Map(
-    turns.flatMap((turn) =>
-      turn.triggeringEventIds.map((event) => [event, turn] as const),
-    ),
+  const listed = new Map(
+    list(response.turns).flatMap((row) => {
+      const turn = turns.find((each) => each.turnId === str(row.turn_id));
+      return turn
+        ? (Array.isArray(row.message_ids) ? row.message_ids : []).map(
+            (id) => [str(id), turn] as const,
+          )
+        : [];
+    }),
+  );
+  const prompts = new Map(
+    list(response.prompts).map((row) => [
+      str(row.message_id),
+      list(row.events).map(
+        (event): PromptEvent => ({
+          ...(PUBKEY.test(str(event.sender_pubkey))
+            ? { pubkey: str(event.sender_pubkey) }
+            : {}),
+          ...(str(event.sender_label)
+            ? { label: str(event.sender_label) }
+            : {}),
+        }),
+      ),
+    ]),
   );
   // In time order, so a tool's result never arrives before its request.
   const messages = list(response.messages)
     .map((message) => ({ message, at: millis(message.created) }))
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-  let floor = 0;
   for (const { message, at } of messages) {
     const id = str(message.id);
     if (message.deleted === true || at === undefined || !id) continue;
     const role = enumName(message.role, ROLES);
-    // A prompt is stamped apart from its turn, so the mention it carries
-    // places it before its time does.
-    const prompted =
-      role === "ROLE_USER"
-        ? list(message.content)
-            .flatMap((content) => [
-              ...str(object(content.text)?.text).matchAll(EVENT_ID),
-            ])
-            .map((match) => mentioned.get(match[1] ?? ""))
-            .find((turn) => turn !== undefined)
-        : undefined;
-    const index = prompted
-      ? turns.indexOf(prompted)
-      : Math.max(
-          turns.reduce(
-            (last, turn, position) => (turn.startedAt <= at ? position : last),
-            -1,
-          ),
-          floor,
-        );
-    if (prompted) floor = index;
-    const turn = turns[index];
+    const turn =
+      listed.get(id) ??
+      [...turns].reverse().find((each) => each.startedAt <= at) ??
+      turns[0];
     if (!turn) break;
+    const events = prompts.get(id);
     const error = object(message.llm_call_error_info);
     if (error?.is_error === true)
       turn.error = str(error.cause) || "The model call failed.";
@@ -243,7 +275,8 @@ export function sessionTurns(
         if (thought.trim())
           turn.items.push({ id: key, at, type: "thought", text: thought });
       } else if (text.trim()) {
-        if (role === "ROLE_USER") turn.items.push(prompt(key, at, text, name));
+        if (role === "ROLE_USER")
+          turn.items.push(prompt(key, at, text, name, events));
         else turn.items.push({ id: key, at, type: "message", text });
       }
     });
@@ -264,13 +297,21 @@ export type SessionList =
 const notFound = (error: unknown) =>
   error instanceof Error && "status" in error && error.status === 404;
 
+/** Conversations the Activity tab lists at most. */
+export const CONVERSATION_LIMIT = 30;
+/** Pages read at most for them, since Builderlab may send a short or empty
+ * page before the last. */
+const PAGE_LIMIT = 5;
+
 /** Whether the owner is signed in to Builderlab with remote agents, so its
  * stored sessions can be read. */
 export const canReadSessions = (login: LoginSnapshot) =>
   login.status === "signed-in" && !!login.account?.canUseRemoteAgents;
 
 /** The signed-in owner's stored sessions of an agent, most recently active
- * first. */
+ * first: pages until {@link CONVERSATION_LIMIT} are read, none remain, or
+ * {@link PAGE_LIMIT} were read. `more` when older ones remain. A session
+ * that became active between reads can arrive twice; its first stays. */
 export async function listSessions(
   client: AgentClient,
   session: BuilderlabSession,
@@ -282,17 +323,27 @@ export async function listSessions(
     (row) => row.pubkey === pubkey,
   );
   if (!agent) return { status: "loaded", sessions: [], more: false };
+  const listed = new Map<string, AgentSession>();
+  let cursor: string | undefined;
   try {
-    return {
-      status: "loaded",
-      agentId: agent.id,
-      ...(await client.sessions(agent.id, signal)),
-    };
+    for (let page = 0; page < PAGE_LIMIT; page++) {
+      const next = await client.sessions(agent.id, signal, undefined, cursor);
+      for (const row of next.sessions)
+        if (!listed.has(row.sessionId)) listed.set(row.sessionId, row);
+      cursor = next.cursor;
+      if (!cursor || listed.size >= CONVERSATION_LIMIT) break;
+    }
   } catch (error) {
     // A Builderlab without stored sessions has no such route.
     if (notFound(error)) return { status: "unsupported" };
     throw error;
   }
+  return {
+    status: "loaded",
+    agentId: agent.id,
+    sessions: [...listed.values()],
+    more: !!cursor,
+  };
 }
 
 /** Turns a stored transcript shows at most, as local transcripts do. */

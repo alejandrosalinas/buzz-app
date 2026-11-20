@@ -111,7 +111,7 @@ test("Inbox edits an owned reply in place and restores the reply draft", async (
   await hoverMessage(peer);
   await peer.getByRole("button", { name: "More message actions" }).click();
   await expect(
-    page.getByRole("menuitem", { name: /^Mark (read|unread)$/ }),
+    page.getByRole("menuitem", { name: /^Mark as (read|unread)$/ }),
   ).toBeVisible();
   await expect(
     page.getByRole("menuitem", { name: "Edit message", exact: true }),

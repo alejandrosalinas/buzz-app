@@ -175,6 +175,88 @@ test("a typed fence opens a code block at once, and the block sends fenced", asy
   await expect(input.locator("pre")).toHaveCount(0);
 });
 
+// Native caret motion and the editor's line-edge measurement are
+// browser-owned; the block-shape matrix stays in composer-blocks.test.ts.
+test("arrow keys leave a code block past the draft's edges and move natively elsewhere", async ({
+  page,
+}) => {
+  const input = await composer(page);
+  const caret = () =>
+    input.evaluate((el) => {
+      const { anchorNode } = el.ownerDocument.getSelection();
+      const element =
+        anchorNode.nodeType === Node.ELEMENT_NODE
+          ? anchorNode
+          : anchorNode.parentElement;
+      return [element.closest("pre, p").tagName, el.selectionStart];
+    });
+  const blocks = () =>
+    input.evaluate((el) =>
+      [...el.children].map((child) => [child.tagName, child.textContent]),
+    );
+  await input.pressSequentially("```");
+  await page.keyboard.type("one");
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("two");
+  // Moves between and along the block's own lines stay inside it.
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(caret).toEqual(["PRE", 2]);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(caret).toEqual(["PRE", 6]);
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(caret).toEqual(["PRE", 7]);
+  // Extending a selection never opens a paragraph.
+  await page.keyboard.press("Shift+ArrowDown");
+  await page.keyboard.press("Shift+ArrowRight");
+  expect(await blocks()).toEqual([["PRE", "one\ntwo"]]);
+  // Nothing follows the block, so Down opens a paragraph below it.
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.type("below");
+  expect(await blocks()).toEqual([
+    ["PRE", "one\ntwo"],
+    ["P", "below"],
+  ]);
+  await input.evaluate((el) => el.setSelectionRange(0, 0));
+  await expect.poll(caret).toEqual(["PRE", 0]);
+  await page.keyboard.press("Shift+ArrowUp");
+  await page.keyboard.press("Shift+ArrowLeft");
+  expect(await blocks()).toHaveLength(2);
+  // Nothing precedes the block, so Left opens a paragraph above it.
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.type("above");
+  const surrounded = [
+    ["P", "above"],
+    ["PRE", "one\ntwo"],
+    ["P", "below"],
+  ];
+  expect(await blocks()).toEqual(surrounded);
+  // Between paragraphs, the caret crosses each edge natively. Vertical moves
+  // keep the browser's column, which differs between prose and code fonts.
+  const block = async () => (await caret())[0];
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(caret).toEqual(["PRE", 6]);
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(caret).toEqual(["P", 5]);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(block).toBe("PRE");
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(block).toBe("P");
+  await input.evaluate((el) => el.setSelectionRange(13, 13));
+  await expect.poll(caret).toEqual(["PRE", 13]);
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(caret).toEqual(["P", 14]);
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(block).toBe("PRE");
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(block).toBe("P");
+  expect(await blocks()).toEqual(surrounded);
+  await input.press("Enter");
+  expect(
+    await page.evaluate(() => window.linkComposerFixture.sent.at(-1).text),
+  ).toBe("above\n\n```\none\ntwo\n```\n\nbelow");
+});
+
 test("caret keys at the end of a composed message never insert a character", async ({
   page,
 }) => {

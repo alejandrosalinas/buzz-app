@@ -148,6 +148,7 @@ function fixture(
     snapshot: () => undefined,
     subscribe: () => () => {},
     attention: () => ({ unread: false }),
+    threadReadThrough: () => -1,
     enterChannel: vi.fn(async () => {}),
     leaveChannel: vi.fn(),
     setChannelActive: vi.fn(),

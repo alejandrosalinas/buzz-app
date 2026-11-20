@@ -64,7 +64,7 @@ import {
   UrlPluginInstallReview,
   UrlPluginDetails,
 } from "./ManagedPlugins";
-import { managedBy, pendingManaged } from "../plugins/managed";
+import { managedBy, managedLabel, pendingManaged } from "../plugins/managed";
 import { RecommendationCount } from "./RecommendationCount";
 import {
   isUrlInstallSource,
@@ -72,6 +72,7 @@ import {
   type PluginInstallRequests,
 } from "../plugins/installer";
 import { PluginReadme } from "./PluginReadme";
+import performanceDiagnosticsManifest from "../bundled/performance-diagnostics/manifest.json";
 import { bundledReadmes } from "../bundled/readmes";
 import { bundledIcons } from "../bundled/icons";
 import type { Identity } from "../features/identity/service";
@@ -167,6 +168,12 @@ function groupPlugins(plugins: readonly PluginInfo[]) {
   const other: PluginInfo[] = [];
   const core: PluginInfo[] = [];
   for (const plugin of plugins) {
+    // Diagnostics are offered through agent requests in this panel.
+    if (
+      plugin.source === "bundled" &&
+      plugin.manifest.id === performanceDiagnosticsManifest.id
+    )
+      continue;
     if (isCorePlugin(plugin)) {
       core.push(plugin);
       continue;
@@ -430,7 +437,7 @@ function PluginDetails({
           </span>
           {managed && (
             <span className={styles.pluginInstallBadge}>
-              Managed by {managed.source}
+              Managed by {managedLabel(managed)}
             </span>
           )}
           <span
@@ -1315,7 +1322,7 @@ export function Settings({
                           <PluginProvenance
                             source={plugin.source}
                             publisher={plugin.publisher}
-                            managedBy={managedBy(managed, id)?.source}
+                            managedBy={managedLabel(managedBy(managed, id))}
                             className={styles.pluginRowAuthor}
                           />
                         </span>

@@ -64,6 +64,15 @@
   --radius-row: var(--floating-inner-radius);
 }
 
+/* A row keeps its hover fill while the pointer is on its Mark as read. */
+@media (hover: hover) and (pointer: fine) {
+  .list > li:hover > [class~="navigation-item"]:not([data-selected]) {
+    --text-subtle: var(--interaction-row-text);
+    --text-metadata: var(--interaction-row-metadata);
+    background: var(--interaction-row-hover);
+  }
+}
+
 .notice {
   display: flex;
   flex-wrap: wrap;

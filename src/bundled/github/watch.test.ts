@@ -356,6 +356,135 @@ describe("step", () => {
     ).toBeUndefined();
   });
 
+  it("wakes once when it loses its approval, and not when it gets it back", () => {
+    const approved = snap({
+      settled: true,
+      decision: "APPROVED",
+      merge: "BLOCKED",
+      unresolved: 1,
+    });
+    const unapproved = { ...approved, decision: "REVIEW_REQUIRED" };
+    const base = step(watch, approved, 0).watch;
+    const lost = step(base, unapproved, T);
+    expect(news(lost.wake)).toBe(
+      `${url} is no longer approved: GitHub wants a review again, as when an approval is dismissed or more are required.`,
+    );
+    expect(lost.wake).toMatch(/\n\nNow: open, review required, /);
+    expect(step(lost.watch, unapproved, 2 * T).wake).toBeUndefined();
+    // Approved again is no news; losing it again is.
+    const back = step(lost.watch, approved, 2 * T);
+    expect(back.wake).toBeUndefined();
+    expect(news(step(back.watch, unapproved, 3 * T).wake)).toMatch(
+      /is no longer approved/,
+    );
+    // Lost right after a wake, it waits its turn, and is not told once it
+    // comes back.
+    const woken = { ...base, woken: [T] };
+    const held = step(woken, unapproved, T + 1);
+    expect(held.wake).toBeUndefined();
+    expect(step(held.watch, approved, 2 * T).wake).toBeUndefined();
+    expect(news(step(held.watch, unapproved, 2 * T).wake)).toMatch(
+      /is no longer approved/,
+    );
+  });
+
+  it("does not tell a lost approval on a first read, nor apart from changes requested", () => {
+    const unapproved = snap({ decision: "REVIEW_REQUIRED" });
+    const first = step(watch, unapproved, 0, false);
+    expect(first.wake).toBeUndefined();
+    expect(step(first.watch, unapproved, T).wake).toBeUndefined();
+    // Changes requested come as the review's feedback, and only that.
+    const approved = snap({
+      settled: true,
+      decision: "APPROVED",
+      unresolved: 1,
+    });
+    const base = step(watch, approved, 0).watch;
+    const review = {
+      ...comment("review/2"),
+      state: "CHANGES_REQUESTED",
+    };
+    const requested = snap({
+      settled: true,
+      decision: "CHANGES_REQUESTED",
+      unresolved: 1,
+      feedback: [review],
+    });
+    const arrived = step(base, requested, T);
+    expect(arrived.wake).toBeUndefined();
+    const told = step(arrived.watch, requested, T + QUIET_MS);
+    expect(news(told.wake)).toMatch(
+      /^New feedback on .*\n- review \(changes requested\) by wes/,
+    );
+    expect(told.wake).not.toMatch(/no longer approved/);
+    // Then dismissed, it leaves GitHub wanting a review, which is no news.
+    expect(
+      step(told.watch, { ...requested, decision: "REVIEW_REQUIRED" }, 3 * T)
+        .wake,
+    ).toBeUndefined();
+  });
+
+  it("tells an approval a push dismissed with its CI result, in one wake", () => {
+    const base = step(
+      watch,
+      snap({ settled: true, decision: "APPROVED", unresolved: 1 }),
+      0,
+    ).watch;
+    const pushed = snap({
+      head: "2222222222",
+      running: true,
+      decision: "REVIEW_REQUIRED",
+      unresolved: 1,
+    });
+    const running = step(base, pushed, T);
+    expect(running.wake).toBeUndefined();
+    const green = step(
+      running.watch,
+      { ...pushed, running: false, settled: true },
+      2 * T,
+    );
+    expect(news(green.wake)).toBe(
+      `CI passed on 222222222 for ${url}.\n\n${url} is no longer approved: GitHub wants a review again, as when an approval is dismissed or more are required.`,
+    );
+  });
+
+  it("tells an approval lost while checks stay pending once they are stuck, and after that", () => {
+    const approved = snap({
+      running: true,
+      decision: "APPROVED",
+      unresolved: 1,
+    });
+    const unapproved = { ...approved, decision: "REVIEW_REQUIRED" };
+    const base = step(watch, approved, 0).watch;
+    // Lost while checks run, it waits for them, but not past stuck.
+    const held = step(base, unapproved, T);
+    expect(held.wake).toBeUndefined();
+    expect(news(step(held.watch, unapproved, STUCK_MS).wake)).toBe(
+      `CI has been pending on 111111111 for over 3 hours on ${url}; a check may be stuck.\n${url} is no longer approved: GitHub wants a review again, as when an approval is dismissed or more are required.`,
+    );
+    // Lost after the stuck wake, with the same check still pending.
+    const stuck = step(base, approved, STUCK_MS);
+    expect(news(stuck.wake)).toMatch(/a check may be stuck\.$/);
+    expect(news(step(stuck.watch, unapproved, STUCK_MS + T).wake)).toMatch(
+      /is no longer approved/,
+    );
+  });
+
+  it("tells only that it closed when it closes after losing its approval", () => {
+    const base = step(
+      watch,
+      snap({ settled: true, decision: "APPROVED", unresolved: 1 }),
+      0,
+    ).watch;
+    const closed = step(
+      base,
+      snap({ state: "CLOSED", decision: "REVIEW_REQUIRED" }),
+      T,
+    );
+    expect(closed.ended).toBe("closed");
+    expect(closed.wake).not.toMatch(/no longer approved/);
+  });
+
   it("wakes once when checks stay pending on one head, and never for a head with none", () => {
     const start = step(watch, snap({ running: true }), 0);
     expect(step(start.watch, snap({ running: true }), STUCK_MS - 1).wake).toBe(

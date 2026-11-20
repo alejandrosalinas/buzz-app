@@ -145,6 +145,16 @@ export type ChannelMessage = Readonly<{
   /** Signed `audience` tag of the original event: `agents` is coordination
    * between agents, shown quietly. Absent means everyone; unknown values too. */
   audience?: "agents";
+  /** Signed `relayed-from` tag: the signer's claim that this agent wrote the
+   * text in another chat. `verified` when the signer is the author and the
+   * agent's cryptographically verified owner; only then is it drawn as the agent's. */
+  relayedFrom?: Readonly<{
+    agent: string;
+    channelId?: string;
+    /** The signed original's text before its first blank line. */
+    notice?: string;
+    verified: boolean;
+  }>;
   /** Signed `buzz:request` tag: the agent's claim of the triggering message
    * this update belongs to, separate from its flattened reply link. */
   request?: string;
@@ -169,6 +179,8 @@ export type ChannelMessage = Readonly<{
   }>;
   /** Current body came from a replacement edit; original recipients do not bind its prose. */
   edited?: true;
+  /** The edit supplying the current body; absent when unedited. */
+  editId?: string;
   /** Offsets in `content` where attachment removal joined once-separate text; a
    * bound name never spans one. */
   attachmentSeams?: readonly number[];

@@ -101,6 +101,37 @@ async function setup() {
   };
 }
 
+it("cleans up a confirmed deletion without recording a user move", async () => {
+  const h = await setup();
+  h.assignment.mockRejectedValueOnce(new Error("offline"));
+  await expect(h.owner.forgetDeletedFiling("alpha")).rejects.toThrow("offline");
+  expect(h.prefs.snapshot().moves).toBeUndefined();
+  expect(h.prefs.snapshot().data?.assignments.alpha).toBe("work");
+
+  await h.owner.forgetDeletedFiling("alpha");
+  expect(h.assignment).toHaveBeenLastCalledWith(
+    { channelId: "alpha" },
+    expect.any(AbortSignal),
+  );
+  expect(h.prefs.snapshot().data?.assignments).toEqual({ beta: "work" });
+  expect(h.star).not.toHaveBeenCalled();
+  expect(h.prefs.snapshot().moves).toBeUndefined();
+});
+
+it("skips deletion cleanup in a partial migration and dismisses a stale move retry", async () => {
+  const h = await setup();
+  const data = h.prefs.snapshot().data;
+  assert(data);
+  h.read.mockResolvedValueOnce({ ...data, workspaceMigrationPending: true });
+  await h.prefs.refresh();
+  await expect(h.prefs.assign("alpha", "later")).rejects.toThrow("unavailable");
+  expect(h.prefs.snapshot().moves).toHaveLength(1);
+
+  await h.owner.forgetDeletedFiling("alpha");
+  expect(h.assignment).not.toHaveBeenCalled();
+  expect(h.prefs.snapshot().moves).toBeUndefined();
+});
+
 it("moves immediately, keeps later intent through older failure, and serializes both records", async () => {
   const h = await setup();
   const gate = deferred<readonly string[]>();

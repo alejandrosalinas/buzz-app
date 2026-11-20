@@ -427,6 +427,22 @@ it.each([
   },
 );
 
+it("never compacts a protected session, whatever its threshold", async () => {
+  const f = fixture();
+  const process = await ClaudeProcess.start(f.spawn, {
+    ...f.launch,
+    compactAt: 200000,
+  });
+  try {
+    expect(f.processes[0]?.options.env).toMatchObject({ DISABLE_COMPACT: "1" });
+    expect(f.processes[0]?.options.env).not.toHaveProperty(
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    );
+  } finally {
+    await process.kill();
+  }
+});
+
 it("reviews exact tool input with full native metadata and preceding evidence", async () => {
   const f = fixture();
   const process = await ClaudeProcess.start(f.spawn, f.launch);

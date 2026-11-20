@@ -2,7 +2,7 @@
 // Drives a real `claude` with the owner's sign-in: run with
 // CLAUDE_LIVE_BIN=/path/to/claude. It spends a few small turns.
 import { spawn as spawnChild } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -49,6 +49,55 @@ const spawn: Spawn = async (_id, options: HostProcessOptions = {}) => {
 };
 
 describe.skipIf(!BIN)("claude", () => {
+  it("sees a second conversation's message while the first task is open", {
+    timeout: 120_000,
+  }, async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "buzz-claude-steering-"));
+    const release = join(cwd, "release");
+    const started = join(cwd, "started");
+    const claude = await ClaudeProcess.start(spawn, {
+      cwd,
+      model: "haiku",
+      systemPrompt:
+        "Follow the test instructions. A second user message can arrive while you work. Answer it immediately in a text block, then continue the first task until the file gate opens.",
+    });
+    const output = () =>
+      lines
+        .flatMap((line) => {
+          try {
+            const event = JSON.parse(line);
+            return event.type === "assistant"
+              ? event.message.content
+                  .filter((part: { type: string }) => part.type === "text")
+                  .map((part: { text: string }) => part.text)
+              : [];
+          } catch {
+            return [];
+          }
+        })
+        .join("\n");
+    try {
+      const first = claude.send(
+        `Channel request: use Bash to touch ${started}. Poll for ${release} with short Bash calls (sleep 1 then test -f). Only finish once it exists. Then say CHANNEL_DONE.`,
+      );
+      await expect
+        .poll(() => existsSync(started), { timeout: 30_000 })
+        .toBe(true);
+      const second = claude.send(
+        "Solo request: say SOLO_NOW in an intermediate text block and keep checking the channel task's gate afterward.",
+      );
+      await expect.poll(output, { timeout: 40_000 }).toContain("SOLO_NOW");
+      expect(existsSync(release)).toBe(false);
+      writeFileSync(release, "go");
+      await expect(first).resolves.toMatchObject({ ok: true });
+      await expect(second).resolves.toMatchObject({ ok: true });
+      expect(output()).toContain("CHANNEL_DONE");
+    } finally {
+      writeFileSync(release, "go");
+      await claude.kill();
+    }
+  });
+
   it("stops the running turn, and takes the next message", {
     timeout: 180_000,
   }, async () => {

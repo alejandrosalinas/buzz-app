@@ -55,6 +55,7 @@ it.each(["bottom", "side"] as const)(
     };
     const available = [panel];
     const panels: Panels = {
+      ui: { Workspace: () => null, useSplit: vi.fn() },
       snapshot: () => available,
       subscribe: () => () => {},
       register: () => {},
@@ -160,6 +161,7 @@ it("keeps a side panel with its channel until closed, while bottom drawers close
   let available = [huddle, terminal];
   const listeners = new Set<() => void>();
   const panels: Panels = {
+    ui: { Workspace: () => null, useSplit: vi.fn() },
     snapshot: () => available,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -275,6 +277,7 @@ it("opens the host member picker only while the launcher binding is current", as
   } satisfies RegisteredPanel;
   const available = [panel];
   const panels: Panels = {
+    ui: { Workspace: () => null, useSplit: vi.fn() },
     snapshot: () => available,
     subscribe: () => () => {},
     register: () => {},
@@ -353,6 +356,7 @@ it.each(["bottom", "side"] as const)(
     };
     const available = [panel];
     const panels: Panels = {
+      ui: { Workspace: () => null, useSplit: vi.fn() },
       snapshot: () => available,
       subscribe: () => () => {},
       register: () => {},
@@ -409,6 +413,7 @@ it("keeps the huddle last, with the linked PR just before it, regardless of regi
     channelLauncher: () => <button type="button">{key}</button>,
   }));
   const panels: Panels = {
+    ui: { Workspace: () => null, useSplit: vi.fn() },
     snapshot: () => available,
     subscribe: () => () => {},
     register: () => {},

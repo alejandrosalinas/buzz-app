@@ -102,22 +102,20 @@ export function createWatchComponents({
     const command =
       watch.type === "source" && watch.provider === "attention/command";
     const timer = agent.timers[slug];
-    const description = describe(
-      watch,
-      Date.now() / 1000,
-      watch.type === "timer" && timer?.armedAt === watch.armed_at
-        ? timer.used
-        : undefined,
-    );
+    const paused = interestPaused(agent.attention, watch.interest_id);
+    const description = describe(watch, Date.now() / 1000, timer, paused);
     // Timers have no name; a nameless watch is labelled by its Interest.
     const ownName = "name" in watch && watch.name;
     const label = heading(ownName || title(watch.interest_id ?? slug.slice(6)));
+    // Timers under one Interest share its label; their schedules tell them
+    // apart wherever a control names the row.
+    const rowName =
+      watch.type === "timer"
+        ? `${label.text}, ${description.title}`
+        : label.text;
     const completed = sourceCompleted(agent.sourceRuns, agent.attention[slug]);
     const state =
-      watch.enabled &&
-      !interestPaused(agent.attention, watch.interest_id) &&
-      !completed &&
-      !description.spent
+      watch.enabled && !paused && !completed && !description.spent
         ? "Active"
         : "Paused";
     const section = (label: string, content: React.ReactNode) => (
@@ -197,7 +195,7 @@ export function createWatchComponents({
           <button
             className="attention-heading"
             type="button"
-            aria-label={`Details for ${label.text}`}
+            aria-label={`Details for ${rowName}`}
             aria-expanded={open}
             aria-controls={detailsId}
             onClick={() => setOpen(!open)}
@@ -347,7 +345,7 @@ export function createWatchComponents({
                     variant="subtle"
                     size="xs"
                     style={{ paddingInlineStart: "var(--space-2)" }}
-                    aria-label={`Watch status for ${label.text}`}
+                    aria-label={`Watch status for ${rowName}`}
                   >
                     <span className="attention-pill-icon">
                       <CircleIcon
@@ -377,7 +375,7 @@ export function createWatchComponents({
                 size="compact"
                 align="end"
                 ref={popup}
-                aria-label={`Watch status for ${label.text}`}
+                aria-label={`Watch status for ${rowName}`}
                 finalFocus={() =>
                   row.current?.isConnected
                     ? true
@@ -411,7 +409,7 @@ export function createWatchComponents({
                   <MenuItem
                     tone="danger"
                     disabled={action.pending}
-                    aria-label={`Delete ${label.text}`}
+                    aria-label={`Delete ${rowName}`}
                     onClick={() => {
                       // Pause/Resume share this action; a refused Pause's
                       // error must not open inside the dialog.
@@ -446,7 +444,7 @@ export function createWatchComponents({
                   : "Delete this watch?"
             }
             description={`This deletes the ${
-              watch.type === "timer" ? "timer" : "watch"
+              watch.type === "timer" ? `“${description.title}” timer` : "watch"
             }. The agent will stop watching for this trigger. This cannot be undone.`}
             pending={action.pending}
             initialFocus={cancel}
@@ -484,7 +482,7 @@ export function createWatchComponents({
             <details className="attention-watch-details">
               <summary
                 className="attention-disclosure text-body-sm text-subtle"
-                aria-label={`Watch details for ${label.text}`}
+                aria-label={`Watch details for ${rowName}`}
               >
                 <span className="attention-disclosure-icon">
                   <GearIcon size={16} aria-hidden={true} />
@@ -600,7 +598,7 @@ export function createWatchComponents({
             </details>
             <WatchActivity
               history={history}
-              label={label.text}
+              label={rowName}
               session={session}
               scope={scope}
               command={command}

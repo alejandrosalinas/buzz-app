@@ -8,6 +8,8 @@ import {
 } from "../../shared/datetime";
 import { useClockPreference } from "../../shared/clock-preference";
 import { useLocalDay } from "../../shared/use-local-day";
+import type { ChannelQueries } from "../relay/contracts";
+import { useListedChannel } from "../relay/listed-channel";
 import styles from "./Messages.module.css";
 
 /** The divider above a day's first row: "Today", "Monday", "June 20, 2025".
@@ -53,6 +55,23 @@ export function DayDivider({ createdAt }: { createdAt: number }) {
         <span data-day={day}>{formatDayGroupLabel(createdAt)}</span>
       </span>
     </div>
+  );
+}
+
+/** The Message timestamps setting for a chat: shown, hidden everywhere, or
+ * hidden in Solo chats. A hidden time stays available to assistive technology. */
+export function useMessageTimeVisible(
+  channels: Partial<Pick<ChannelQueries, "list" | "subscribeList">> | undefined,
+  channelId: string | undefined,
+) {
+  const { messageTimestamps } = useClockPreference();
+  const solo = useListedChannel(
+    channels,
+    channelId,
+    (channel) => channel?.channelType === "solo",
+  );
+  return (
+    messageTimestamps === "show" || (messageTimestamps === "hide-solo" && !solo)
   );
 }
 

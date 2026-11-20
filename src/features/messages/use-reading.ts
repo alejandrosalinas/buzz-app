@@ -3,6 +3,22 @@ import type { RelaySession } from "../relay/session";
 import type { ReadingHandle } from "../relay/unread";
 import { useMessageEditScope } from "./MessageEditScope";
 
+// Accessibility isolation, such as a modal menu, pauses reading; the same
+// visit resumes once it lifts. Actual concealment also ends the visit.
+const CONCEALED = '[inert], [hidden], [aria-hidden="true"]';
+/**
+ * Whether a pane is concealed rather than isolated: `hidden` anywhere, or
+ * `inert` below the body's own children. A modal dialog inerts the body's
+ * other children, which only pauses reading.
+ */
+function departed(element: Element) {
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden")) return true;
+    if (node.hasAttribute("inert") && node.parentElement !== document.body)
+      return true;
+  }
+  return false;
+}
 /** Shared document attention gate for reading and row visits. */
 export function readingDocumentActive() {
   return document.visibilityState === "visible" && document.hasFocus();
@@ -17,6 +33,9 @@ type Reading = {
   session: RelaySession;
   channelId: string;
   latestMessageId?: string | undefined;
+  /** The newest row catch-up may read through, when it is not the bottom
+   * row (a channel's newest top-level post). Defaults to the bottom row. */
+  catchUpMessageId?: string | undefined;
   /** The thread this list shows: its bottom catches up that thread, and its
    * DM reads stop before unread messages it does not show. */
   rootId?: string | undefined;
@@ -43,6 +62,7 @@ export function useReading({
   session,
   channelId,
   latestMessageId,
+  catchUpMessageId,
   rootId,
   scroller,
   settled,
@@ -53,6 +73,7 @@ export function useReading({
   // Read at measurement time: a new latest message mutates the list, which
   // already remeasures in the next frame, so it must not restart observation.
   const latestId = useEffectEvent(() => latestMessageId);
+  const catchUpId = useEffectEvent(() => catchUpMessageId ?? latestMessageId);
   useEffect(() => {
     if (!enabled || !scroller.current) return;
     const element: HTMLElement = scroller.current;
@@ -62,6 +83,35 @@ export function useReading({
     // A deferred measurement's lease, captured when its event arrived.
     let pending: ReadingHandle | undefined;
     let stopped = false;
+    // This reader's stay in the conversation, across its leases: a message
+    // marked unread while shown stays unread until a measurement excludes it
+    // or the reader departs. Returning is a new visit.
+    let visit = {};
+    let visited = false;
+    // Whether the visit's last completed measurement showed any row.
+    let showing = false;
+    function depart() {
+      if (visited) session.unread.leave(visit);
+      visit = {};
+      visited = showing = false;
+    }
+    // A thread shown in its pane is presented for the whole visit, whatever
+    // its rows measure: a thread marked unread then stays so until departure.
+    function present() {
+      if (
+        !rootId ||
+        visited ||
+        document.visibilityState !== "visible" ||
+        departed(element)
+      )
+        return;
+      try {
+        session.unread.present(channelId, rootId, visit);
+        visited = true;
+      } catch {
+        // Membership may disappear between commit and observation.
+      }
+    }
     const observing = new Set<ReadingHandle>();
     // The message list or its own composer: typing under a conversation is
     // reading it. A parent scope's composer belongs to another surface. A panel
@@ -96,7 +146,7 @@ export function useReading({
     const ready = () =>
       !stopped &&
       element.isConnected &&
-      !element.closest('[inert], [hidden], [aria-hidden="true"]') &&
+      !element.closest(CONCEALED) &&
       settled.current &&
       readingDocumentActive() &&
       focused(document.activeElement);
@@ -165,9 +215,16 @@ export function useReading({
       )
         return;
       const viewport = element.getBoundingClientRect();
+      // A folded preview that shows the latest message stands in for its row
+      // here only: what it folds is not observed as individually read.
       const row = [
-        ...element.querySelectorAll<HTMLElement>("[data-message-id]"),
-      ].find((row) => row.dataset.messageId === latest);
+        ...element.querySelectorAll<HTMLElement>(
+          "[data-message-id], [data-preview-message-id]",
+        ),
+      ].find(
+        (row) =>
+          (row.dataset.messageId ?? row.dataset.previewMessageId) === latest,
+      );
       const bounds = row?.getBoundingClientRect();
       return bounds &&
         bounds.height > 0 &&
@@ -198,7 +255,7 @@ export function useReading({
       pending = acquire();
       if (!pending) return;
       try {
-        pending.view([], viewing);
+        pending.view([], viewing, false);
       } catch {
         unqueue();
         return;
@@ -213,7 +270,9 @@ export function useReading({
     }
     function acquire() {
       try {
-        return session.unread.reading(channelId, rootId);
+        const lease = session.unread.reading(channelId, rootId, visit);
+        visited = true;
+        return lease;
       } catch {
         return undefined; // Membership may disappear between commit and observation.
       }
@@ -229,13 +288,21 @@ export function useReading({
       const ids = visibleIds();
       const bottom = bottomId();
       if (!ids.length && !bottom) {
-        lease?.dispose();
+        // A completed measurement that shows no row, unlike a handoff's.
+        const empty = lease ?? (showing ? acquire() : undefined);
+        try {
+          empty?.view([], viewing);
+          showing = false;
+        } finally {
+          empty?.dispose();
+        }
         return;
       }
       handle = lease ?? acquire();
       if (!handle) return;
       try {
         handle.view(ids, viewing);
+        showing = !!ids.length;
       } catch {
         cancel();
         return;
@@ -263,15 +330,17 @@ export function useReading({
           // Viewing belongs only to the current handle: the write lease keeps
           // its read intent but stops reporting rows that may scroll away.
           // A view-only lease keeps that evidence until the next cancellation.
-          observed.view([], () => false);
+          observed.view([], () => false, false);
           try {
-            handle = session.unread.reading(channelId, rootId);
+            handle = session.unread.reading(channelId, rootId, visit);
             handle.view([...visible], viewing);
+            showing = !!visible.size;
           } catch {
             handle = undefined;
           }
+          const through = caughtUp ? catchUpId() : undefined;
           void (async () => {
-            if (caughtUp) await observed.catchUp(bottom, rootId);
+            if (through) await observed.catchUp(through, rootId);
             await observed.observe(remained);
           })()
             .catch(() => {})
@@ -292,8 +361,14 @@ export function useReading({
     document.addEventListener("focusout", focus);
     window.addEventListener("blur", stop);
     window.addEventListener("focus", schedule);
-    const visibility = () =>
-      document.visibilityState === "visible" ? schedule() : stop();
+    const visibility = () => {
+      if (document.visibilityState === "visible") {
+        present();
+        return schedule();
+      }
+      stop();
+      depart();
+    };
     document.addEventListener("visibilitychange", visibility);
     // Pane transforms can bring unchanged rows into view without a resize.
     const motion = (event: Event) => {
@@ -308,15 +383,45 @@ export function useReading({
       subtree: true,
       characterData: true,
     });
+    // A retained pane concealed by an ancestor, even with no transition or
+    // focus change, is a departure; layout, focus and blur are not.
+    let concealed = !!element.closest(CONCEALED);
+    let gone = departed(element);
+    const concealment = new MutationObserver((records) => {
+      if (
+        !records.some(
+          (record) =>
+            record.target instanceof Element && record.target.contains(element),
+        )
+      )
+        return;
+      const now = !!element.closest(CONCEALED);
+      const leaving = departed(element);
+      if (leaving && !gone) depart();
+      if (!leaving && gone) present();
+      gone = leaving;
+      if (now === concealed) return;
+      concealed = now;
+      if (!now) return schedule();
+      stop();
+    });
+    concealment.observe(document.documentElement, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ["inert", "hidden", "aria-hidden"],
+    });
     const resize = new ResizeObserver(reflow);
     resize.observe(element);
+    present();
     schedule();
     return () => {
       stopped = true;
       stop();
+      depart();
       document.removeEventListener("transitionend", motion);
       document.removeEventListener("animationend", motion);
       mutation.disconnect();
+      concealment.disconnect();
       resize.disconnect();
       for (const event of ["pointerdown", "keydown", "reading-positioned"])
         element.removeEventListener(event, schedule);

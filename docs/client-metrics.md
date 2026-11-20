@@ -1,5 +1,58 @@
 # Client performance metrics
 
+## Agent snapshots in packaged apps
+
+The bundled **Performance diagnostics** plugin starts off and is unlisted in
+the Plugins catalog. An agent can ask the owner to enable it on this device with
+`plugin_request({"action":"enable","id":"buzz.performance-diagnostics","reason":"Investigate Buzz performance"})`.
+The owner confirms the request in Buzz. Check `plugin_request_status` with the
+returned `requestId` and discover the tool after approval. To turn diagnostics
+off, ask an agent to call `plugin_disable({"id":"buzz.performance-diagnostics"})`.
+
+Once enabled, an agent on this device can call
+`performance_snapshot({"duration_ms":5000})`. It samples aggregate activity
+across the communities this app retains. An external connection needs existing
+full-agent approval. Native MCP and Developer mode are unnecessary. Enabling
+the plugin changes the agent tool list on this device. Existing sessions that
+cannot accept a changed tool list may need to start a new session.
+
+The only argument is optional `duration_ms`: an integer from 1000 to 10000,
+default 5000. A second concurrent capture fails. Plugin unload stops the capture.
+Call, turn, and connection cancellation stop it when the adapter passes a
+cancellation signal. The exported harness kit passes no signal, so an ended
+turn can leave the capture active until its deadline. External MCP passes a
+connection signal and supports cancellation at that scope. No recorder runs
+between calls. A blocked or throttled page can delay completion. Use the
+reported `elapsedMs` to compare captures.
+
+| Report field | Meaning |
+| --- | --- |
+| `version`, `sessionId`, `startedAt` | Schema version 1, a random ID shared by captures in this page lifetime, and the capture's UTC start. The ID changes on page reload. |
+| `host` | Desktop flag, production-bundle flag and native app version, or `null` when not available. This does not identify an OS process or source commit. |
+| `requestedMs`, `elapsedMs`, `visibility` | Requested and actual duration; visible and hidden milliseconds; final page visibility. |
+| `mainThread.timerLag` | Timer lateness of at least 50 ms, sampled every 100 ms while visible, including an overdue sample at completion: count, total/max milliseconds and visible sample count. Hidden time and visibility transitions reset its baseline. This is delay, not CPU use. |
+| `mainThread.longTasks` | Unbuffered long-task entries delivered during capture, when supported. Includes hidden-page work. Unsupported engines, including WebKit, return `supported:false` and a reason, not a zero count. |
+| `work` | Existing `fold`, `verify.read` and `verify.restore` counters for batches, items, and total/max batch milliseconds. Includes all retained relay sessions and visibility states. `verify.read` includes JavaScript preparation for native stored-event verification. `verify.restore` measures the JavaScript fallback for head hydration. Native signature verification runs outside these timers. |
+| `reads` | Settled attempts on instrumented finite relay read routes. Reports count, total/max request milliseconds, decoded UTF-16 code units, failed count and background count. Reads started before capture can finish inside it. Native read-state snapshots and presence snapshot requests are outside this count. |
+| `agentUpdates` | Calls to the agents service's existing change subscription. This is update frequency, not recipient or listener count. |
+| `mcpReplies` | Plugin `Host.serveMcp` JSON encoding attempts: count, total/max synchronous encoding milliseconds, UTF-16 code units and encoding failures. Excludes native IPC and handler work. Counts successful encoding even if transport later fails. |
+| `unsupported` | Explicit gaps: process CPU, heap, layout, style, all-JavaScript time, JSON outside plugin MCP replies, and subscriber count. |
+
+All time totals use `totalMs` and `maxMs`. Captures retain fixed numeric totals,
+not sample arrays. Work has exactly three keys. Update and serialization counters
+never retain payloads, message bodies, keys, URLs or credentials. A capture owns
+one subscription, two timers, one visibility listener and at most one observer.
+Completion, cancellation and setup failure release them. There are no diagnostic
+disk or relay writes. The agent receives a normal tool result. Its own reply is
+encoded after capture stops and is outside the measured window.
+
+Compare equal durations and visibility states. High lag with many updates or
+large MCP output suggests a path to inspect. It does not prove causation.
+Use a profiler for work outside the listed boundaries. This tool does not start
+monitoring, send alerts, or dispatch work by itself.
+
+## Development metrics
+
 Development builds record how quickly channels open, where their rows come
 from, what warming costs the main thread, and how long live coverage takes to
 set up. The numbers stay in memory in the page. Nothing is sent anywhere, and

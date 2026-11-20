@@ -9,7 +9,7 @@ import {
 } from "./http-admission";
 
 afterEach(() => vi.useRealTimers());
-it("starts six requests without advancing time and refills by foreground priority on completion", async () => {
+it("starts six background reads immediately and refills by foreground priority", async () => {
   vi.useFakeTimers();
   const lane = createApiAdmission();
   const calls: string[] = [];
@@ -18,7 +18,9 @@ it("starts six requests without advancing time and refills by foreground priorit
     calls.push(name);
     return new Promise<void>((resolve) => release.push(resolve));
   };
-  const active = Array.from({ length: 6 }, (_, i) => lane.run(work(`${i}`)));
+  const active = Array.from({ length: 6 }, (_, i) =>
+    lane.run(work(`${i}`), undefined, "background"),
+  );
   expect(calls).toEqual(["0", "1", "2", "3", "4", "5"]);
   const background = lane.run(work("background"), undefined, "background");
   const foreground = lane.run(work("foreground"));
@@ -38,6 +40,41 @@ it("starts six requests without advancing time and refills by foreground priorit
   expect(performance.now()).toBe(0);
   expect(vi.getTimerCount()).toBe(0);
 });
+it("keeps room for foreground requests during artifact publication saturation", async () => {
+  const lane = createApiAdmission();
+  const calls: number[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const artifacts = Array.from({ length: 124 }, (_, i) =>
+    lane.run(
+      async () => {
+        calls.push(i);
+        await held;
+      },
+      undefined,
+      "artifact",
+    ),
+  );
+  try {
+    expect(calls).toEqual([0, 1, 2, 3]);
+    await expect(
+      lane.run(async () => {}, undefined, "artifact"),
+    ).rejects.toThrow(/capacity/i);
+    const read = lane.run(async () => calls.push(-1), undefined, "background");
+    const message = lane.run(async () => calls.push(-2));
+    expect(calls).toEqual([0, 1, 2, 3, -1, -2]);
+    await Promise.all([read, message]);
+  } finally {
+    release();
+    await Promise.all(artifacts);
+  }
+  expect(calls.filter((i) => i >= 0)).toEqual(
+    Array.from({ length: 124 }, (_, i) => i),
+  );
+});
+
 it("pauses queued consumers, cancels before dispatch, and never retries admitted work", async () => {
   vi.useFakeTimers();
   const lane = createApiAdmission();

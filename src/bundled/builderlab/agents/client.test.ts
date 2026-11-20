@@ -129,7 +129,7 @@ it("reads one page of an agent's stored sessions, or one conversation's, and a s
     }),
   );
   expect(await h.client.sessions("agent-1", h.signal)).toEqual({
-    more: true,
+    cursor: "older",
     sessions: [
       {
         sessionId: "s-thread",
@@ -147,11 +147,12 @@ it("reads one page of an agent's stored sessions, or one conversation's, and a s
       channelId: "alpha",
       threadRootId: "r".repeat(64),
     }),
-  ).toEqual({ more: false, sessions: [] });
+  ).toEqual({ cursor: undefined, sessions: [] });
   await h.client.sessions("agent-1", h.signal, {
     community: "wss://relay.example.org",
     channelId: "beta",
   });
+  await h.client.sessions("agent-1", h.signal, undefined, "older");
   const bodies = vi
     .mocked(h.host.request)
     .mock.calls.map(([input]) => [
@@ -178,6 +179,10 @@ it("reads one page of an agent's stored sessions, or one conversation's, and a s
         community: "relay.example.org",
         channel_id: "beta",
       },
+    ],
+    [
+      "list-agent-sessions",
+      { agent_id: "agent-1", limit: 50, cursor: "older" },
     ],
   ]);
   await expect(

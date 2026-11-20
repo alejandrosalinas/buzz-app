@@ -54,6 +54,32 @@ it("shares a session above plugin lifetimes, rather than one store per consumer"
   expect(connect).toHaveBeenCalledTimes(1);
   expect(source.query).toHaveBeenCalledTimes(1);
 });
+it("publishes the community ID its transport read, and reads it again for a new session", async () => {
+  const ctx = root();
+  const reads = (communityId?: string): ReadTransport => ({
+    ...transport("viewer"),
+    readState: {
+      ...(communityId ? { communityId } : {}),
+      decode: async () => [],
+    },
+  });
+  const connect = vi
+    .fn()
+    .mockResolvedValueOnce(reads("22222222-2222-4222-8222-222222222222"))
+    .mockResolvedValueOnce(reads());
+  const data = provideRelay(ctx, connect);
+  await flush();
+  expect(data.snapshot()).toMatchObject({
+    status: "ready",
+    communityId: "22222222-2222-4222-8222-222222222222",
+  });
+  const first = data.snapshot().session;
+  data.retry();
+  await flush();
+  await vi.waitFor(() => expect(data.snapshot().session).not.toBe(first));
+  expect(data.snapshot().status).toBe("ready");
+  expect(data.snapshot().communityId).toBeUndefined();
+});
 it("keeps app startup demand-driven while retaining hover preparation and cached opening", async () => {
   const viewer = keypair();
   const relay = keypair();

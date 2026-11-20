@@ -1,4 +1,5 @@
 import {
+  memo,
   useLayoutEffect,
   useRef,
   useState,
@@ -54,7 +55,8 @@ export function ComposerTools({
     </>
   );
 }
-function OwnedTool({
+// Props are stable across keystrokes when the host passes stable commands.
+const OwnedTool = memo(function OwnedTool({
   tool,
   registry,
   ...props
@@ -139,4 +141,4 @@ function OwnedTool({
       {...opener}
     />
   );
-}
+});

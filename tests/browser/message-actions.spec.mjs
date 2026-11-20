@@ -1,6 +1,6 @@
 import { hoverMessage } from "./message-actions.mjs";
 import { test, expect } from "./fixture.mjs";
-import { open, settle } from "./timeline.mjs";
+import { frames, open, settle } from "./timeline.mjs";
 import { chooseDefaultSkinTone } from "./skin-tone.mjs";
 
 test.use({
@@ -294,7 +294,7 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   });
   await hoverMessage(row);
   await copyLink.click();
-  await root.hover();
+  await page.mouse.move(0, 0);
   await expect(actions).toHaveCSS("opacity", "0");
   // Tab only exercises the keyboard path if focus is still on Copy link, so
   // it lands on the row's next control. Copy link is briefly disabled while
@@ -332,7 +332,7 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   await expect(menu).toBeVisible();
   // Keyboard opening focuses the first item; Mark unread leads a managed row.
   await expect(
-    page.getByRole("menuitem", { name: "Mark unread", exact: true }),
+    page.getByRole("menuitem", { name: "Mark as unread", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
@@ -347,6 +347,11 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   await expect(trigger).not.toBeFocused();
   await page.mouse.move(0, 0);
   await expect(actions).toHaveCSS("opacity", "0");
+  // Copy feedback overlays the thread; let it expire with the pointer outside
+  // before exercising the message controls beneath it.
+  await expect(
+    page.getByRole("region", { name: "App notifications" }).getByRole("dialog"),
+  ).toHaveCount(0);
   await hoverMessage(root);
   await root.getByRole("button", { name: "Add reaction", exact: true }).click();
   await page.locator('em-emoji-picker input[type="search"]').fill("thumbsup");
@@ -454,6 +459,13 @@ test("message actions reveal, copy, restore focus and reply across responsive la
     await expect(actions).toHaveCSS("opacity", "0");
     await hoverMessage(row);
     await expect(actions).toHaveCSS("opacity", "1");
+    // The click left keyboard navigation, so this is a pointer reveal and its
+    // entry keeps its time. Only keyboard reveal, in the journey below, is
+    // immediate.
+    await expect(page.locator("html")).not.toHaveAttribute(
+      "data-keyboard-navigation",
+    );
+    await expect(actions).not.toHaveCSS("animation-duration", "0s");
     await expect(
       row.getByRole("button", { name: "Copy link", exact: true }),
     ).toBeVisible();
@@ -472,6 +484,83 @@ test("message actions reveal, copy, restore focus and reply across responsive la
   await page.screenshot({
     path: test.info().outputPath("message-actions-narrow.png"),
   });
+});
+
+// Browser-only: jsdom has neither CSS animations nor native popovers. An arrow
+// key typed in the composer turns keyboard navigation on, so the bar opens
+// with no entry motion. The pointer press on More then clears that flag under
+// the open bar; replaying the entry there resizes the bar and moves the menu
+// anchored to it.
+test("a pointer press on More after keyboard input leaves the open toolbar in place", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const event = app.append("primary", "alpha", "Steady toolbar check");
+  const row = page.locator(
+    `[data-channel-timeline] [data-message-id="${event.id}"]`,
+  );
+  await expect(row).toBeVisible();
+  await settle(page);
+  const composer = page.getByRole("textbox", {
+    name: "Message #Alpha",
+    exact: true,
+  });
+  await composer.click();
+  await composer.press("ArrowLeft");
+  const root = page.locator("html");
+  await expect(root).toHaveAttribute("data-keyboard-navigation");
+  const actions = row.getByRole("group", { name: "Message actions" });
+  await hoverMessage(row);
+  await expect(actions).toHaveCSS("opacity", "1");
+  // Keyboard reveal gives the entry no time rather than removing it. Were the
+  // entry absent, nothing could restart and the check after the press would
+  // pass without proving anything.
+  await expect(actions).not.toHaveCSS("animation-name", "none");
+  await expect(actions).toHaveCSS("animation-duration", "0s");
+  // Keyboard reveal skips the entry, but the entry still spans its pointer
+  // duration (at most --duration-state) from the moment the bar opened, and a
+  // press inside that span resumes its last frames. A person presses later,
+  // so let the span pass on the clock that times the entry. That clock counts
+  // milliseconds and the token is served in seconds, so convert by unit, and
+  // fail on a token that is not a time: a span of 0.15 or NaN ends the wait
+  // after one frame.
+  await actions.evaluate(async (bar) => {
+    const token = getComputedStyle(bar)
+      .getPropertyValue("--duration-state")
+      .trim();
+    const [, amount, unit] = /^(\d*\.?\d+)(m?s)$/.exec(token) ?? [];
+    const span = Number(amount) * (unit === "s" ? 1000 : 1);
+    if (!(span > 0))
+      throw new Error(`--duration-state is not a positive time: "${token}"`);
+    const opened = document.timeline.currentTime;
+    while (document.timeline.currentTime - opened < span)
+      await new Promise(requestAnimationFrame);
+  });
+  const before = await actions.evaluate((bar) => {
+    window.messageActionAnimations = [];
+    bar.addEventListener("animationstart", (event) => {
+      if (event.target === bar)
+        window.messageActionAnimations.push(event.animationName);
+    });
+    return bar.getBoundingClientRect().toJSON();
+  });
+  await row.getByRole("button", { name: "More message actions" }).click();
+  await expect(
+    page.getByRole("menuitem", { name: "Copy message", exact: true }),
+  ).toBeVisible();
+  // The test proves nothing unless the press really left keyboard navigation
+  // and gave the open bar's entry a duration again, which a restart needs.
+  await expect(root).not.toHaveAttribute("data-keyboard-navigation");
+  await expect(actions).not.toHaveCSS("animation-duration", "0s");
+  // The rendering update after the press is the one that reports a restart.
+  await frames(page);
+  expect(
+    await actions.evaluate((bar) => ({
+      started: window.messageActionAnimations,
+      rect: bar.getBoundingClientRect().toJSON(),
+    })),
+  ).toEqual({ started: [], rect: before });
 });
 
 // Browser-only: clipboard -> rendered Markdown -> cross-conversation navigation

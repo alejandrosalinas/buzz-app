@@ -1,6 +1,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { createContributions } from "../../plugins/contributions";
 import type { JsonValue } from "../navigation/targets";
+import { unframed } from "../agent-harness/plugin-wake";
 import type { RelayEvent } from "../relay/events";
 import type { AgentKey } from "./membership";
 import type { AgentStore } from "./store";
@@ -8,6 +9,8 @@ import type { AgentStore } from "./store";
 export type AgentSessionSource = Readonly<{
   channelId: string;
   root?: string;
+  /** One session across every conversation in this agent membership. */
+  community?: true;
 }>;
 
 export type AgentSessionAdmission = Readonly<{
@@ -84,8 +87,8 @@ const keyFor = (agent: AgentKey, harness: string, source: AgentSessionSource) =>
     "source",
     agent,
     harness,
-    source.channelId,
-    source.root ?? null,
+    source.community ? "@community" : source.channelId,
+    source.community ? null : (source.root ?? null),
   ]);
 const savedKey = (sessionKey: string) =>
   SESSION_ADMISSION_PREFIX + JSON.stringify(["session", sessionKey]);
@@ -271,8 +274,9 @@ export function createSessionAdmissions(root: Context, storage: AgentStore) {
           router: saved.router,
           association: structuredClone(saved.association),
         }),
+        // A plugin's text: it cannot open Buzz's own sections of a turn.
         ...(!saved.contextAcknowledged && saved.context
-          ? { context: saved.context }
+          ? { context: unframed(saved.context) }
           : {}),
       });
     },

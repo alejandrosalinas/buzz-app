@@ -1,2 +1,10 @@
 # Unified patch context lines intentionally contain one space.
 runtime/*.patch -whitespace
+
+# Tests compare prompt text byte for byte, and the composer joins sections
+# with LF. Check this text out with LF on every platform.
+src/features/agent-harness/*.md text eol=lf
+src/features/agent-harness/sections/**/*.md text eol=lf
+src/features/agent-harness/sections/**/*.txt text eol=lf
+src/bundled/claude-code/session_*.md text eol=lf
+src/buzz-mcp/prompt.md text eol=lf

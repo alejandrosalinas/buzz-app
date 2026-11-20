@@ -2,7 +2,7 @@ import { test, expect } from "./fixture.mjs";
 import { openPage, settleShellToggle } from "./navigation.mjs";
 
 // Browser hit testing is required: jsdom cannot detect overflowing filter text.
-test("New remains clickable beside enlarged navigation filters", async ({
+test("the floating New button remains clickable with enlarged text", async ({
   page,
   app,
 }) => {
@@ -19,21 +19,18 @@ test("New remains clickable beside enlarged navigation filters", async ({
   await page
     .getByRole("button", { name: "Show navigation", exact: true })
     .click();
-  const trigger = page.getByRole("button", { name: "New", exact: true });
+  const trigger = page.getByRole("button", {
+    name: "New options",
+    exact: true,
+  });
   await expect(trigger).toBeInViewport();
-  const before = await page
-    .getByRole("tablist", { name: "Navigation scope" })
-    .getByRole("tab", { selected: true })
-    .textContent();
+  const selected = page.locator('button[data-channel-id="alpha"]');
+  await expect(selected).toHaveAttribute("aria-current", "page");
   await trigger.click();
   await expect(
-    page.getByRole("menu", { name: "New", exact: true }),
+    page.getByRole("menuitem", { name: "New chat", exact: true }),
   ).toBeVisible();
-  await expect(
-    page
-      .getByRole("tablist", { name: "Navigation scope" })
-      .getByRole("tab", { selected: true }),
-  ).toHaveText(before);
+  await expect(selected).toHaveAttribute("aria-current", "page");
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
 });

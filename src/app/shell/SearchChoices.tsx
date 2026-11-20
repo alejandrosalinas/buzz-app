@@ -1,5 +1,7 @@
 import { matchRank } from "../../features/search/match";
 import {
+  createContext,
+  useContext,
   useLayoutEffect,
   useRef,
   useEffect,
@@ -10,14 +12,23 @@ import {
   type ReactNode,
 } from "react";
 import { Virtualizer } from "virtua";
-import type { ChatCircleIcon } from "../../shared/design-system/icons/index";
+import {
+  ArrowRightIcon,
+  type ChatCircleIcon,
+  SparklesIcon,
+  XIcon,
+} from "../../shared/design-system/icons/index";
 import type { PeekFollow, PeekTarget } from "./SearchPreview";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { Badge } from "../../shared/design-system/ui/Badge";
 import { Button } from "../../shared/design-system/ui/Button";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { SearchField } from "../../shared/design-system/ui/SearchField";
-import { isApplePlatform } from "../../features/shortcuts/format";
+import { matches, type KeyBinding } from "../../features/shortcuts/bindings";
+import {
+  formatBinding,
+  isApplePlatform,
+} from "../../features/shortcuts/format";
 import { MatchedLabel } from "../../features/search/MatchedLabel";
 import { useSearchHighlight } from "../../features/search/use-search-highlight";
 import { channelIconClass } from "../../shared/inline-reference";
@@ -39,6 +50,9 @@ export type SearchDestination = {
   rank?: number;
   key: string;
   label: string;
+  /** Shown in place of `label` where text alone cannot show it, as a
+   * message's mention chips; `matches` still index `label`. */
+  labelContent?: ReactNode;
   detail?: string;
   /** Quiet metadata at the row's end, such as a count. */
   trailing?: ReactNode;
@@ -67,6 +81,10 @@ export type SearchDestination = {
   /** What choosing the row does, said in a preview that has nothing else to
    * show, e.g. "Open Activity". */
   action?: string | undefined;
+  /** Stays with the row above it: a group cut short in Top results keeps
+   * the two together, one row past its usual limit if need be. A cut that
+   * hides the row above still shows this one, after the rows shown. */
+  attached?: boolean | undefined;
   run: () => void;
 };
 
@@ -87,6 +105,9 @@ export type SearchGroup = {
   headingStatus?: string | undefined;
   /** Why the group sits where it does, e.g. "Exact name". */
   why?: string | undefined;
+  /** Its rows are in the order a decision provider judged best, which a
+   * small mark after the heading shows. */
+  reranked?: boolean | undefined;
   /** How many it holds when that differs from its rows, e.g. "20+". */
   count?: string | undefined;
   /** The group's icon in the rail. */
@@ -136,7 +157,31 @@ export type SearchPeek = {
    * too short to search messages, say), so they may still come back, each
    * with the reason shown while it's chosen. */
   unsearched?: Readonly<Record<string, ReactNode>> | undefined;
+  /** Called once the person moves the highlight for this text: rows on
+   * screen shouldn't move under them after that. */
+  onMove?: (() => void) | undefined;
 };
+
+/** The person's keys for the previous and next result, which the field
+ * matches and the key hints show. */
+export type SearchSteps = { previous: KeyBinding; next: KeyBinding };
+export const DEFAULT_SEARCH_STEPS: SearchSteps = {
+  previous: { key: "ArrowUp" },
+  next: { key: "ArrowDown" },
+};
+export const SearchStepsContext = createContext(DEFAULT_SEARCH_STEPS);
+/** Vim's and Emacs's keys, with Control itself on every platform: a step to
+ * the next or previous result, or to the next or previous group as Tab. */
+const CONTROL_STEPS = new Map<string, readonly ["result" | "group", boolean]>([
+  ["j", ["result", true]],
+  ["n", ["result", true]],
+  ["k", ["result", false]],
+  ["p", ["result", false]],
+  ["l", ["group", true]],
+  ["f", ["group", true]],
+  ["h", ["group", false]],
+  ["b", ["group", false]],
+]);
 
 /** Top results shows this many rows of its first group, and of the rest. */
 const LEAD_ROWS = 5;
@@ -164,7 +209,8 @@ export type SearchInputProps = {
   onQueryChange: (query: string) => void;
   input: RefObject<HTMLElement | null>;
   label?: string;
-  scope?: { label: string; onRemove: () => void } | undefined;
+  /** One conversation the search is narrowed to, by `id`. */
+  scope?: { id: string; label: string; onRemove: () => void } | undefined;
   /** A control that refines the results, inside the field after Clear. */
   fieldAction?: ReactNode;
   chips?: readonly SearchChip[] | undefined;
@@ -225,6 +271,10 @@ export function SearchChoices({
   highlightEmpty = false,
   onRowsShown,
   peek,
+  completing = false,
+  completionPending = false,
+  conversationShortcut,
+  onBack,
 }: SearchInputProps & {
   groups: readonly SearchGroup[];
   children?: ReactNode;
@@ -245,6 +295,18 @@ export function SearchChoices({
    * reading only for the rows someone can see. */
   onRowsShown?: ((keys: readonly string[]) => void) | undefined;
   peek?: SearchPeek | undefined;
+  /** The rows complete an unfinished filter, such as `in:` or `from:`, so
+   * Tab chooses the highlighted one as Enter does. */
+  completing?: boolean;
+  /** The suggestions that would complete the filter are still loading, so
+   * Tab stays in the field rather than leaving before they arrive. */
+  completionPending?: boolean;
+  /** Hinted with the keys below: the chord that searches the current
+   * conversation instead. */
+  conversationShortcut?: KeyBinding | undefined;
+  /** Set while the caller shows a view over the results, such as a guide:
+   * Escape in the palette leaves it rather than search. */
+  onBack?: (() => void) | undefined;
 }) {
   const palette = useRef<HTMLDivElement>(null);
   // A hidden preview would still read; it mounts only where it shows.
@@ -331,7 +393,10 @@ export function SearchChoices({
   // while its source hasn't searched the text as typed, shown by its own
   // status until it has rows. It's let go once its source has searched and
   // settled without it. Shown or not, the choice is never kept out of sight.
-  const chosen = ranked.find((group) => group.label === peekScope);
+  // With nothing typed, the first group is the view search opens on, so
+  // there is no Top results above it.
+  const home = needle ? undefined : ranked[0]?.label;
+  const chosen = ranked.find((group) => group.label === (peekScope ?? home));
   const awaited =
     !!peekScope &&
     (!!peek?.busy || Object.hasOwn(peek?.unsearched ?? {}, peekScope));
@@ -353,6 +418,7 @@ export function SearchChoices({
   const tabs = landing ? [...ranked, landing] : ranked;
   const countOf = (group: SearchGroup) =>
     group.count ?? String(resultRows(group).length);
+  /** How many rows Top results shows of each group it cuts short. */
   const truncated = new Map<string, number>();
   const groups: SearchGroup[] = !peek?.ranked
     ? merged
@@ -364,16 +430,21 @@ export function SearchChoices({
             const place = ranked.indexOf(group);
             if (place < 0) return group;
             const rows = resultRows(group);
-            const limit = place === 0 ? LEAD_ROWS : GROUP_ROWS;
+            const cap = place === 0 ? LEAD_ROWS : GROUP_ROWS;
+            const limit = rows[cap]?.attached ? cap + 1 : cap;
             if (rows.length <= limit && !group.count)
               return { ...group, destinations: rows };
-            truncated.set(group.label, rows.length);
+            const shown = [
+              ...rows.slice(0, limit),
+              ...rows.slice(limit).filter((row) => row.attached),
+            ];
+            truncated.set(group.label, shown.length);
             // Each row is read as one of the whole group: "1 of 37", or of
             // an open set when more may follow ("20+").
             const count = countOf(group);
             return {
               ...group,
-              destinations: rows.slice(0, limit),
+              destinations: shown,
               total: /^\d+$/.test(count) ? Number(count) : -1,
             };
           });
@@ -386,6 +457,18 @@ export function SearchChoices({
     if (resultsContent.current) resultsContent.current.scrollTop = 0;
     if (focusInput) input.current?.focus();
   };
+  /** Shows the group after or before the one shown, Top results (or an empty
+   * search's first group) first; false past either end. */
+  const stepScope = (forward: boolean) => {
+    const order = [
+      ...(home ? [] : [undefined]),
+      ...tabs.map(({ label }) => label),
+    ];
+    const next = order.indexOf(scoped?.label) + (forward ? 1 : -1);
+    if (next < 0 || next >= order.length) return false;
+    showScope(order[next]);
+    return true;
+  };
   const hasControls = groups.some((group) =>
     group.destinations.some((row) => row.content),
   );
@@ -397,14 +480,21 @@ export function SearchChoices({
   const place = views?.place;
   const keys = destinations.map(({ key }) => key);
   const highlight = useSearchHighlight({
-    query,
+    // A view over the results has a highlight of its own, so an Enter
+    // waiting for results never runs one of its rows.
+    query: onBack ? `\u0000${query}` : query,
     keys,
-    onChoose: (key) => destinations.find((row) => row.key === key)?.run(),
+    onChoose: (key) => {
+      // Choosing acts on the order shown: a later rerank must not move it.
+      peek?.onMove?.();
+      destinations.find((row) => row.key === key)?.run();
+    },
     open,
     pending,
     isAction,
     highlightEmpty,
     followFirst: !!peek?.ranked,
+    within: scope?.id,
     // A kept place keeps its row: Enter never chooses a row scrolled away.
     ...(place?.key && keys.includes(place.key)
       ? { initial: place.key }
@@ -413,7 +503,13 @@ export function SearchChoices({
         : {}),
   });
   const selected = highlight.active;
+  const onMove = peek?.onMove;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Reports each text's first move once.
+  useEffect(() => {
+    if (highlight.moved) onMove?.();
+  }, [highlight.moved, query]);
   const moved = previewing && highlight.moved;
+  const steps = useContext(SearchStepsContext);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Freezes the order just shown, once per text.
   useLayoutEffect(() => {
     if (!moved || frozen.current) return;
@@ -434,10 +530,17 @@ export function SearchChoices({
     document.getElementById(highlight.rowId(key))?.getBoundingClientRect();
   const inView = (key: string) => {
     const content = resultsContent.current;
-    const box = key ? rowBox(key) : undefined;
-    if (!content || !box) return false;
+    const row = key ? document.getElementById(highlight.rowId(key)) : null;
+    if (!content || !row) return false;
+    const box = row.getBoundingClientRect();
     const view = content.getBoundingClientRect();
-    return box.bottom > view.top && box.top < view.bottom;
+    // A cut group's pinned heading covers the rows scrolling under it.
+    const heading = row
+      .closest(".search-palette-group")
+      ?.querySelector("[data-search-cut]")
+      ?.getBoundingClientRect();
+    const top = Math.max(view.top, heading?.bottom ?? view.top);
+    return box.bottom > top && box.top < view.bottom;
   };
   const keepPlace = () => {
     const content = resultsContent.current;
@@ -581,6 +684,7 @@ export function SearchChoices({
       content,
       key,
       label,
+      labelContent,
       detail,
       detailIcon: DetailIcon,
       detailIconLabel,
@@ -718,7 +822,9 @@ export function SearchChoices({
             label={
               <>
                 <span className="block truncate text-body-sm">
-                  <MatchedLabel label={label} positions={matches} />
+                  {labelContent ?? (
+                    <MatchedLabel label={label} positions={matches} />
+                  )}
                 </span>
                 {detail && (
                   <span
@@ -749,6 +855,7 @@ export function SearchChoices({
       </div>
     );
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: Hears Escape from the controls inside; the palette takes no input of its own.
     <div
       ref={palette}
       className="search-palette"
@@ -756,6 +863,20 @@ export function SearchChoices({
       data-search-footer={footer ? "" : undefined}
       data-search-peek={peek ? "" : undefined}
       {...highlight.listProps}
+      // Escape from anywhere in the palette, the field or a control beside
+      // it, leaves the caller's view first. A menu it opened closes alone.
+      onKeyDown={(event) => {
+        if (
+          event.key !== "Escape" ||
+          !onBack ||
+          !palette.current?.contains(event.target as Node)
+        )
+          return;
+        event.preventDefault();
+        event.stopPropagation();
+        onBack();
+        input.current?.focus();
+      }}
     >
       {scope && (
         <div className="search-palette-scope-row">
@@ -776,19 +897,26 @@ export function SearchChoices({
             chips?.length ? (
               <span className="search-palette-author-prefix">
                 {chips.map((chip) => (
-                  <button
+                  // A chosen filter, led by its guide row's dot; one click
+                  // removes it, as Backspace before the text edits it.
+                  <Button
                     key={chip.operand}
-                    type="button"
-                    className="search-palette-author-chip"
+                    variant="subtle"
+                    size="sm"
+                    data-search-filter-chip=""
                     data-operator={chip.operand
                       .slice(0, chip.operand.indexOf(":"))
                       .toLowerCase()}
                     aria-label={chip.label}
                     title={chip.title}
+                    // The field keeps focus, so typing carries on.
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() => onRemoveChip?.(chip)}
                   >
-                    <span aria-hidden="true">×</span> {chip.text}
-                  </button>
+                    <span className="search-filter-dot" aria-hidden="true" />
+                    <span className="search-filter-chip-text">{chip.text}</span>
+                    <XIcon size={16} aria-hidden="true" />
+                  </Button>
                 ))}
               </span>
             ) : undefined
@@ -811,6 +939,67 @@ export function SearchChoices({
           autoComplete="off"
           maxLength={256}
           onKeyDown={(event) => {
+            const native = event.nativeEvent;
+            // The person's result keys come first, so no other key in the
+            // field takes a chord Settings accepted for them. Bare Up and
+            // Down always move too, as a combobox's arrows do. As in the
+            // dispatcher, composition and AltGr never match.
+            if (!native.isComposing && native.keyCode !== 229) {
+              const step = (
+                [
+                  [steps.next, true],
+                  [steps.previous, false],
+                  [DEFAULT_SEARCH_STEPS.next, true],
+                  [DEFAULT_SEARCH_STEPS.previous, false],
+                ] as const
+              ).find(([binding]) => matches([binding], native, apple));
+              if (step && !native.getModifierState("AltGraph")) {
+                event.preventDefault();
+                restore.current = 0;
+                highlight.move(step[1]);
+                return;
+              }
+              // Other arrow chords, such as Shift+Down, edit the text.
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") return;
+              // Control's letter keys step after the person's keys, in place
+              // of the text field's own Emacs keys. Group keys only take
+              // over while there are groups to show. An app shortcut that
+              // runs inside search, such as one the person moved to one of
+              // these, comes first: the window's dispatcher sees the key
+              // after this field, so the step waits there and is skipped
+              // once a shortcut has claimed the key.
+              const control =
+                native.ctrlKey &&
+                !native.metaKey &&
+                !native.altKey &&
+                !native.shiftKey &&
+                !native.getModifierState("AltGraph")
+                  ? CONTROL_STEPS.get(event.key.toLowerCase())
+                  : undefined;
+              const host = event.currentTarget.ownerDocument.defaultView;
+              if (
+                host &&
+                control &&
+                (control[0] === "result" || (peek?.ranked && tabs.length))
+              ) {
+                const [kind, forward] = control;
+                const step = (later: Event) => {
+                  if (later !== native) return;
+                  host.removeEventListener("keydown", step);
+                  if (native.defaultPrevented) return;
+                  native.preventDefault();
+                  if (kind === "group") return void stepScope(forward);
+                  restore.current = 0;
+                  highlight.move(forward);
+                };
+                host.addEventListener("keydown", step);
+                // A key stopped before the window edits the text as before.
+                host.setTimeout(() =>
+                  host.removeEventListener("keydown", step),
+                );
+                return;
+              }
+            }
             const shortcutNumber = /^Digit([1-9])$/.exec(event.code)?.[1];
             if (
               !event.nativeEvent.isComposing &&
@@ -838,8 +1027,28 @@ export function SearchChoices({
               onEditLastChip?.();
               return;
             }
-            if (event.key === "ArrowDown" || event.key === "ArrowUp")
-              restore.current = 0;
+            // Tab completes a filter with its highlighted row, and stays in
+            // the field while its suggestions are still loading. With nothing
+            // to complete it moves on, so other controls stay in reach.
+            if (
+              completing &&
+              event.key === "Tab" &&
+              !event.shiftKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.altKey &&
+              !event.nativeEvent.isComposing
+            ) {
+              if (keys.includes(selected)) {
+                event.preventDefault();
+                if (!event.repeat) highlight.choose(selected);
+                return;
+              }
+              if (completionPending) {
+                event.preventDefault();
+                return;
+              }
+            }
             // Tab moves between groups, and stays in the field while results
             // are still landing. Past the first or last group it moves on as
             // Tab does, so retry and other controls stay in reach.
@@ -850,17 +1059,13 @@ export function SearchChoices({
               !event.metaKey &&
               !event.altKey
             ) {
-              const order = [undefined, ...tabs.map(({ label }) => label)];
-              const next =
-                order.indexOf(scoped?.label) + (event.shiftKey ? -1 : 1);
-              if (tabs.length ? next >= 0 && next < order.length : peek.busy) {
+              if (tabs.length ? stepScope(!event.shiftKey) : peek.busy)
                 event.preventDefault();
-                if (tabs.length) showScope(order[next]);
-              }
               return;
             }
-            // Escape from one group returns to Top results, not out of search.
-            if (event.key === "Escape" && scoped) {
+            // Escape from one group returns to Top results, or the first
+            // group, not out of search.
+            if (event.key === "Escape" && scoped && scoped.label !== home) {
               event.preventDefault();
               event.stopPropagation();
               showScope(undefined);
@@ -879,13 +1084,14 @@ export function SearchChoices({
             className="search-peek-rail"
             aria-label="Result groups"
             onKeyDown={(event) => {
-              if (event.key !== "Escape" || !scoped) return;
+              if (event.key !== "Escape" || !scoped || scoped.label === home)
+                return;
               event.preventDefault();
               event.stopPropagation();
               showScope(undefined);
             }}
           >
-            {[undefined, ...tabs].map((group, index) => (
+            {(home ? tabs : [undefined, ...tabs]).map((group, index) => (
               <Button
                 key={group?.label ?? ""}
                 id={`${peekPanelId(group?.label)}-filter`}
@@ -908,21 +1114,11 @@ export function SearchChoices({
                 />
                 {group?.label === "Direct messages"
                   ? "DMs"
-                  : group?.label === "Recent searches"
-                    ? "Recents"
-                    : (group?.label ??
-                      (query.trim() ? "Top results" : "Jump back in"))}
-                {/* A landing group has no count yet. */}
-                {(!group || group !== landing) && (
-                  <span className="search-peek-count">
-                    {group
-                      ? countOf(group)
-                      : `${ranked.reduce(
-                          (sum, item) =>
-                            sum + (item.browse ? 0 : resultRows(item).length),
-                          0,
-                        )}${ranked.some((item) => !item.browse && item.count?.endsWith("+")) ? "+" : ""}`}
-                  </span>
+                  : (group?.label ?? "Top results")}
+                {/* A landing group has no count yet. Top results has none:
+                  it shows only the first rows of each group. */}
+                {group && group !== landing && (
+                  <span className="search-peek-count">{countOf(group)}</span>
                 )}
                 {index === 1 && group !== landing && !!query.trim() && (
                   <Badge size="xs" tone="success">
@@ -986,9 +1182,25 @@ export function SearchChoices({
                       notice,
                       headingStatus,
                       why,
+                      reranked,
                       tone,
                       multiline,
                     }) => {
+                      const shown = truncated.get(label);
+                      const count = countOf(
+                        ranked.find((group) => group.label === label) ?? {
+                          label,
+                          destinations,
+                        },
+                      );
+                      // The heading's cut and rerank mark are hidden from
+                      // assistive technology, so the group describes them.
+                      const summary = [
+                        shown !== undefined && `Top ${shown} of ${count}`,
+                        reranked && "Reranked",
+                      ]
+                        .filter(Boolean)
+                        .join(", ");
                       const heading = (
                         <span
                           className={`navigation-section-label text-body text-secondary${headingStatus ? " truncate" : ""}`}
@@ -1003,11 +1215,8 @@ export function SearchChoices({
                                 aria-hidden="true"
                               >
                                 {" "}
-                                {countOf(
-                                  ranked.find(
-                                    (group) => group.label === label,
-                                  ) ?? { label, destinations },
-                                )}
+                                {shown !== undefined && `· Top ${shown} of `}
+                                {count}
                               </span>
                             )}
                           {why && (
@@ -1018,6 +1227,13 @@ export function SearchChoices({
                               {" "}
                               · {why}
                             </span>
+                          )}
+                          {reranked && (
+                            <SparklesIcon
+                              size={12}
+                              title="Reranked"
+                              className="search-peek-reranked"
+                            />
                           )}
                           {headingStatus && (
                             <span aria-hidden="true"> · {headingStatus}</span>
@@ -1030,6 +1246,11 @@ export function SearchChoices({
                           key={label}
                           role={hasControls ? "rowgroup" : "group"}
                           aria-label={label}
+                          aria-describedby={
+                            summary
+                              ? `${peekPanelId(label)}-summary`
+                              : undefined
+                          }
                           // A status-only group has no rows yet; busy states why.
                           aria-busy={
                             (!!headingStatus && !destinations.length) ||
@@ -1038,33 +1259,43 @@ export function SearchChoices({
                           className="search-palette-group"
                           data-tone={tone}
                         >
+                          {summary && (
+                            <span id={`${peekPanelId(label)}-summary`} hidden>
+                              {summary}
+                            </span>
+                          )}
                           <div className="navigation-section" data-buzz-ui="">
                             {!hideLabel && (
                               <div
                                 className="navigation-section-heading"
-                                data-search-action={
+                                // A cut group's heading stays in view while
+                                // its rows scroll, with the way to the rest.
+                                data-search-cut={
                                   truncated.has(label) || undefined
                                 }
                                 aria-hidden={hasControls || undefined}
                               >
                                 <h2 className="m-0 min-w-0 flex-1">
-                                  {truncated.has(label) ? (
-                                    <Button
-                                      variant="plain"
-                                      size="inline"
-                                      aria-label={`Show all ${label}`}
-                                      tabIndex={-1}
-                                      onMouseDown={(event) =>
-                                        event.preventDefault()
-                                      }
-                                      onClick={() => showScope(label)}
-                                    >
-                                      {heading}
-                                    </Button>
-                                  ) : (
-                                    heading
-                                  )}
+                                  {heading}
                                 </h2>
+                                {truncated.has(label) && (
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    aria-label={`Show all ${label}`}
+                                    tabIndex={-1}
+                                    onMouseDown={(event) =>
+                                      event.preventDefault()
+                                    }
+                                    onClick={() => showScope(label)}
+                                  >
+                                    Show all
+                                    <ArrowRightIcon
+                                      size={14}
+                                      aria-hidden="true"
+                                    />
+                                  </Button>
+                                )}
                               </div>
                             )}
                             <div className="navigation-section-rows">
@@ -1151,8 +1382,8 @@ export function SearchChoices({
           aria-hidden="true"
         >
           <span>
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> Move
+            <kbd>{formatBinding(steps.previous, apple).text}</kbd>
+            <kbd>{formatBinding(steps.next, apple).text}</kbd> Move
           </span>
           {ranked.length > 0 && (
             <span>
@@ -1166,10 +1397,21 @@ export function SearchChoices({
             </span>
           )}
           <span>
-            <kbd>↵</kbd> Open
+            <kbd>↵</kbd> {onBack ? "Add" : "Open"}
           </span>
+          {conversationShortcut && (
+            <span>
+              <kbd>{formatBinding(conversationShortcut, apple).text}</kbd> This
+              conversation
+            </span>
+          )}
           <span>
-            <kbd>esc</kbd> {scoped ? "Back to top" : "Close"}
+            <kbd>esc</kbd>{" "}
+            {onBack
+              ? "Back"
+              : scoped && scoped.label !== home
+                ? `Back to ${home ?? "top"}`
+                : "Close"}
           </span>
         </div>
       )}

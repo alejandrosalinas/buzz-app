@@ -23,6 +23,29 @@ export type FakeClaude = {
   model: string;
   /** The model each user message was taken on. */
   models: string[];
+  /** Its user settings file's env, which a test may rewrite as a running
+   * Claude reloads it. */
+  env: Record<string, string>;
+  /** Its flag layer's env, which `apply_flag_settings` replaces whole. */
+  flagEnv: Record<string, string> | undefined;
+  /** A managed policy's env, which outranks the flag layer. */
+  policyEnv?: Record<string, string>;
+  /** The env in effect: user, then flag, then policy. */
+  effective(): Record<string, string>;
+  /** The custom headers each user message was taken with. */
+  headers: (string | undefined)[];
+  /** When set, an `apply_flag_settings` that sets env is refused. */
+  refuseEnv?: boolean;
+  /** Control requests of this subtype, or that this picks, go unanswered
+   * until `answerLate()`. */
+  withhold?:
+    | string
+    | ((request: Record<string, unknown>) => boolean)
+    | undefined;
+  /** Takes the withheld control requests, as a late Claude would. */
+  answerLate(): void;
+  /** The `account.apiProvider` its `initialize` answer reports. */
+  apiProvider: string;
   /** When set, a turn stays open until `finish()`. */
   hold: boolean;
   killed: boolean;
@@ -78,17 +101,30 @@ export function signedOut(options: HostProcessOptions = {}): HostProcess {
 
 /** A spawn whose Claude processes answer like Claude, on an Apple silicon
  * Mac. Sessions named in `known` (or created by a process) can be resumed;
- * others fail to load. */
-export function fakeSpawn(known = new Set<string>()) {
+ * others fail to load. Each starts with `env` as its settings' env and
+ * reports `apiProvider` at `initialize`; `claude.sh`'s inherited-headers
+ * check answers `inherited`, or exits 1 for "fail". */
+export function fakeSpawn(
+  known = new Set<string>(),
+  env: Readonly<Record<string, string>> = {},
+  {
+    apiProvider = "firstParty",
+    inherited = "unset",
+  }: { apiProvider?: string; inherited?: "set" | "unset" | "fail" } = {},
+) {
   const processes: FakeClaude[] = [];
   const spawn = async (id: string, options: HostProcessOptions = {}) => {
-    if (id === "platform") {
-      options.onStdout?.("Darwin arm64\n");
+    if (id === "platform" || id === "inherited-headers") {
+      const fails = id === "inherited-headers" && inherited === "fail";
+      if (!fails)
+        options.onStdout?.(
+          id === "platform" ? "Darwin arm64\n" : `${inherited}\n`,
+        );
       return {
         write: async () => {},
         end: async () => {},
         kill: async () => {},
-        exited: Promise.resolve(0),
+        exited: Promise.resolve(fails ? 1 : 0),
       };
     }
     // No setup of the person's own: Claude runs with Buzz's key.
@@ -117,9 +153,15 @@ export function fakeSpawn(known = new Set<string>()) {
       efforts: [],
       model: flag("--model") ?? "default",
       models: [],
+      env: { ...env },
+      flagEnv: undefined,
+      effective: () => ({ ...fake.env, ...fake.flagEnv, ...fake.policyEnv }),
+      apiProvider,
+      headers: [],
       hold: false,
       killed: false,
       exitOnKill: true,
+      answerLate: () => {},
       actedAs: [],
       emit(message) {
         if (alive) options.onStdout?.(`${JSON.stringify(message)}\n`);
@@ -150,11 +192,28 @@ export function fakeSpawn(known = new Set<string>()) {
         resolveExit(code);
       },
     };
+    const withheld: Record<string, unknown>[] = [];
+    let sent: string | undefined;
+    fake.answerLate = () => {
+      const withhold = fake.withhold;
+      fake.withhold = undefined;
+      for (const message of withheld.splice(0)) take(message);
+      fake.withhold = withhold;
+    };
     processes.push(fake);
     const take = (message: Record<string, unknown>) => {
       fake.received.push(message);
       if (message.type === "control_request") {
         const request = message.request as Record<string, unknown>;
+        const { withhold } = fake;
+        if (
+          typeof withhold === "function"
+            ? withhold(request)
+            : request.subtype === withhold
+        ) {
+          withheld.push(message);
+          return;
+        }
         const level = (request.settings as Record<string, unknown> | undefined)
           ?.effortLevel;
         if (
@@ -169,6 +228,22 @@ export function fakeSpawn(known = new Set<string>()) {
           typeof request.model === "string"
         )
           fake.model = request.model;
+        const env = (request.settings as Record<string, unknown> | undefined)
+          ?.env as Record<string, string> | undefined;
+        if (request.subtype === "apply_flag_settings" && env) {
+          if (fake.refuseEnv) {
+            fake.emit({
+              type: "control_response",
+              response: {
+                subtype: "error",
+                request_id: message.request_id,
+                error: "refused",
+              },
+            });
+            return;
+          }
+          fake.flagEnv = { ...env };
+        }
         if (request.subtype === "interrupt" && fake.interruptError) {
           fake.emit({
             type: "control_response",
@@ -192,11 +267,36 @@ export function fakeSpawn(known = new Set<string>()) {
                       effort: fake.effort,
                       model: resolved(fake.model),
                     },
+                    effective: { env: fake.effective() },
+                    sources: [
+                      { source: "userSettings", settings: { env: fake.env } },
+                      ...(fake.flagEnv
+                        ? [
+                            {
+                              source: "flagSettings",
+                              settings: { env: fake.flagEnv },
+                            },
+                          ]
+                        : []),
+                      ...(fake.policyEnv
+                        ? [
+                            {
+                              source: "policySettings",
+                              settings: { env: fake.policyEnv },
+                            },
+                          ]
+                        : []),
+                    ],
                   },
                 }
               : {}),
             ...(request.subtype === "initialize"
-              ? { response: { models: MODELS } }
+              ? {
+                  response: {
+                    models: MODELS,
+                    account: { apiProvider: fake.apiProvider },
+                  },
+                }
               : {}),
           },
         });
@@ -211,6 +311,9 @@ export function fakeSpawn(known = new Set<string>()) {
       fake.prompts.push(content);
       fake.efforts.push(fake.effort);
       fake.models.push(fake.model);
+      // As Claude does, a value no settings set any more stays in its env.
+      sent = fake.effective().ANTHROPIC_CUSTOM_HEADERS ?? sent;
+      fake.headers.push(sent);
       if (!started) {
         started = true;
         known.add(session);

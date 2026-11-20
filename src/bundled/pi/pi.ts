@@ -4,6 +4,7 @@ import { writeJSON } from "../../features/agent-protection/json-stream";
 // go both ways: the plugin asks the host to run turns, and the host asks the
 // plugin to run the Buzz tools, so the process holds no Buzz key.
 import type { AgentProtection } from "../../features/agent-protection/service";
+import type { GatewayProfile } from "../../features/agents/gateway/contract";
 import {
   protectionChannel,
   protectionEnvironment,
@@ -48,8 +49,40 @@ export type PiHookCall = Readonly<{
   event: "beforeTool" | "afterTool";
   input: unknown;
 }>;
+/** The host asks for a gateway mode run's binding and Buzz context before it
+ * submits the run, and whether the run's binding is still admitted before
+ * each of its model requests. */
+export type PiGatewayCall = Readonly<
+  | {
+      op: "bind";
+      agent: string;
+      event: "resume" | "reset" | "new_generation" | "standalone";
+      saved: unknown;
+      turn: unknown;
+    }
+  | { op: "admit"; agent: string; binding: unknown }
+  /** The gateway refused a request made at that eligibility revision. */
+  | { op: "deny"; agent: string; revision: unknown }
+>;
+export type PiGatewayAnswer =
+  | {
+      ok: true;
+      binding?: unknown;
+      bundle?: Record<string, string>;
+      persist?: boolean;
+      /** The eligibility revision an admission holds at. */
+      revision?: number;
+      /** Where an admitted request goes: the gateway's root for Pi, ahead
+       * of each protocol's path, and the build's header profile. */
+      root?: string;
+      profile?: GatewayProfile;
+      /** Whether a refusal dropped the route's current access. */
+      applied?: boolean;
+    }
+  | { ok: false; message: string };
 type Handlers = Readonly<{
   hook?(call: PiHookCall): Promise<unknown>;
+  gateway?(call: PiGatewayCall, signal: AbortSignal): Promise<PiGatewayAnswer>;
   tool(call: ToolCall, signal: AbortSignal): Promise<ToolResult>;
   event(event: PiEvent): void;
   prompt?(call: {
@@ -280,7 +313,8 @@ export class Pi {
       else if (
         (message.method === "tool" ||
           message.method === "prompt" ||
-          message.method === "hook") &&
+          message.method === "hook" ||
+          message.method === "gateway") &&
         message.id !== undefined
       )
         void this.answer(
@@ -425,28 +459,38 @@ export class Pi {
   private async answer(
     connection: Connection,
     id: number | string,
-    method: "tool" | "prompt" | "hook",
+    method: "tool" | "prompt" | "hook" | "gateway",
     params: unknown,
   ) {
     let message: Message;
-    // A stopped run or a lost host cancels the Buzz tool it called.
+    // A stopped run or a lost host cancels the Buzz tool or gateway check it
+    // called.
     const controller = new AbortController();
     const signal = AbortSignal.any([
       controller.signal,
       connection.lifetime.signal,
     ]);
-    if (method === "tool") connection.checks.set(id, controller);
+    if (method === "tool" || method === "gateway")
+      connection.checks.set(id, controller);
     try {
       message = {
         id,
         result:
           method === "hook"
             ? ((await this.handlers.hook?.(params as PiHookCall)) ?? null)
-            : method === "tool"
-              ? await this.handlers.tool(params as ToolCall, signal)
-              : ((await this.handlers.prompt?.(
-                  params as { agent: string; request: string },
-                )) ?? false),
+            : method === "gateway"
+              ? ((await this.handlers.gateway?.(
+                  params as PiGatewayCall,
+                  signal,
+                )) ?? {
+                  ok: false,
+                  message: "The model gateway is not available here",
+                })
+              : method === "tool"
+                ? await this.handlers.tool(params as ToolCall, signal)
+                : ((await this.handlers.prompt?.(
+                    params as { agent: string; request: string },
+                  )) ?? false),
       };
     } catch (error) {
       message = {

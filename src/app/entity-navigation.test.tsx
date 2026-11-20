@@ -72,15 +72,17 @@ vi.mock("../plugins/modules", async (original) => {
   };
 });
 // Counts the sidebar inventory's renders.
-const soloRenders = vi.hoisted(() => ({ count: 0 }));
-vi.mock("../bundled/channels/SoloInventory", async (original) => {
+const inventoryRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../bundled/channels/ChannelInventory", async (original) => {
   const actual =
-    await original<typeof import("../bundled/channels/SoloInventory")>();
+    await original<typeof import("../bundled/channels/ChannelInventory")>();
   return {
     ...actual,
-    SoloInventory: (props: Parameters<typeof actual.SoloInventory>[0]) => {
-      soloRenders.count++;
-      return <actual.SoloInventory {...props} />;
+    ChannelInventory: (
+      props: Parameters<typeof actual.ChannelInventory>[0],
+    ) => {
+      inventoryRenders.count++;
+      return <actual.ChannelInventory {...props} />;
     },
   };
 });
@@ -902,7 +904,7 @@ it("opens and closes a thread without rendering the sidebar", async () => {
   await waitFor(() =>
     expect(current.navigation.snapshot().status).toBe("opened"),
   );
-  await waitFor(() => expect(soloRenders.count).toBeGreaterThan(0));
+  await waitFor(() => expect(inventoryRenders.count).toBeGreaterThan(0));
   const opened = (entry: string) =>
     waitFor(() =>
       expect(current.navigation.snapshot()).toMatchObject({
@@ -912,7 +914,7 @@ it("opens and closes a thread without rendering the sidebar", async () => {
     );
   // Let the sidebar settle before counting.
   await act(async () => {});
-  const settled = soloRenders.count;
+  const settled = inventoryRenders.count;
   const start = current.navigation.snapshot().entry.id;
   act(() => {
     void current.navigation.open({
@@ -927,12 +929,12 @@ it("opens and closes a thread without rendering the sidebar", async () => {
   await opened(thread);
   act(() => current.navigation.back());
   await opened(start);
-  expect(soloRenders.count).toBe(settled);
+  expect(inventoryRenders.count).toBe(settled);
   // Another conversation is a destination, which the sidebar shows.
   act(() => {
     void current.navigation.open({ ...alpha, channelId: "beta" });
   });
-  await waitFor(() => expect(soloRenders.count).toBeGreaterThan(settled));
+  await waitFor(() => expect(inventoryRenders.count).toBeGreaterThan(settled));
 });
 it("offers to join a code-less link's community, or opens it once joined", async () => {
   const queue = [
@@ -1111,11 +1113,9 @@ it("lists active primary pages in the app dock", async () => {
   // Disabling optional pages removes their entries without hiding Messages.
   for (const id of ["buzz.inbox", "buzz.bestie", "buzz.repos"])
     await act(() => current.plugins.change("disable", id));
+  // Without sidebar pages, the sidebar lists no empty Plugins section.
   expect(
-    within(screen.getByRole("navigation", { name: "Pages" })).queryByRole(
-      "button",
-      { name: "Activity" },
-    ),
+    screen.queryByRole("navigation", { name: "Pages" }),
   ).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "Bestie" })).not.toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Messages" })).toBeInTheDocument();

@@ -272,7 +272,21 @@
     position: relative;
     justify-content: center;
   }
-  .buzz-radio[data-variant="tile"] {
+  .buzz-choice[data-variant="row"] {
+    position: relative;
+    padding: var(--space-2) var(--space-3);
+    padding-inline-end: var(--size-control);
+    border-radius: var(--radius-control);
+  }
+  .buzz-choice[data-variant="row"]:has([data-checked]) {
+    background: var(--interaction-selected);
+    color: var(--interaction-selected-text);
+  }
+  .buzz-choice[data-variant="row"]:not(:has([data-disabled])):hover {
+    background: var(--interaction-hover);
+  }
+  .buzz-radio[data-variant="tile"],
+  .buzz-radio[data-variant="row"] {
     position: absolute;
     inset: 0;
     width: 100%;
@@ -280,6 +294,12 @@
     border: 0;
     border-radius: inherit;
     background: transparent;
+  }
+  .buzz-radio-check {
+    position: absolute;
+    inset-inline-end: var(--space-3);
+    display: flex;
+    color: var(--interaction-selected-text);
   }
   html[data-keyboard-navigation]
     :is(

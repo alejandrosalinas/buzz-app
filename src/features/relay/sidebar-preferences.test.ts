@@ -14,6 +14,7 @@ import { createRelaySession } from "./session";
 import {
   projectSidebarPreferences,
   readSidebarPreferences,
+  workspaceSectionOrder,
 } from "./sidebar-preferences";
 import { keypair, signed, scriptedTransport, flush, roster } from "./testing";
 import type { LiveCallbacks } from "./live";
@@ -37,6 +38,36 @@ const expected = {
   starred: ["general"],
   muted: [],
 };
+
+it.each([
+  { saved: [], workspaces: ["group:work", "group:later"] },
+  { saved: ["group:later"], workspaces: ["group:later", "group:work"] },
+])(
+  "inserts new workspaces in a saved layout with groups $saved",
+  ({ saved, workspaces }) => {
+    const sectionOrder = [
+      "channels",
+      "starred",
+      ...saved,
+      "solo",
+      "forums",
+      "dms",
+    ];
+    const sections = [
+      ...groups.sections,
+      { id: "later", name: "Later", order: 1 },
+    ];
+    expect(workspaceSectionOrder({ sections, sectionOrder })).toEqual([
+      "pages",
+      "channels",
+      "starred",
+      ...workspaces,
+      "solo",
+      "forums",
+      "dms",
+    ]);
+  },
+);
 
 it("decodes four individually bounded populated preferences beyond the former aggregate limit", async () => {
   const viewer = keypair();
@@ -109,39 +140,21 @@ it("reads legacy preferences through the production session, transport, and boun
   const upstream = vi.fn<typeof fetch>(async (input, init) => {
     expect(String(input)).toBe("https://primary.example/query");
     const filters = JSON.parse(String(init?.body));
-    expect(filters).toEqual([
-      {
-        kinds: [30078],
-        authors: [viewer.pubkey],
-        "#d": ["channel-sections"],
-        limit: 1,
-      },
-      {
-        kinds: [30078],
-        authors: [viewer.pubkey],
-        "#d": ["channel-stars"],
-        limit: 1,
-      },
-      {
-        kinds: [30078],
-        authors: [viewer.pubkey],
-        "#d": ["channel-mutes"],
-        limit: 1,
-      },
-      {
-        kinds: [30078],
-        authors: [viewer.pubkey],
-        "#d": ["channel-sort"],
-        limit: 1,
-      },
-      {
-        kinds: [30078],
-        authors: [viewer.pubkey],
-        "#d": ["channel-filter"],
-        limit: 1,
-      },
-    ]);
-    return Response.json(result);
+    const coordinates = filters.flatMap(
+      (filter: { "#d"?: string[] }) => filter["#d"] ?? [],
+    );
+    if (
+      !coordinates.length ||
+      coordinates.some((coordinate: string) => coordinate.startsWith("groups:"))
+    )
+      return Response.json([]);
+    return Response.json(
+      result.filter((event) =>
+        event.tags.some(
+          ([key, value]) => key === "d" && coordinates.includes(value),
+        ),
+      ),
+    );
   });
   let handler: RequestListener = () => {};
   const server = createServer((req, res) => handler(req, res));
@@ -182,8 +195,35 @@ it("reads legacy preferences through the production session, transport, and boun
       body: JSON.stringify(value),
     });
   try {
-    expect(await owner.session.sidebarPreferences.read()).toEqual(expected);
-    expect(upstream).toHaveBeenCalledOnce();
+    const legacy = await owner.session.sidebarPreferences.read();
+    expect(legacy).toEqual({
+      ...expected,
+      sectionOrder: [],
+    });
+    expect(workspaceSectionOrder(legacy)).toEqual([
+      "pages",
+      "solo",
+      "starred",
+      "group:work",
+      "channels",
+      "forums",
+      "dms",
+    ]);
+    const reads = upstream.mock.calls.flatMap(([, init]) =>
+      (JSON.parse(String(init?.body ?? "[]")) as { "#d"?: string[] }[]).flatMap(
+        (filter) => filter["#d"] ?? [],
+      ),
+    );
+    expect(reads).toEqual(
+      expect.arrayContaining([
+        "channel-sections",
+        "channel-workspaces",
+        "channel-stars",
+        "channel-mutes",
+        "channel-sort",
+        "channel-filter",
+      ]),
+    );
     result = [
       ...records,
       encrypted("channel-mutes", {
@@ -197,6 +237,7 @@ it("reads legacy preferences through the production session, transport, and boun
     ];
     expect(await owner.session.sidebarPreferences.read()).toEqual({
       ...expected,
+      sectionOrder: [],
       muted: ["general"],
       sort: { channels: "recent" },
     });
@@ -299,8 +340,9 @@ it("reads legacy preferences through the production session, transport, and boun
     }
     result = [];
     expect(await owner.session.sidebarPreferences.read()).toEqual({
-      sections: [],
-      assignments: {},
+      sections: expected.sections,
+      assignments: expected.assignments,
+      sectionOrder: [],
       starred: [],
       muted: [],
     });

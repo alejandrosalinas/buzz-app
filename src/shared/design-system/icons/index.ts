@@ -5,6 +5,7 @@ export type { DefinedIcon } from "./createDecorativeIcon";
 import { BestieMarkArtwork } from "./BestieMark";
 import { BlockLogoArtwork } from "./BlockLogo";
 import { GitHubIssueArtwork } from "./GitHubIssue";
+import { GitPullRequestApprovedArtwork } from "./GitPullRequestApproved";
 import { OneDriveLogoArtwork } from "./OneDriveLogo";
 import {
   BuilderlabLogoArtwork,
@@ -243,6 +244,17 @@ export const GitPullRequestIcon = defineIcon(
   "tabler",
   TablerGitPullRequestIcon,
 );
+export const GitPullRequestApprovedIcon = defineIcon(
+  "custom",
+  GitPullRequestApprovedArtwork,
+  {
+    meaning: "Approved pull request",
+    category: "Product mark",
+    provenance:
+      "Buzz-owned mark: Tabler Git Pull Request geometry with its head dot replaced by a solid check badge.",
+    intendedSizes: [{ width: 16, height: 16 }],
+  },
+);
 import TablerGithubLogoIcon from "@tabler/icons-react/dist/esm/icons/IconBrandGithub.mjs";
 export const GithubLogoIcon = defineIcon("tabler", TablerGithubLogoIcon);
 import TablerGitlabLogoIcon from "@tabler/icons-react/dist/esm/icons/IconBrandGitlab.mjs";
@@ -360,6 +372,8 @@ export const TerminalWindowIcon = defineIcon(
 );
 import TablerTrashIcon from "@tabler/icons-react/dist/esm/icons/IconTrash.mjs";
 export const TrashIcon = defineIcon("tabler", TablerTrashIcon);
+import TablerUserCircleIcon from "@tabler/icons-react/dist/esm/icons/IconUserCircle.mjs";
+export const UserCircleIcon = defineIcon("tabler", TablerUserCircleIcon);
 import TablerUserIcon from "@tabler/icons-react/dist/esm/icons/IconUser.mjs";
 export const UserIcon = defineIcon("tabler", TablerUserIcon);
 import TablerShareIcon from "@tabler/icons-react/dist/esm/icons/IconShare2.mjs";

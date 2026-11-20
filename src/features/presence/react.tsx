@@ -49,7 +49,7 @@ export function PresenceIndicator({
   // Missing or stale evidence is not proof that someone is offline.
   if (status === "unknown") return null;
   const label = {
-    online: "Active",
+    online: "Online",
     away: "Away",
     offline: "Offline",
   }[status];

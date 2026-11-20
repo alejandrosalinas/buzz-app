@@ -743,6 +743,73 @@ pub(crate) async fn relay_publish_read_state(
     .await
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ThreadFollowsIntent {
+    slot: String,
+    created_at: u64,
+    payload: serde_json::Value,
+}
+
+#[tauri::command]
+pub(crate) async fn relay_decode_thread_follows(
+    host: tauri::State<'_, IdentityHost>,
+    community: String,
+    events: Vec<serde_json::Value>,
+) -> Result<serde_json::Value> {
+    origin(&community)?;
+    host.decode_thread_follows(events).await
+}
+
+#[tauri::command]
+pub(crate) async fn relay_sign_thread_follows(
+    host: tauri::State<'_, IdentityHost>,
+    community: String,
+    intent: ThreadFollowsIntent,
+) -> Result<serde_json::Value> {
+    origin(&community)?;
+    host.sign_thread_follows(intent.slot, intent.created_at, intent.payload)
+        .await
+}
+
+/// The exact body of a bounded own thread-follows event this host can read back.
+pub(crate) async fn readable_own_follows(
+    host: &IdentityHost,
+    event: serde_json::Value,
+) -> Result<String> {
+    let body = serde_json::to_string(&event).map_err(|_| "Invalid thread-follows event")?;
+    if body.len() > 64 * 1024 {
+        return Err("Invalid thread-follows event".into());
+    }
+    if host.decode_thread_follows(vec![event]).await?[0]["payload"].is_null() {
+        return Err("Invalid thread-follows event".into());
+    }
+    Ok(body)
+}
+
+/// Like read-state publication: forward only an exact, readable own
+/// thread-follows coordinate, never through the general event writer.
+#[tauri::command]
+pub(crate) async fn relay_publish_thread_follows(
+    host: tauri::State<'_, IdentityHost>,
+    fi: tauri::State<'_, FederatedIdentity>,
+    community: String,
+    event: serde_json::Value,
+) -> Result<RelayResponse> {
+    let url = request_url(&community, "/events", "POST")?;
+    let body = readable_own_follows(host.inner(), event).await?;
+    send(
+        host.inner(),
+        Some(fi.inner()),
+        url,
+        "POST",
+        Some(body),
+        true,
+        MAX_RESPONSE,
+    )
+    .await
+}
+
 #[derive(Serialize)]
 pub(crate) struct RelayResponse {
     status: u16,

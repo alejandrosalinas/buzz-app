@@ -24,17 +24,19 @@ for (const cachedStartup of [false, true]) {
       const sidebar = page.getByRole("navigation", {
         name: "Subscribed channels",
       });
-      // Save the settled combined inventory, before cold-loading it with Team
-      // preferences held. Solo's two independent reads also change its height.
-      const solo = page.getByRole("navigation", { name: "Solo conversations" });
-      // The empty inventory retains its creation action before scroll restoration.
+      // Establish both the settled roster and preferences before saving the
+      // warm layout that this journey optionally restores on startup.
       await expect(
-        solo.getByRole("button", { name: "New chat", exact: true }),
-      ).toBeVisible();
-      await expect(solo.getByRole("status")).toHaveCount(0);
-      await expect(
-        solo.getByText("Loading workspaces…", { exact: true }),
-      ).toHaveCount(0);
+        sidebar.locator('[data-sidebar-section="solo"]').getByRole("button", {
+          name: "New Solo chat",
+          exact: true,
+        }),
+      ).toBeEnabled();
+      const panel = page.getByRole("complementary", {
+        name: "Sidebar",
+        exact: true,
+      });
+      await expect(panel).not.toHaveAttribute("aria-busy", "true");
       // Save a nonzero position, then cold-load that community with preferences held.
       await sidebar.evaluate((element) => {
         element.scrollTop = 900;
@@ -82,10 +84,6 @@ for (const cachedStartup of [false, true]) {
           .poll(() => sidebar.locator("[data-channel-id]").count())
           .toBeGreaterThan(100);
         await expect.poll(() => pendingRoutes.length).toBeGreaterThan(0);
-        const panel = page.getByRole("complementary", {
-          name: "Sidebar",
-          exact: true,
-        });
         await expect(panel).toHaveAttribute("aria-busy", "true");
         await expect(
           page.getByText("Updating sidebar details…", { exact: true }),

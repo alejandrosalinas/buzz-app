@@ -112,7 +112,7 @@ test("group icons resolve custom media without overlapping labels, and the move 
   await row.focus();
   await page.keyboard.press("Shift+F10");
   const move = page.getByRole("menuitem", {
-    name: "Move channel",
+    name: "Move to…",
     exact: true,
   });
   const icon = move.locator(".buzz-menu-icon svg");
@@ -124,7 +124,7 @@ test("group icons resolve custom media without overlapping labels, and the move 
   await move.focus();
   await page.keyboard.press("ArrowRight");
   const menu = page.getByRole("menu", {
-    name: `Move ${channelName} to section`,
+    name: `Move ${channelName} to workspace`,
     exact: true,
   });
   const work = menu.getByRole("menuitemradio", { name: "Work", exact: true });
@@ -167,9 +167,9 @@ test("group icons resolve custom media without overlapping labels, and the move 
   await menu
     .getByRole("menuitem", { name: "Create new…", exact: true })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Move to new section" });
+  const dialog = page.getByRole("dialog", { name: "Move to new workspace" });
   const field = dialog.getByRole("textbox", {
-    name: "Section name",
+    name: "Name",
     exact: true,
   });
   await expect(field).toBeFocused();
@@ -180,8 +180,9 @@ test("group icons resolve custom media without overlapping labels, and the move 
     );
   });
   await expect(field).toBeFocused();
-  await expect(dialog.locator("label")).toHaveCount(0);
-  await expect(dialog).not.toHaveAttribute("aria-describedby");
+  await expect(dialog).toHaveAccessibleDescription(
+    "Set defaults for new conversations.",
+  );
   for (const width of [1440, 360]) {
     await page.setViewportSize({ width, height: 950 });
     const layout = await dialog.evaluate((element) => {
@@ -227,15 +228,13 @@ test("section labels fade on overflow and recover when widened", async ({
   });
   const row = sidebar.locator('[data-channel-id="beta"]');
   await row.click({ button: "right" });
-  await page
-    .getByRole("menuitem", { name: "Move channel", exact: true })
-    .hover();
+  await page.getByRole("menuitem", { name: "Move to…", exact: true }).hover();
   await page
     .getByRole("menuitem", { name: "Create new…", exact: true })
     .click();
-  const dialog = page.getByRole("dialog", { name: "Move to new section" });
+  const dialog = page.getByRole("dialog", { name: "Move to new workspace" });
   const name = "Interface gang collaboration";
-  const field = dialog.getByRole("textbox", { name: "Section name" });
+  const field = dialog.getByRole("textbox", { name: "Name" });
   // The menu-to-dialog handoff owns initial focus; mounting alone does not
   // mean WebKit's keyboard insertion has its final destination.
   await expect(field).toBeFocused();

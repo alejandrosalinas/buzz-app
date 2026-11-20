@@ -59,6 +59,14 @@
   container: solo-workspace-header / inline-size;
 }
 @container solo-workspace-header (max-width: 9rem) {
+  .workspaceHeader > [class~="navigation-section-heading"] {
+    flex-wrap: wrap;
+  }
+  .workspaceHeader [class~="navigation-section-heading-label"] {
+    flex-basis: 100%;
+  }
+}
+@container solo-workspace-header (max-width: 9rem) {
   .workspaceHeader [data-solo-workspace-new-task] {
     display: none;
   }
@@ -170,11 +178,16 @@
   [data-context-menu-present],
   :has(:focus-visible),
   :has([aria-expanded="true"][aria-haspopup="menu"])
-):not(:has([aria-current="page"]))::before {
+):not(:has([aria-current="page"], [data-spring-loaded="on"]))::before {
   background: var(--affordance-panel-hover);
 }
-.organizedRow:has([aria-current="page"])::before {
+/* A spring-loaded file drag selects the row until it opens or blinks off. */
+.organizedRow:has([aria-current="page"], [data-spring-loaded="on"])::before {
   background: var(--surface-sidebar-selected);
+}
+/* A composed chat has no row fill, so its button keeps the drag's fill. */
+.organizedRow:not(.composedChat *) [data-spring-loaded] {
+  background-color: transparent;
 }
 /* Composed workspace chats share the task card's complete interaction surface. */
 .composedChat .organizedRow::before {

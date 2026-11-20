@@ -539,7 +539,7 @@ it.each(["member", "guest"] as const)(
       undefined,
       role,
     );
-    await screen.findByRole("menuitem", { name: /Mark (unread|read)/ });
+    await screen.findByRole("menuitem", { name: /Mark as (unread|read)/ });
     expect(
       screen.queryByRole("menuitem", { name: "Delete message" }),
     ).toBeNull();
@@ -548,7 +548,7 @@ it.each(["member", "guest"] as const)(
 
 it("does not expose edit or delete for another person's message", async () => {
   await fixture(false);
-  await screen.findByRole("menuitem", { name: /Mark (unread|read)/ });
+  await screen.findByRole("menuitem", { name: /Mark as (unread|read)/ });
   expect(screen.queryByRole("menuitem", { name: "Edit message" })).toBeNull();
   expect(screen.queryByRole("menuitem", { name: "Delete message" })).toBeNull();
 });
@@ -699,7 +699,9 @@ it("reverses an own message force from its menu without changing notification el
       forced: false,
     },
   );
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Mark unread" }));
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Mark as unread" }),
+  );
   await waitFor(() =>
     expect(
       h.owner.session.unread.attention("room", h.original.id),
@@ -717,7 +719,9 @@ it("reverses an own message force from its menu without changing notification el
     "local-only",
   );
   fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Mark read" }));
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Mark as read" }),
+  );
   await waitFor(() =>
     expect(h.owner.session.unread.attention("room", h.original.id).forced).toBe(
       false,
@@ -730,7 +734,7 @@ it("reverses an own message force from its menu without changing notification el
   expect(h.owner.session.unread.snapshot(channelTarget).manual).toBe("none");
   fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
   expect(
-    await screen.findByRole("menuitem", { name: "Mark unread" }),
+    await screen.findByRole("menuitem", { name: "Mark as unread" }),
   ).toBeVisible();
   expect(h.publications).toHaveLength(0);
 });
@@ -757,7 +761,9 @@ it.each(["member", "guest"] as const)(
     expect(h.owner.session.unread.attention("room", h.original.id).unread).toBe(
       true,
     );
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Mark read" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Mark as read" }),
+    );
     await waitFor(() =>
       expect(
         h.owner.session.unread.attention("room", h.original.id).unread,
@@ -766,7 +772,7 @@ it.each(["member", "guest"] as const)(
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Mark unread" }),
+      await screen.findByRole("menuitem", { name: "Mark as unread" }),
     );
     await waitFor(() =>
       expect(
@@ -870,14 +876,14 @@ it("keeps showing Follow thread when the choice cannot be saved", async () => {
       await screen.findByRole("menuitem", { name: "Follow thread" }),
     );
     expect(setItem).toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not save thread follow. Try again.",
+    );
   } finally {
     setItem.mockRestore();
   }
   expect(h.owner.session.unread.following("room", h.original.id)).toBe(false);
   expect(savedFollows()).toEqual([]);
-  expect(screen.getByRole("alert")).toHaveTextContent(
-    "Could not save thread follow. Try again.",
-  );
   fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
   fireEvent.click(
     await screen.findByRole("menuitem", { name: "Follow thread" }),
@@ -1140,7 +1146,7 @@ it("deletes a failed send from this device without publishing, so no restart res
   });
   expect(screen.queryByRole("menuitem", { name: "Edit message" })).toBeNull();
   expect(
-    screen.queryByRole("menuitem", { name: /Mark (unread|read)|Follow/ }),
+    screen.queryByRole("menuitem", { name: /Mark as (unread|read)|Follow/ }),
   ).toBeNull();
   fireEvent.click(remove);
   const confirmation = await screen.findByRole("alertdialog", {
@@ -1627,7 +1633,7 @@ it("offers no read action on an agents-audience message", async () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "Read actions" }));
   expect(
-    await screen.findAllByRole("menuitem", { name: /^Mark (un)?read$/ }),
+    await screen.findAllByRole("menuitem", { name: /^Mark as (un)?read$/ }),
   ).toHaveLength(1);
 });
 
@@ -1691,7 +1697,7 @@ async function heldUnreadAction(action: "read" | "unread") {
   const mounted = render(surface());
   fireEvent.click(screen.getByRole("button", { name: "Read actions" }));
   fireEvent.click(
-    await screen.findByRole("menuitem", { name: `Mark ${action}` }),
+    await screen.findByRole("menuitem", { name: `Mark as ${action}` }),
   );
   expect(mutation).toHaveBeenCalledExactlyOnceWith("room", row.id);
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
@@ -1756,7 +1762,7 @@ it("keeps a new visit's failure when an older visit finishes later", async () =>
     h.mutation.mockRejectedValueOnce(new Error("Current visit failed"));
     fireEvent.click(screen.getByRole("button", { name: "Read actions" }));
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Mark unread" }),
+      await screen.findByRole("menuitem", { name: "Mark as unread" }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Current visit failed",

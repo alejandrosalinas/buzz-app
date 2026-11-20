@@ -14,8 +14,9 @@ import {
 
 const secret = generateSecretKey();
 const id = "12345678-1234-1234-1234-123456789abc";
+const emptyWorkspace = { sections: [], assignments: {} };
 const intent = { channelId: "alpha", createSection: { id, name: " Launch " } };
-function event(blob, coordinate = "channel-sections") {
+function event(blob, coordinate = "channel-workspaces") {
   const key = nip44.v2.utils.getConversationKey(secret, getPublicKey(secret));
   try {
     return finalizeEvent(
@@ -23,7 +24,14 @@ function event(blob, coordinate = "channel-sections") {
         kind: 30078,
         created_at: 5,
         tags: [["d", coordinate]],
-        content: nip44.v2.encrypt(JSON.stringify(blob), key),
+        content: nip44.v2.encrypt(
+          JSON.stringify(
+            coordinate === "channel-workspaces"
+              ? { sectionOrder: [], ...blob }
+              : blob,
+          ),
+          key,
+        ),
       },
       secret,
     );
@@ -39,7 +47,7 @@ function decode(record) {
     key.fill(0);
   }
 }
-it("creates and assigns together, imports legacy fields into registers and keeps retry idempotent", () => {
+it("creates and assigns together in one compact record and keeps retry idempotent", () => {
   const blob = {
     version: 1,
     future: { enabled: true },
@@ -47,18 +55,16 @@ it("creates and assigns together, imports legacy fields into registers and keeps
     assignments: { beta: "work", hidden: "missing" },
   };
   const created = prepareSidebarAssignment([event(blob)], intent, secret);
-  const { meta, ...projection } = decode(created.event);
-  expect(projection).toEqual({
-    ...blob,
+  expect(decode(created.event)).toEqual({
+    version: 1,
+    sectionOrder: [],
     sections: [
       { id: "work", name: "Work", order: 0 },
       { id, name: "Launch", order: 1 },
     ],
     assignments: { beta: "work", alpha: id },
+    unifiedOnly: "BQ", // Sorted section and filing bits for Launch and alpha.
   });
-  expect(meta.s.work.order).toEqual([5000, "0000000000000000", 3]);
-  expect(meta.s[id].order[2]).toBe(4);
-  expect(meta.a.alpha[2]).toBe(id);
   expect(
     prepareSidebarAssignment([created.event], intent, secret).event,
   ).toBeUndefined();
@@ -76,10 +82,15 @@ it.each(["📚", ":books:"])(
     const create = {
       createSection: { id, name: " Launch ", icon },
     };
-    const created = prepareSidebarAssignment([], create, secret);
+    const created = prepareSidebarAssignment(
+      [],
+      create,
+      secret,
+      Date.now(),
+      emptyWorkspace,
+    );
     const saved = decode(created.event);
     expect(saved.sections).toEqual([{ id, name: "Launch", icon, order: 0 }]);
-    expect(saved.meta.s[id].icon[2]).toBe(icon);
     expect(
       prepareSidebarAssignment([created.event], create, secret).event,
     ).toBeUndefined();
@@ -113,7 +124,7 @@ it.each([
 it("enforces section limits and refuses an invalid or unreadable current head", () => {
   const full = {
     version: 1,
-    sections: Array.from({ length: 100 }, (_, i) => ({
+    sections: Array.from({ length: 200 }, (_, i) => ({
       id: String(i),
       name: String(i),
       order: i,
@@ -150,7 +161,7 @@ it.each([intent, { createSection: intent.createSection }])(
       head = value;
     };
     await expect(
-      mutateSidebarAssignment(creation, secret, read, publish),
+      mutateSidebarAssignment(creation, secret, read, publish, emptyWorkspace),
     ).rejects.toThrow("confirmation offline");
     expect(decode(head).sections).toEqual([{ id, name: "Launch", order: 0 }]);
     const groups = await mutateSidebarAssignment(
@@ -220,14 +231,12 @@ it("decodes all encrypted preferences despite oversized deleted text without rew
   ).toEqual({
     sections: [{ id: "work", name: "Work", order: 0 }],
     assignments: { alpha: "work" },
+    sectionOrder: [],
     starred: ["alpha"],
     muted: ["beta"],
     sort: { channels: "recent" },
   });
-  expect(() => prepareSidebarAssignment([head], intent, secret)).toThrow(
-    "Invalid sidebar register",
-  );
-  expect(decode(head)).toEqual(blob);
+  expect(decode(head)).toEqual({ ...blob, sectionOrder: [] });
 });
 
 it("creates at the top in one event, preserves existing orders and keeps retry idempotent", () => {
@@ -249,8 +258,6 @@ it("creates at the top in one event, preserves existing orders and keeps retry i
   const saved = decode(created.event);
   expect(saved.sections.map(({ id }) => id)).toEqual([id, "work"]);
   expect(saved.assignments).toEqual({ alpha: id });
-  expect(saved.meta.s[id].order[2]).toBe(-8);
-  expect(saved.meta.s.work.order[2]).toBe(-7);
   expect(
     prepareSidebarAssignment([created.event], first, secret).event,
   ).toBeUndefined();
@@ -273,8 +280,6 @@ it("appends after the rounded order imported from a fractional legacy head", () 
     { id: "work", name: "Work", order: 0 },
     { id, name: "Launch", order: 1 },
   ]);
-  expect(saved.meta.s.work.order[2]).toBe(1);
-  expect(saved.meta.s[id].order[2]).toBe(2);
 });
 
 it.each([
@@ -323,7 +328,7 @@ it.each([
       assignments: { beta: "work" },
     });
     expect(publications).toEqual([]);
-    expect(decode(head)).toEqual(blob);
+    expect(decode(head)).toEqual({ ...blob, sectionOrder: [] });
   },
 );
 
@@ -346,7 +351,7 @@ it("creates an empty section without changing any assignments, and confirms the 
     { id, name: "Launch", order: 1 },
   ]);
   expect(groups.assignments).toEqual({ alpha: "work" });
-  expect(decode(head).meta.a).not.toHaveProperty("undefined");
+  expect(decode(head).assignments).not.toHaveProperty("undefined");
   expect(await mutateSidebarAssignment(create, secret, read, publish)).toEqual(
     groups,
   );

@@ -22,7 +22,7 @@ import type {
 } from "./sidebar-preferences";
 
 type MoveDestination =
-  | { starred: true }
+  | { starred: boolean }
   | Omit<SidebarAssignmentIntent, "channelId">;
 type MoveIntent = Readonly<{
   id: number;
@@ -72,7 +72,6 @@ export function createSidebarPreferencesStore({
   persistence,
   removeSection,
   renameSection,
-  groupsOnly = false,
   writeOrder,
   createSection,
   writeFilter,
@@ -91,8 +90,6 @@ export function createSidebarPreferencesStore({
   persistence?: HeadPersistence | undefined;
   removeSection?: SidebarSectionRemovalMutator | undefined;
   renameSection?: SidebarSectionRenameMutator | undefined;
-  /** Solo groups have no Star coordinate; do not write Messages stars on moves. */
-  groupsOnly?: boolean | undefined;
   writeOrder?: SidebarSectionOrderMutator | undefined;
   createSection?: SidebarSectionCreationMutator | undefined;
   writeFilter?: SidebarFilterMutator | undefined;
@@ -132,12 +129,14 @@ export function createSidebarPreferencesStore({
   let readTransient = false;
   // Retain writer routing through failed reads and cache clears until reconciled.
   let creationUncertain = false;
-  const writable = () =>
+  const starWritable = () =>
     !closed &&
     !!confirmed &&
     readFailure === undefined &&
     !!write &&
-    (groupsOnly || !!writeStar);
+    !!writeStar;
+  const writable = () =>
+    starWritable() && !confirmed?.workspaceMigrationPending;
   let nextMove = 0;
   const pendingMoves = new Map<number, MoveIntent>();
   const failedMoves = new Map<string, MoveFailure>();
@@ -150,12 +149,14 @@ export function createSidebarPreferencesStore({
   const orderWritable = () =>
     !closed &&
     !!confirmed &&
+    !confirmed.workspaceMigrationPending &&
     readFailure === undefined &&
     !snapshot.cached &&
     !!writeOrder;
   const renameWritable = () =>
     !closed &&
     !!confirmed &&
+    !confirmed.workspaceMigrationPending &&
     readFailure === undefined &&
     !snapshot.cached &&
     !!renameSection;
@@ -164,8 +165,10 @@ export function createSidebarPreferencesStore({
     const assignments = { ...data.assignments };
     const starred = new Set(data.starred);
     for (const { channelId, destination } of pendingMoves.values()) {
-      if ("starred" in destination) starred.add(channelId);
-      else {
+      if ("starred" in destination) {
+        if (destination.starred) starred.add(channelId);
+        else starred.delete(channelId);
+      } else {
         starred.delete(channelId);
         const created = destination.createSection;
         if (created && !sections.some(({ id }) => id === created.id)) {
@@ -188,7 +191,7 @@ export function createSidebarPreferencesStore({
         else delete assignments[channelId];
       }
     }
-    if (pendingOrder) {
+    if (pendingOrder && !data.sectionOrder) {
       const ids = pendingOrder.sectionIds;
       const rank = (id: string) =>
         ids.includes(id) ? ids.indexOf(id) : ids.length;
@@ -196,7 +199,15 @@ export function createSidebarPreferencesStore({
         .sort((a, b) => rank(a.id) - rank(b.id))
         .map((section, order) => ({ ...section, order }));
     }
-    return { ...data, sections, assignments, starred: [...starred] };
+    return {
+      ...data,
+      sections,
+      assignments,
+      starred: [...starred],
+      ...(pendingOrder && data.sectionOrder
+        ? { sectionOrder: pendingOrder.sectionIds }
+        : {}),
+    };
   };
   let generation = 0;
   let nextSortMutation = 0;
@@ -271,8 +282,20 @@ export function createSidebarPreferencesStore({
         data.sections.map((section) => Object.freeze({ ...section })),
       ),
       assignments: Object.freeze({ ...data.assignments }),
+      ...(data.sectionOrder
+        ? { sectionOrder: Object.freeze([...data.sectionOrder]) }
+        : {}),
+      ...(data.legacyTemplates
+        ? { legacyTemplates: Object.freeze({ ...data.legacyTemplates }) }
+        : {}),
       starred: Object.freeze([...data.starred]),
       muted: Object.freeze([...data.muted]),
+      ...(data.workspaceMigrationPending
+        ? { workspaceMigrationPending: true as const }
+        : {}),
+      ...(data.soloWorkspaces
+        ? { soloWorkspaces: Object.freeze([...data.soloWorkspaces]) }
+        : {}),
       ...(data.sort ? { sort: Object.freeze({ ...data.sort }) } : {}),
       ...(data.filters ? { filters: Object.freeze({ ...data.filters }) } : {}),
       ...(data.activeWindowSeconds
@@ -316,11 +339,12 @@ export function createSidebarPreferencesStore({
   // replaces its own fields; mute stays confirmed-only for notification policy.
   const project = () => {
     if (!confirmed) return;
-    void persistence
-      ?.writeStartup?.({
-        preferences: { savedAt: Date.now(), data: confirmed },
-      })
-      .catch(() => {});
+    if (!confirmed.workspaceMigrationPending)
+      void persistence
+        ?.writeStartup?.({
+          preferences: { savedAt: Date.now(), data: confirmed },
+        })
+        .catch(() => {});
     publish({
       // A field-only confirmation cannot recover a failed full read. Any
       // concurrent read made stale by a write must leave recovery available.
@@ -434,14 +458,6 @@ export function createSidebarPreferencesStore({
     }
     return job.promise;
   }
-  function rejectMove(channelId: string, message: string): Promise<never> {
-    const failed = failedMoves.get(channelId);
-    if (failed) {
-      failedMoves.set(channelId, { ...failed, error: message });
-      publish(snapshot);
-    }
-    return Promise.reject(new Error(message));
-  }
   // Optimistic placement is a projection over confirmed data. Persistence keeps
   // assignment/create before Star removal. A failed
   // older intent cannot undo a later move or replace its retry state.
@@ -450,26 +466,36 @@ export function createSidebarPreferencesStore({
     destination: MoveDestination,
     signal?: AbortSignal,
   ): Promise<SidebarPreferences> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    const intent: MoveIntent = { id: ++nextMove, channelId, destination };
     if (
-      !writable() ||
+      !("starred" in destination ? starWritable() : writable()) ||
       (creationUncertain && "createSection" in destination) ||
       !snapshot.data ||
       !confirmed ||
       !write ||
-      (!writeStar && !groupsOnly) ||
-      (groupsOnly && "starred" in destination)
-    )
-      return rejectMove(
-        channelId,
-        "Sidebar group moves are unavailable; refresh saved sidebar preferences before retrying",
-      );
+      !writeStar
+    ) {
+      const error =
+        "Sidebar group moves are unavailable; refresh saved sidebar preferences before retrying";
+      if (!closed && available && write && writeStar) {
+        const previous = failedMoves.get(channelId);
+        latestMove.set(channelId, intent.id);
+        failedMoves.set(channelId, {
+          ...intent,
+          id: previous?.id ?? intent.id,
+          error,
+        });
+        publish(snapshot);
+      }
+      return Promise.reject(new Error(error));
+    }
     const writeGeneration = generation;
     const writeSignal = AbortSignal.any([
       writeLifetime.signal,
       ...(signal ? [signal] : []),
     ]);
     if (writeSignal.aborted) return Promise.reject(writeSignal.reason);
-    const intent: MoveIntent = { id: ++nextMove, channelId, destination };
     pendingMoves.set(intent.id, intent);
     latestMove.set(channelId, intent.id);
     failedMoves.delete(channelId);
@@ -493,18 +519,16 @@ export function createSidebarPreferencesStore({
             ? undefined
             : await write({ channelId, ...destination }, writeSignal);
           check();
-          const stars =
-            !groupsOnly && writeStar
-              ? await writeStar({ channelId, starred: starring }, writeSignal)
-              : [];
+          const stars = await writeStar(
+            { channelId, starred: starring && destination.starred },
+            writeSignal,
+          );
           check();
           if (!confirmed)
             throw new Error("Sidebar group moves are unavailable");
           confirmed = {
             ...confirmed,
-            ...(groups
-              ? { sections: groups.sections, assignments: groups.assignments }
-              : {}),
+            ...groups,
             starred: stars,
           };
           return retained(confirmed);
@@ -542,6 +566,7 @@ export function createSidebarPreferencesStore({
     if (
       closed ||
       !confirmed ||
+      confirmed.workspaceMigrationPending ||
       readFailure !== undefined ||
       snapshot.cached ||
       !removeSection ||
@@ -599,11 +624,7 @@ export function createSidebarPreferencesStore({
           throw new Error("Sidebar section removal is unavailable");
         writeSignal.throwIfAborted();
         mutation++;
-        confirmed = {
-          ...confirmed,
-          sections: next.sections,
-          assignments: next.assignments,
-        };
+        confirmed = { ...confirmed, ...next };
         failedFilters.delete(group);
         project();
         return retained(confirmed);
@@ -648,7 +669,13 @@ export function createSidebarPreferencesStore({
         ),
       });
       const parsed = projectSidebarPreferences(
-        { version: 1, sections: data.sections, assignments: data.assignments },
+        {
+          version: 1,
+          sections: data.sections,
+          assignments: data.assignments,
+          sectionOrder: data.sectionOrder,
+          legacyTemplates: data.legacyTemplates,
+        },
         rows(data.starred, "starred"),
         rows(data.muted, "muted"),
         { version: 1, groups: data.sort ?? {} },
@@ -660,6 +687,7 @@ export function createSidebarPreferencesStore({
               groups: data.filters ?? {},
               activeWindowSeconds: data.activeWindowSeconds,
             },
+        data.sectionOrder !== undefined,
       );
       // Display-only: do not initialize the confirmed mutation base from disk.
       publish({
@@ -694,6 +722,17 @@ export function createSidebarPreferencesStore({
   };
   return {
     ready,
+    async forgetDeletedFiling(channelId: string) {
+      // A confirmed deletion supersedes any retry for this conversation.
+      latestMove.delete(channelId);
+      if (failedMoves.delete(channelId)) publish(snapshot);
+      if (!writable() || snapshot.cached || !write) return;
+      const failure = "Deleted filing cleanup is unavailable";
+      await writeGroups(failure, (signal) => {
+        if (!writable()) throw new Error(failure);
+        return write({ channelId }, signal);
+      });
+    },
     invalidate,
     reconnect(continuous = false) {
       if (!continuous) invalidate();
@@ -702,17 +741,10 @@ export function createSidebarPreferencesStore({
     queries: Object.freeze({
       available,
       get sectionRemovalWritable() {
-        return groupsOnly
-          ? writable() && !snapshot.cached && !!removeSection
-          : this.removeSectionWritable;
+        return this.removeSectionWritable;
       },
       removeSection(sectionId: string, callerSignal?: AbortSignal) {
-        if (!groupsOnly) return removeSectionMutation(sectionId, callerSignal);
-        if (!writable() || snapshot.cached || !removeSection)
-          return Promise.reject(new Error("Section deletion is unavailable"));
-        return writeGroups("Section deletion is unavailable", (signal) =>
-          removeSection(sectionId, signal),
-        );
+        return removeSectionMutation(sectionId, callerSignal);
       },
       get sectionRenameWritable() {
         return renameWritable();
@@ -745,9 +777,7 @@ export function createSidebarPreferencesStore({
         );
       },
       createSection(section: SidebarSectionDraft) {
-        const failure = groupsOnly
-          ? "Workspaces are unavailable"
-          : "Section creation is unavailable";
+        const failure = "Section creation is unavailable";
         const create =
           createSection ??
           (write
@@ -799,11 +829,7 @@ export function createSidebarPreferencesStore({
               const groups = await save(intent.sectionIds, signal);
               if (closed || generation !== writeGeneration || !confirmed)
                 throw new Error("Sidebar section order is unavailable");
-              confirmed = {
-                ...confirmed,
-                sections: groups.sections,
-                assignments: groups.assignments,
-              };
+              confirmed = { ...confirmed, ...groups };
               return retained(confirmed);
             } catch (error) {
               if (
@@ -1077,6 +1103,7 @@ export function createSidebarPreferencesStore({
         return (
           !closed &&
           !!confirmed &&
+          !confirmed.workspaceMigrationPending &&
           readFailure === undefined &&
           !snapshot.cached &&
           !!removeSection &&
@@ -1084,12 +1111,12 @@ export function createSidebarPreferencesStore({
         );
       },
       get starWritable() {
-        return !groupsOnly && writable();
+        return starWritable();
       },
       async setStar(channelId: string, starred: boolean, signal?: AbortSignal) {
         const data = await move(
           channelId,
-          starred ? { starred: true } : {},
+          starred || confirmed?.workspaceMigrationPending ? { starred } : {},
           signal,
         );
         return data.starred;

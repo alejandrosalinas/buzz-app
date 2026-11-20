@@ -1,13 +1,34 @@
 import { isSidebarSortMode, type SidebarSortMode } from "./sidebar-sort.ts";
 export type { SidebarSortMode } from "./sidebar-sort.ts";
 import {
+  MAX_WORKSPACES,
+  MAX_WORKSPACE_ASSIGNMENTS,
   projectSidebarRecord,
   projectSidebarSort,
+  workspaceTombstones,
+  workspaceUnifiedOnly,
+  encodeWorkspaceUnifiedOnly,
+} from "./sidebar-registers.ts";
+export {
+  MAX_WORKSPACES,
+  MAX_WORKSPACE_ASSIGNMENTS,
 } from "./sidebar-registers.ts";
 import type { ReadFilter } from "./events.ts";
 import type { RelayEvent } from "./events.ts";
 import type { RelayReader } from "./reader.ts";
 
+export const WORKSPACE_COORDINATE = "channel-workspaces";
+export const WORKSPACE_SORT_COORDINATE = "channel-workspace-sort";
+export const WORKSPACE_FILTER_COORDINATE = "channel-workspace-filter";
+export const HOME_SIDEBAR_SECTIONS = [
+  "starred",
+  "solo",
+  "channels",
+  "forums",
+  "dms",
+] as const;
+/** Sidebar-placed pages, such as Activity, ordered among the sections. */
+export const SIDEBAR_PAGES_SECTION = "pages";
 export const SIDEBAR_COORDINATES = [
   "channel-sections",
   "channel-stars",
@@ -24,7 +45,7 @@ export function isSidebarPreferencesBatch(
     typeof viewer === "string" &&
     !!viewer &&
     filters.length === SIDEBAR_COORDINATES.length &&
-    new Set(filters.map((filter) => filter?.["#d"]?.[0])).size ===
+    new Set(filters.map((filter) => sidebarBatchCoordinate(filter))).size ===
       SIDEBAR_COORDINATES.length &&
     filters.every(
       (filter) =>
@@ -37,7 +58,9 @@ export function isSidebarPreferencesBatch(
         Array.isArray(filter["#d"]) &&
         filter["#d"].length === 1 &&
         SIDEBAR_COORDINATES.includes(
-          filter["#d"][0] as (typeof SIDEBAR_COORDINATES)[number],
+          sidebarBatchCoordinate(
+            filter,
+          ) as (typeof SIDEBAR_COORDINATES)[number],
         ) &&
         filter.limit === 1 &&
         (filter.consistency === undefined || filter.consistency === "strong") &&
@@ -47,6 +70,22 @@ export function isSidebarPreferencesBatch(
     )
   );
 }
+export const WORKSPACE_PREFERENCE_COORDINATES = [
+  WORKSPACE_COORDINATE,
+  "channel-stars",
+  "channel-mutes",
+  WORKSPACE_SORT_COORDINATE,
+  WORKSPACE_FILTER_COORDINATE,
+] as const;
+
+function sidebarBatchCoordinate(filter: ReadFilter) {
+  const coordinate = filter?.["#d"]?.[0];
+  if (coordinate === WORKSPACE_COORDINATE) return "channel-sections";
+  if (coordinate === WORKSPACE_SORT_COORDINATE) return "channel-sort";
+  if (coordinate === WORKSPACE_FILTER_COORDINATE) return "channel-filter";
+  return coordinate;
+}
+
 export type SidebarGroups = Readonly<{
   sections: readonly Readonly<{
     id: string;
@@ -55,7 +94,344 @@ export type SidebarGroups = Readonly<{
     order: number;
   }>[];
   assignments: Readonly<Record<string, string>>;
+  /** Sidebar section keys, including the home sections. */
+  sectionOrder?: readonly string[];
+  /** Frozen references used by workspaces saved before per-workspace templates. */
+  legacyTemplates?: Readonly<Record<string, string>>;
 }>;
+
+export function workspaceBaseRecord(groups: SidebarGroups) {
+  const normalized = projectWorkspaceGroups({
+    version: 1,
+    sections: groups.sections,
+    assignments: groups.assignments,
+    sectionOrder: groups.sectionOrder ?? [],
+    ...(groups.legacyTemplates
+      ? { legacyTemplates: groups.legacyTemplates }
+      : {}),
+  });
+  return { version: 1, ...normalized };
+}
+
+export function decodeLegacyWorkspaceEnvelope(value: unknown): SidebarGroups {
+  const data = object(value);
+  return projectWorkspaceGroups({
+    ...data,
+    version: 1,
+    sectionOrder: data.sectionOrder ?? [],
+  });
+}
+
+type WorkspaceRecord = SidebarGroups & {
+  version: 1;
+  sectionOrder: readonly string[];
+  removedSections?: readonly string[];
+  unfiled?: readonly string[];
+  unifiedOnly?: string;
+  legacyImportClosed?: true;
+};
+
+/** A retained marker survives later changes to either legacy head. */
+export function workspaceRecordForWrite(
+  payload: Record<string, unknown>,
+  legacy: SidebarGroups | undefined,
+  previous: Record<string, unknown> = {},
+): WorkspaceRecord {
+  const groups = projectWorkspaceGroups(payload);
+  const live = new Set(groups.sections.map(({ id }) => id));
+  const layout = {
+    ...groups,
+    version: 1 as const,
+    sectionOrder:
+      groups.sectionOrder?.filter(
+        (key) => !key.startsWith("group:") || live.has(key.slice(6)),
+      ) ?? [],
+  };
+  if (previous.legacyImportClosed === true)
+    return { ...layout, legacyImportClosed: true };
+  const legacySections = legacy && new Set(legacy.sections.map(({ id }) => id));
+  const previousRemovals = new Set(
+    workspaceTombstones(previous, "removedSections"),
+  );
+  const previousUnfiled = new Set(workspaceTombstones(previous, "unfiled"));
+  const previousSections = new Set(
+    (previous.sections as SidebarGroups["sections"] | undefined)?.map(
+      ({ id }) => id,
+    ),
+  );
+  const previousAssignments = previous.assignments as
+    | SidebarGroups["assignments"]
+    | undefined;
+  const unifiedOnly = workspaceUnifiedOnly(previous);
+  const fromLegacySection = (id: string) =>
+    previousRemovals.has(id) ||
+    legacySections?.has(id) ||
+    (previousSections.has(id) && !unifiedOnly.sections.has(id));
+  const legacyTarget = (id: string) =>
+    legacy && Object.hasOwn(legacy.assignments, id)
+      ? legacy.assignments[id]
+      : undefined;
+  const priorTarget = (id: string) =>
+    previousAssignments && Object.hasOwn(previousAssignments, id)
+      ? previousAssignments[id]
+      : undefined;
+  const removedSections = workspaceTombstones(
+    payload,
+    "removedSections",
+  ).filter(fromLegacySection);
+  const removed = new Set(removedSections);
+  const unfiled = workspaceTombstones(payload, "unfiled").filter((id) => {
+    if (previousUnfiled.has(id)) return true;
+    const prior = priorTarget(id);
+    const target = legacyTarget(id);
+    // A tombstone for a legacy section covers its removed filings. A known
+    // legacy filing unfiled on its own must survive a temporary legacy absence.
+    return (
+      (prior && !unifiedOnly.assignments.has(id) && !removed.has(prior)) ||
+      (target && !removed.has(target))
+    );
+  });
+  const result = {
+    ...layout,
+    ...(removedSections.length ? { removedSections } : {}),
+    ...(unfiled.length ? { unfiled } : {}),
+  };
+  const origins = {
+    sections: new Set([...live].filter((id) => !fromLegacySection(id))),
+    assignments: new Set(
+      Object.keys(groups.assignments).filter(
+        (id) =>
+          !legacyTarget(id) &&
+          !previousUnfiled.has(id) &&
+          (!priorTarget(id) || unifiedOnly.assignments.has(id)),
+      ),
+    ),
+  };
+  const provenance = encodeWorkspaceUnifiedOnly(result, origins);
+  return { ...result, ...(provenance ? { unifiedOnly: provenance } : {}) };
+}
+
+const hexConversationId = /^[0-9a-f]{64}$/;
+
+function packConversationId(id: string) {
+  if (hexConversationId.test(id)) {
+    const bytes =
+      id.match(/../g)?.map((pair) => Number.parseInt(pair, 16)) ?? [];
+    return `~${btoa(String.fromCharCode(...bytes)).slice(0, -1)}`;
+  }
+  return id.startsWith("~") ? `~${id}` : id;
+}
+
+function unpackConversationId(id: string) {
+  if (id.startsWith("~~")) return id.slice(1);
+  if (!id.startsWith("~") && !hexConversationId.test(id)) return id;
+  if (!/^~[A-Za-z0-9+/]{43}$/.test(id))
+    throw new Error("Invalid compact workspace filing");
+  const bytes = atob(id.slice(1));
+  if (`~${btoa(bytes).slice(0, -1)}` !== id)
+    throw new Error("Invalid compact workspace filing");
+  return Array.from(bytes, (byte) =>
+    byte.charCodeAt(0).toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+/** Expand compact filings before applying migration fallbacks or an edit. */
+export function expandWorkspaceRecord(value: unknown): Record<string, unknown> {
+  const data = object(value);
+  if (data.filings === undefined) {
+    if (data.packedUnfiled !== undefined)
+      throw new Error("Invalid compact workspace removal markers");
+    return projectSidebarRecord("channel-sections", data);
+  }
+  if (data.assignments !== undefined || data.meta !== undefined)
+    throw new Error("Invalid compact workspace filings");
+  const { filings, packedUnfiled, ...record } = data;
+  if (packedUnfiled !== undefined) {
+    if (record.unfiled !== undefined || !Array.isArray(packedUnfiled))
+      throw new Error("Invalid compact workspace removal markers");
+    record.unfiled = packedUnfiled.map((id) =>
+      text(unpackConversationId(text(id, 257))),
+    );
+  }
+  const entries = Object.entries(object(filings));
+  if (entries.length > MAX_WORKSPACES || !Array.isArray(record.sections))
+    throw new Error("Invalid compact workspace filings");
+  const workspaceIds = new Set(
+    record.sections.map((section) => object(section).id),
+  );
+  const assignments = new Map<string, string>();
+  for (const [section, rows] of entries) {
+    text(section);
+    if (!workspaceIds.has(section) || !Array.isArray(rows) || !rows.length)
+      throw new Error("Invalid compact workspace filings");
+    for (const row of rows) {
+      const id = text(unpackConversationId(text(row, 257)));
+      if (
+        id === "__proto__" ||
+        assignments.has(id) ||
+        assignments.size >= MAX_WORKSPACE_ASSIGNMENTS
+      )
+        throw new Error("Invalid compact workspace filings");
+      assignments.set(id, section);
+    }
+  }
+  return { ...record, assignments: Object.fromEntries(assignments) };
+}
+
+function workspaceRecordFits(value: unknown) {
+  return new TextEncoder().encode(JSON.stringify(value)).length <= 128 * 1024;
+}
+
+/** Compact filings and history together before considering closing legacy import. */
+export function workspacePayloadForSigning(
+  payload: Record<string, unknown>,
+  legacy: SidebarGroups | undefined,
+  previous?: Record<string, unknown>,
+) {
+  const record = workspaceRecordForWrite(payload, legacy, previous);
+  const packed = compactWorkspaceRecord(record);
+  if (workspaceRecordFits(packed)) return packed;
+
+  // Close catch-up only from a complete legacy read, and only when every
+  // legacy leaf is already represented or intentionally suppressed.
+  if (legacy && legacyWorkspaceCoverageComplete(record, legacy)) {
+    const {
+      removedSections: _removed,
+      unfiled: _unfiled,
+      unifiedOnly: _unifiedOnly,
+      ...layout
+    } = record;
+    const closed = compactWorkspaceRecord({
+      ...layout,
+      legacyImportClosed: true,
+    });
+    if (workspaceRecordFits(closed)) return closed;
+  }
+  throw new Error("Saved workspaces exceed the storage limit.");
+}
+
+function legacyWorkspaceCoverageComplete(
+  record: SidebarGroups & {
+    removedSections?: readonly string[];
+    unfiled?: readonly string[];
+  },
+  legacy: SidebarGroups,
+) {
+  const sections = new Set(record.sections.map(({ id }) => id));
+  const removed = new Set(record.removedSections);
+  const unfiled = new Set(record.unfiled);
+  return (
+    legacy.sections.every(({ id }) => sections.has(id) || removed.has(id)) &&
+    Object.entries(legacy.assignments).every(
+      ([id, section]) =>
+        Object.hasOwn(record.assignments, id) ||
+        unfiled.has(id) ||
+        removed.has(section),
+    )
+  );
+}
+
+export function encodeLegacyWorkspaceEnvelope(groups: SidebarGroups) {
+  return compactWorkspaceRecord(workspaceBaseRecord(groups));
+}
+
+function compactWorkspaceRecord<
+  T extends SidebarGroups & { unfiled?: readonly string[] },
+>(record: T) {
+  if (workspaceRecordFits(record)) return record;
+  const { assignments, ...metadata } = record;
+  const filings = new Map<string, string[]>();
+  for (const [id, section] of Object.entries(assignments)) {
+    const packed = packConversationId(id);
+    const rows = filings.get(section);
+    if (rows) rows.push(packed);
+    else filings.set(section, [packed]);
+  }
+  const compact = { ...metadata, filings: Object.fromEntries(filings) };
+  const unfiled = record.unfiled ?? [];
+  if (!unfiled.length || workspaceRecordFits(compact)) return compact;
+  const packedUnfiled = unfiled.map(packConversationId);
+  if (JSON.stringify(packedUnfiled).length >= JSON.stringify(unfiled).length)
+    return compact;
+  const { unfiled: _unfiled, ...rest } = compact;
+  return { ...rest, packedUnfiled };
+}
+
+export function projectWorkspacePreferences(
+  workspaces: unknown,
+  stars?: unknown,
+  mutes?: unknown,
+  sort?: unknown,
+  filters?: unknown,
+) {
+  return projectSidebarPreferences(
+    workspaces,
+    stars,
+    mutes,
+    sort,
+    undefined,
+    filters,
+    true,
+  );
+}
+
+export function projectWorkspaceGroups(workspaces: unknown): SidebarGroups {
+  const { sections, assignments, sectionOrder, legacyTemplates } =
+    projectWorkspacePreferences(workspaces);
+  return {
+    sections,
+    assignments,
+    ...(sectionOrder ? { sectionOrder } : {}),
+    ...(legacyTemplates ? { legacyTemplates } : {}),
+  };
+}
+
+export function workspaceSectionOrder(
+  groups: Pick<SidebarGroups, "sections" | "sectionOrder"> | undefined,
+): readonly string[] {
+  const [starred, ...home] = HOME_SIDEBAR_SECTIONS;
+  const [solo, ...otherHomes] = home;
+  const defaults = [
+    SIDEBAR_PAGES_SECTION,
+    solo,
+    starred,
+    ...(groups?.sections ?? []).map(({ id }) => `group:${id}`),
+    ...otherHomes,
+  ];
+  if (!groups?.sectionOrder?.length) return defaults;
+  const available = new Set(defaults);
+  const order = groups.sectionOrder.filter((key) => available.delete(key));
+  if (available.delete(starred)) order.unshift(starred);
+  if (available.delete(SIDEBAR_PAGES_SECTION))
+    order.unshift(SIDEBAR_PAGES_SECTION);
+  // Workspaces added since the last reorder follow the existing workspaces.
+  const newWorkspaces = defaults.filter(
+    (key) => key.startsWith("group:") && available.has(key),
+  );
+  const lastWorkspace = order.lastIndexOf(
+    order.filter((key) => key.startsWith("group:")).at(-1) ?? "",
+  );
+  const insertion = lastWorkspace + 1 || order.indexOf(starred) + 1;
+  order.splice(insertion, 0, ...newWorkspaces);
+  return [...order, ...home.filter((key) => available.has(key))];
+}
+
+export function validWorkspaceSectionOrder(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_WORKSPACES + HOME_SIDEBAR_SECTIONS.length + 1 &&
+    new Set(value).size === value.length &&
+    value.every(
+      (key) =>
+        typeof key === "string" &&
+        (key === SIDEBAR_PAGES_SECTION ||
+          HOME_SIDEBAR_SECTIONS.some((home) => home === key) ||
+          (key.startsWith("group:") &&
+            !!key.slice(6).trim() &&
+            key.length <= 262)),
+    )
+  );
+}
 export type SidebarFilterMode = "all" | "unreads" | "active";
 export const DEFAULT_ACTIVE_WINDOW_SECONDS = 30 * 86400;
 export const MAX_ACTIVE_WINDOW_SECONDS = 365 * 86400;
@@ -96,6 +472,10 @@ export type SidebarPreferences = SidebarGroups &
     sort?: Readonly<Record<string, SidebarSortMode>>;
     filters?: Readonly<Record<string, SidebarFilterMode>>;
     activeWindowSeconds?: Readonly<Record<string, number>>;
+    /** A first write still needs both verified legacy workspace records. */
+    workspaceMigrationPending?: true;
+    /** Workspace IDs from the old Solo sidebar, read from its legacy record. */
+    soloWorkspaces?: readonly string[];
   }>;
 export type SidebarSectionDraft = Readonly<{
   id: string;
@@ -112,23 +492,29 @@ export type SidebarAssignmentIntent = Readonly<{
   channelId?: string;
   sectionId?: string;
   createSection?: SidebarSectionDraft & Readonly<{ position?: "first" }>;
+  /** A verified archived chat filing that may make room for one new filing. */
+  reclaim?: Readonly<{ channelId: string; sectionId: string }>;
 }>;
 export type SidebarAssignmentMutator = (
   intent: SidebarAssignmentIntent,
   signal: AbortSignal,
+  legacy?: SidebarGroups,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionRemovalMutator = (
   sectionId: string,
   signal: AbortSignal,
+  legacy?: SidebarGroups,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionRenameMutator = (
   intent: SidebarSectionEdit &
     Readonly<{ sectionId: string; expectedName?: string }>,
   signal: AbortSignal,
+  legacy?: SidebarGroups,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionOrderMutator = (
   sectionIds: readonly string[],
   signal: AbortSignal,
+  legacy?: SidebarGroups,
 ) => Promise<SidebarGroups>;
 /** Adds an empty section without assigning a conversation. */
 export type SidebarSectionCreationMutator = (
@@ -142,6 +528,7 @@ export type SidebarStarMutator = (
 export type SidebarDecoder = (
   events: readonly RelayEvent[],
   signal: AbortSignal,
+  legacyWorkspaces?: SidebarGroups,
 ) => Promise<SidebarPreferences>;
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -161,10 +548,13 @@ export function projectSidebarPreferences(
   sort?: unknown,
   sortSectionIds?: readonly string[],
   filters?: unknown,
+  workspaceRecord = false,
 ): SidebarPreferences {
   const result: {
     sections: { id: string; name: string; icon?: string; order: number }[];
     assignments: Record<string, string>;
+    sectionOrder?: readonly string[];
+    legacyTemplates?: Readonly<Record<string, string>>;
     starred: string[];
     sort?: Record<string, SidebarSortMode>;
     filters?: Record<string, SidebarFilterMode>;
@@ -177,11 +567,13 @@ export function projectSidebarPreferences(
     muted: [],
   };
   if (sections !== undefined) {
-    const data = projectSidebarRecord("channel-sections", object(sections));
+    const data = workspaceRecord
+      ? expandWorkspaceRecord(sections)
+      : projectSidebarRecord("channel-sections", object(sections));
     if (
       data.version !== 1 ||
       !Array.isArray(data.sections) ||
-      data.sections.length > 100
+      data.sections.length > (workspaceRecord ? MAX_WORKSPACES : 100)
     )
       throw new Error("Unsupported sidebar groups");
     const ids = new Set<string>();
@@ -205,13 +597,50 @@ export function projectSidebarPreferences(
       })
       .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
     const assignments = Object.entries(object(data.assignments));
-    if (assignments.length > 1000)
+    if (
+      assignments.length > (workspaceRecord ? MAX_WORKSPACE_ASSIGNMENTS : 1000)
+    )
       throw new Error("Sidebar assignment budget exceeded");
     result.assignments = Object.fromEntries(
       assignments
         .map(([id, section]) => [text(id), text(section)])
         .filter(([, section]) => ids.has(section as string)),
     );
+    if (workspaceRecord) {
+      if (!validWorkspaceSectionOrder(data.sectionOrder))
+        throw new Error("Invalid workspace section order");
+      result.sectionOrder = data.sectionOrder;
+      workspaceTombstones(data, "removedSections");
+      workspaceTombstones(data, "unfiled");
+      workspaceUnifiedOnly(data);
+      if (
+        data.legacyImportClosed !== undefined &&
+        (data.legacyImportClosed !== true ||
+          ["removedSections", "unfiled", "unifiedOnly"].some((key) =>
+            Object.hasOwn(data, key),
+          ))
+      )
+        throw new Error("Invalid workspace legacy import state");
+      if (data.legacyTemplates !== undefined) {
+        const templates = Object.entries(object(data.legacyTemplates));
+        if (
+          templates.length > MAX_WORKSPACES ||
+          templates.some(
+            ([id, template]) =>
+              !id.trim() ||
+              id.length > 256 ||
+              typeof template !== "string" ||
+              !/^[a-zA-Z0-9_-]{1,128}$/.test(template),
+          )
+        )
+          throw new Error("Invalid workspace template references");
+        result.legacyTemplates = Object.fromEntries(
+          templates.flatMap(([id, value]) =>
+            ids.has(id) && typeof value === "string" ? [[id, value]] : [],
+          ),
+        );
+      }
+    }
   }
   if (stars !== undefined) {
     const data = object(stars);
@@ -234,8 +663,10 @@ export function projectSidebarPreferences(
   if (sort !== undefined) {
     const data = object(sort);
     if (data.version !== 1) throw new Error("Unsupported sidebar sort");
-    const entries = Object.entries(projectSidebarSort(data));
-    const fixed = new Set(["starred", "channels", "forums", "dms"]);
+    const entries = Object.entries(
+      projectSidebarSort(data, workspaceRecord ? 205 : 104),
+    );
+    const fixed = new Set<string>(HOME_SIDEBAR_SECTIONS);
     const liveSections = new Set(
       (sortSectionIds ?? []).map((id) => `section:${id}`),
     );
@@ -259,8 +690,9 @@ export function projectSidebarPreferences(
     const data = projectSidebarRecord("channel-filter", object(filters));
     if (data.version !== 1) throw new Error("Unsupported sidebar filter");
     const entries = Object.entries(object(data.groups));
-    if (entries.length > 104) throw new Error("Sidebar filter budget exceeded");
-    const fixed = new Set(["starred", "channels", "forums", "dms"]);
+    if (entries.length > (workspaceRecord ? 205 : 104))
+      throw new Error("Sidebar filter budget exceeded");
+    const fixed = new Set<string>(HOME_SIDEBAR_SECTIONS);
     const liveSections = new Set(
       (sortSectionIds ?? []).map((id) => `section:${id}`),
     );
@@ -276,7 +708,7 @@ export function projectSidebarPreferences(
       ),
     );
     if (
-      windows.length > 104 ||
+      windows.length > (workspaceRecord ? 205 : 104) ||
       windows.some(([, value]) => !validActiveWindow(value))
     )
       throw new Error("Invalid sidebar activity window");
@@ -338,23 +770,47 @@ export async function readSidebarPreferences(
   decode: SidebarDecoder,
   signal: AbortSignal,
   consistency?: "strong",
+  workspaceMigration = false,
 ): Promise<SidebarPreferences> {
   let events: readonly RelayEvent[];
   try {
-    events = await reader.read(
-      SIDEBAR_COORDINATES.map((coordinate) => ({
-        kinds: [30078],
-        authors: [viewer],
-        "#d": [coordinate],
-        limit: 1,
-        ...(consistency ? { consistency } : {}),
-      })),
-      {
-        signal,
-        priority: "foreground",
-        ...(consistency ? { fresh: true } : {}),
-      },
+    const read = (coordinates: readonly string[]) =>
+      reader.read(
+        coordinates.map((coordinate) => ({
+          kinds: [30078],
+          authors: [viewer],
+          "#d": [coordinate],
+          limit: 1,
+          ...(consistency ? { consistency } : {}),
+        })),
+        {
+          signal,
+          priority: "foreground",
+          ...(consistency ? { fresh: true } : {}),
+        },
+      );
+    events = await read(
+      workspaceMigration
+        ? WORKSPACE_PREFERENCE_COORDINATES
+        : SIDEBAR_COORDINATES,
     );
+    if (workspaceMigration) {
+      // A new preference coordinate supersedes only its own legacy choice.
+      const present = new Set(
+        events.flatMap((event) =>
+          event.tags.flatMap(([key, value]) =>
+            key === "d" && value ? [value] : [],
+          ),
+        ),
+      );
+      const legacy = [
+        ...(!present.has(WORKSPACE_SORT_COORDINATE) ? ["channel-sort"] : []),
+        ...(!present.has(WORKSPACE_FILTER_COORDINATE)
+          ? ["channel-filter"]
+          : []),
+      ];
+      if (legacy.length) events = [...events, ...(await read(legacy))];
+    }
     signal.throwIfAborted();
   } catch (error) {
     const cause = signal.aborted ? signal.reason : error;

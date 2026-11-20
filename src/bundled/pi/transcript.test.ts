@@ -312,6 +312,43 @@ it("reads pages, newest first, until one turn more than it shows", async () => {
   });
 });
 
+it("counts a noted turn that failed before Pi had its prompt as a turn when it reads pages", async () => {
+  // Only such turns, a page of three entries at a time.
+  const entries: PiEntry[] = Array.from(
+    { length: TURN_LIMIT + 5 },
+    (_, index) => ({
+      id: index,
+      kind: "buzz.notice",
+      notice: "Ran without the agent gateway.",
+      error: `failure ${index}`,
+      at: index,
+    }),
+  ).reverse();
+  const request = vi.fn(
+    async (_method: string, params: Record<string, unknown>) => {
+      const from = Number(params.cursor ?? 0);
+      return {
+        entries: entries.slice(from, from + 3),
+        ...(from + 3 < entries.length ? { next: String(from + 3) } : {}),
+      };
+    },
+  );
+  const read = await readTranscript(
+    { request } as never,
+    "agent",
+    PLACE,
+    false,
+    new AbortController().signal,
+  );
+  expect(read.more).toBe(true);
+  expect(read.turns).toHaveLength(TURN_LIMIT);
+  expect(read.turns.at(-1)).toMatchObject({
+    error: `failure ${TURN_LIMIT + 4}`,
+  });
+  // 51 turns, newest first, are the first 51 entries: 17 pages, not all 19.
+  expect(request).toHaveBeenCalledTimes(17);
+});
+
 it("names each session by the reset that began it, however old", async () => {
   // The window starts after older resets; one more is inside it.
   const entries = [
@@ -362,4 +399,133 @@ it("starts a session at the conversation's first entry", () => {
     sessionId: "2",
     newSession: false,
   });
+});
+
+it("shows a noted request's notice once, beside its turn's own outcome", () => {
+  const NOTICE =
+    "Ran without the agent gateway: Buzz couldn't reach the gateway.";
+  const noted = (entry: PiEntry): PiEntry => ({ ...entry, notice: NOTICE });
+  const steer = steerPrompt(event("and this"));
+  const turns = piTurns(
+    [
+      noted(user(1, event("failed"))),
+      assistant(2, [], { stopReason: "error", errorMessage: "Rate limited" }),
+      noted(user(3, event("stopped"))),
+      assistant(4, [{ type: "text", text: "Partly" }], {
+        stopReason: "aborted",
+      }),
+      user(5, event("done")),
+      noted(user(6, steer)),
+      assistant(7, [{ type: "text", text: "Done" }], { stopReason: "stop" }),
+      user(8, event("unnoted")),
+      assistant(9, [{ type: "text", text: "Fine" }], { stopReason: "stop" }),
+    ],
+    PLACE,
+    false,
+  );
+  expect(
+    turns.map(({ items, error, stopReason }) => ({
+      notices: items
+        .filter((item) => item.type === "status")
+        .map((item) => item.type === "status" && item.text),
+      error,
+      stopReason,
+    })),
+  ).toEqual([
+    { notices: [NOTICE], error: "Rate limited", stopReason: undefined },
+    { notices: [NOTICE], error: undefined, stopReason: "stopped" },
+    // A steer noted joins the turn it steers.
+    { notices: [NOTICE], error: undefined, stopReason: undefined },
+    { notices: [], error: undefined, stopReason: undefined },
+  ]);
+  // Beside the prompt it noted, which still opens its turn.
+  expect(turns[0]?.items.map((item) => item.type)).toEqual([
+    "prompt",
+    "status",
+  ]);
+});
+
+it("shows a noted turn that failed before Pi had its prompt, with its notice and failure", () => {
+  const NOTICE =
+    "Ran without the agent gateway: Buzz couldn't reach the gateway.";
+  const turns = piTurns(
+    [
+      user(1, event("earlier")),
+      assistant(2, [{ type: "text", text: "Fine" }], { stopReason: "stop" }),
+      {
+        id: 3,
+        kind: "buzz.notice",
+        notice: NOTICE,
+        error: "This agent has no model.",
+        at: 500,
+      },
+    ],
+    PLACE,
+    false,
+  );
+  expect(turns).toHaveLength(2);
+  expect(turns[1]).toMatchObject({
+    turnId: "3",
+    startedAt: 500,
+    error: "This agent has no model.",
+    items: [{ id: "3:notice", type: "status", text: NOTICE }],
+  });
+});
+
+it("keeps a run's answers, tools and steers on its own turn when a noted wake fails beside it", () => {
+  const NOTICE =
+    "Ran without the agent gateway: Buzz couldn't reach the gateway.";
+  const ERROR = "This agent has no model.";
+  const turns = piTurns(
+    [
+      user(1, event("first")),
+      assistant(
+        2,
+        [
+          {
+            type: "toolCall",
+            id: "c1",
+            name: "bash",
+            arguments: { command: "ls" },
+          },
+        ],
+        {
+          stopReason: "toolUse",
+        },
+      ),
+      { id: 3, kind: "buzz.notice", notice: NOTICE, error: ERROR, at: 3 },
+      result(4, "c1", "a b"),
+      user(5, steerPrompt(event("and this"))),
+      assistant(6, [{ type: "text", text: "first answer" }], {
+        stopReason: "stop",
+      }),
+    ],
+    PLACE,
+    false,
+  );
+  expect(
+    turns.map((turn) => ({
+      turnId: turn.turnId,
+      error: turn.error,
+      items: turn.items.map((item) =>
+        item.type === "tool"
+          ? [item.type, item.status]
+          : [item.type, "text" in item ? item.text : ""],
+      ),
+    })),
+  ).toEqual([
+    {
+      turnId: "1:0",
+      error: undefined,
+      items: [
+        ["prompt", expect.any(String)],
+        ["tool", "completed"],
+        ["prompt", expect.any(String)],
+        ["message", "first answer"],
+      ],
+    },
+    { turnId: "3", error: ERROR, items: [["status", NOTICE]] },
+  ]);
+  expect(turns[0]?.endedAt).toBe(6);
+  expect(turns[1]?.endedAt).toBe(3);
 });

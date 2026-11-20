@@ -65,7 +65,7 @@ function fakeHarness(
     sessionId: string;
     text: string;
     steered: string[];
-    finish(): void;
+    finish(error?: { code: number; message: string }): void;
   }[] = [];
   let servers = 0;
   let rejectPrompts = options.rejectPrompts ?? 0;
@@ -148,10 +148,12 @@ function fakeHarness(
               sessionId,
               text,
               steered: [] as string[],
-              finish: () => {
+              finish: (error?: { code: number; message: string }) => {
                 running.delete(sessionId);
                 run(sessionId, null);
-                reply(id, { stopReason: options.stopReason ?? "end_turn" });
+                if (error) send({ id, error });
+                else
+                  reply(id, { stopReason: options.stopReason ?? "end_turn" });
               },
             };
             turns.push(turn);
@@ -437,6 +439,39 @@ describe("a session with a steering hook", () => {
     harness.turns[1]?.finish();
     await expect(Promise.all([first, second, third])).resolves.toHaveLength(3);
   });
+  it("confirms delivery when the run starts before a later prompt error", async () => {
+    const hooks: AcpHooks = {
+      ...HOOKS,
+      steering: {
+        runId: (update) =>
+          update.sessionUpdate === "run" && typeof update.runId === "string"
+            ? update.runId
+            : null,
+        steer: async () => {},
+      },
+    };
+    const harness = fakeHarness({ hold: true });
+    const acp = await start(harness, {}, hooks);
+    const session = await acp.open({ cwd: "/work", systemPrompt: "" });
+    const delivered = vi.fn();
+    const settled = vi.fn();
+    const prompt = session.send("first", { delivered }).then(settled);
+    try {
+      await flush();
+      expect(harness.turns).toHaveLength(1);
+      expect(settled).not.toHaveBeenCalled();
+      expect(delivered).toHaveBeenCalledOnce();
+      harness.turns[0]?.finish({ code: -32000, message: "Run failed" });
+      await prompt;
+      expect(settled).toHaveBeenCalledWith(
+        expect.objectContaining({ ok: false, error: "Run failed" }),
+      );
+      expect(delivered).toHaveBeenCalledOnce();
+    } finally {
+      await acp.stop();
+    }
+  });
+
   it("never steers a message stopped while it waits for the run's id", async () => {
     const hooks: AcpHooks = {
       ...HOOKS,

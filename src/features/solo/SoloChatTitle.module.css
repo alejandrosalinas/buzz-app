@@ -1,0 +1,18 @@
+.title {
+  position: relative;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.value {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character {
+  display: inline-block;
+  white-space: pre;
+}

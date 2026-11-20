@@ -1,11 +1,22 @@
 import {
+  type CollisionDetection,
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  pointerWithin,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
   createContext,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
@@ -55,6 +66,10 @@ import type {
 const noUnreads: ReadonlyMap<string, CommunityUnread> = new Map();
 
 const noSubscription = () => () => {};
+
+// A click must still select the row; only a deliberate pull starts a move.
+// useSensor memoizes on this object, so it is not an inline literal.
+const pointerSensorOptions = { activationConstraint: { distance: 6 } };
 
 /** Opens the shell's community switcher from a page. Absent where the shell
  * doesn't mount the switcher. */
@@ -170,6 +185,23 @@ export function CommunityPicker({
     if (onSelect) onSelect(id);
     else communities.select(id);
   };
+  const sensors = useSensors(useSensor(PointerSensor, pointerSensorOptions));
+  const popupRef = useRef<HTMLDivElement>(null);
+  // A row scrolled out of the switcher keeps its bounds past the edge. Only a
+  // pointer inside the switcher is over a row that shows.
+  const shownRows = useCallback<CollisionDetection>((args) => {
+    const pointer = args.pointerCoordinates;
+    const shown = popupRef.current?.getBoundingClientRect();
+    return pointer &&
+      shown &&
+      pointer.x >= shown.left &&
+      pointer.x <= shown.right &&
+      pointer.y >= shown.top &&
+      pointer.y <= shown.bottom
+      ? pointerWithin(args)
+      : [];
+  }, []);
+  const [draggingId, setDragging] = useState<string>();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const offeringRemoval = leaving?.intent === "remove" && !leaving.pending;
   useLayoutEffect(() => {
@@ -224,6 +256,9 @@ export function CommunityPicker({
   const active = client.memberships.find(
     (membership) => membership.id === client.selected,
   );
+  const dragging = client.memberships.find(
+    (membership) => membership.id === draggingId,
+  );
   const unread = useSyncExternalStore(
     unreads?.subscribe ?? noSubscription,
     () => unreads?.snapshot() ?? noUnreads,
@@ -235,7 +270,15 @@ export function CommunityPicker({
   return (
     <>
       <nav aria-label="Communities" className={styles.picker}>
-        <PopoverRoot open={switcherOpen} onOpenChange={setSwitcherOpen}>
+        <PopoverRoot
+          open={switcherOpen}
+          onOpenChange={(next, details) => {
+            // Mid-pull, Escape belongs to the move: it reaches the sensor,
+            // which cancels, and the switcher stays open under the pointer.
+            if (draggingId && !next) details.allowPropagation();
+            else setSwitcherOpen(next);
+          }}
+        >
           <PopoverTrigger
             render={
               <IconButton
@@ -273,6 +316,7 @@ export function CommunityPicker({
             }
           />
           <PopoverPopup
+            ref={popupRef}
             aria-label="Switch community"
             onKeyDown={(event) => {
               if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
@@ -315,45 +359,103 @@ export function CommunityPicker({
               icon={<GlobeIcon size={20} />}
               onClick={() => select(null)}
             />
-            {client.memberships.map((membership) => {
-              const selected = client.selected === membership.id;
-              return (
-                <CommunityPickerItem
-                  key={membership.id}
-                  membership={membership}
-                  icon={membership.publishedIcon ?? membership.icon}
-                  selected={selected}
-                  viewer={client.viewer}
-                  session={selected ? session : undefined}
-                  unread={selected ? undefined : unread.get(membership.id)}
-                  manager={selected && invites && role.manager}
-                  leaving={
-                    leaving?.membership.id === membership.id && leaving.pending
-                  }
-                  onSelect={select}
-                  onOpenTarget={
-                    onOpenTarget
-                      ? (target) => {
-                          navigated.current = true;
-                          setSwitcherOpen(false);
-                          onOpenTarget(target);
-                        }
-                      : undefined
-                  }
-                  // Roles can change while the app runs; opening the selected
-                  // community's menu re-reads the roster it gates on.
-                  onMenuOpen={selected && invites ? role.refresh : undefined}
-                  onLeave={(target) => {
-                    setSwitcherOpen(false);
-                    setLeaving({
-                      membership: target,
-                      intent: "leave",
-                      pending: false,
-                    });
-                  }}
-                />
-              );
-            })}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={shownRows}
+              // Drag announcements live outside the switcher, as the sidebar's do.
+              accessibility={{ container: document.body }}
+              onDragStart={({ active }) => setDragging(String(active.id))}
+              onDragCancel={() => setDragging(undefined)}
+              onDragEnd={({ active, over }) => {
+                setDragging(undefined);
+                if (over)
+                  communities.reorder(String(active.id), String(over.id));
+              }}
+            >
+              {client.memberships.map((membership, index, all) => {
+                const selected = client.selected === membership.id;
+                const previous = all[index - 1];
+                const next = all[index + 1];
+                return (
+                  <CommunityPickerItem
+                    key={membership.id}
+                    membership={membership}
+                    index={index}
+                    move={
+                      all.length > 1
+                        ? {
+                            up:
+                              previous &&
+                              (() =>
+                                communities.reorder(
+                                  membership.id,
+                                  previous.id,
+                                )),
+                            down:
+                              next &&
+                              (() =>
+                                communities.reorder(membership.id, next.id)),
+                          }
+                        : undefined
+                    }
+                    icon={membership.publishedIcon ?? membership.icon}
+                    selected={selected}
+                    viewer={client.viewer}
+                    session={selected ? session : undefined}
+                    unread={selected ? undefined : unread.get(membership.id)}
+                    manager={selected && invites && role.manager}
+                    leaving={
+                      leaving?.membership.id === membership.id &&
+                      leaving.pending
+                    }
+                    onSelect={select}
+                    onOpenTarget={
+                      onOpenTarget
+                        ? (target) => {
+                            navigated.current = true;
+                            setSwitcherOpen(false);
+                            onOpenTarget(target);
+                          }
+                        : undefined
+                    }
+                    // Roles can change while the app runs; opening the selected
+                    // community's menu re-reads the roster it gates on.
+                    onMenuOpen={selected && invites ? role.refresh : undefined}
+                    onLeave={(target) => {
+                      setSwitcherOpen(false);
+                      setLeaving({
+                        membership: target,
+                        intent: "leave",
+                        pending: false,
+                      });
+                    }}
+                  />
+                );
+              })}
+              {createPortal(
+                // The popover is transformed, which would anchor a fixed
+                // preview to it, so the preview sits on the body, above it.
+                // The move relocates the row; nothing remains to settle onto.
+                <DragOverlay
+                  dropAnimation={null}
+                  style={{ zIndex: "var(--layer-tooltip)" }}
+                >
+                  {dragging && (
+                    <div className={styles.dragOverlay}>
+                      <Avatar
+                        size="small"
+                        shape="squircle"
+                        alt=""
+                        fallback={communityName(dragging)}
+                        src={dragging.publishedIcon ?? dragging.icon}
+                      />
+                      <span>{communityName(dragging)}</span>
+                    </div>
+                  )}
+                </DragOverlay>,
+                document.body,
+              )}
+            </DndContext>
             <NavigationItem
               label="Join a community"
               icon={<UsersPlusIcon size={20} />}

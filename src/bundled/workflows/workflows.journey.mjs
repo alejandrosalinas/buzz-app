@@ -26,6 +26,13 @@ test.afterAll(async () => {
 // The landing status is empty only after every visible channel read settles.
 const landingStatus = (page) => page.locator(".workflow-page-status");
 
+// How many visual rows a node's text occupies, measured in the page.
+const textRows = (node) => {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  return new Set([...range.getClientRects()].map((rect) => rect.top)).size;
+};
+
 // The editor dialog is titled by the workflow name, so find it by its region.
 const editorDialog = (page) =>
   page
@@ -907,17 +914,47 @@ test("restricted cards and read-only editors keep keyboard controls without disc
         )
         .toBe(true);
       // A short owner identifier may wrap, but must not become a tall column
-      // of single characters when artwork and controls consume its width.
+      // of single characters when artwork and controls consume its width. The
+      // fixture owner has no profile name, so the identifier is a short key.
+      await expect
+        .poll(() => ownerLabel.getByText(/^npub…/).evaluate(textRows))
+        .toBeLessThanOrEqual(2);
+      // Too narrow, the date wraps whole to a second row. Whatever starts or
+      // ends a row must then be the owner or the date: a separator between
+      // them would be stranded at the row's edge.
       await expect
         .poll(() =>
-          ownerLabel.evaluate((node) => {
-            const range = document.createRange();
-            range.selectNodeContents(node);
-            return new Set([...range.getClientRects()].map((rect) => rect.top))
-              .size;
+          ownerLabel.evaluate((line) => {
+            const items = [...line.children];
+            const left = (item) => item.getBoundingClientRect().left;
+            const right = (item) => item.getBoundingClientRect().right;
+            // An item starts a row unless it continues beside the previous.
+            const starts = (index) =>
+              index === 0 || left(items[index]) < right(items[index - 1]);
+            return items
+              .filter(
+                (item, index) =>
+                  (starts(index) ||
+                    index === items.length - 1 ||
+                    starts(index + 1)) &&
+                  !/[\p{L}\p{N}]/u.test(item.textContent),
+              )
+              .map((item) => item.textContent);
           }),
         )
-        .toBeLessThanOrEqual(2);
+        .toEqual([]);
+      await expect
+        .poll(() => ownerLabel.locator("time").evaluate(textRows))
+        .toBe(1);
+      // "Owner:" is for assistive technology: on screen it is clipped away.
+      await expect
+        .poll(() =>
+          ownerLabel.getByText("Owner:").evaluate((node) => {
+            const { width, height } = node.getBoundingClientRect();
+            return width <= 1 && height <= 1;
+          }),
+        )
+        .toBe(true);
       await page
         .getByRole("button", { name: "Actions for Fixture A helper" })
         .click();

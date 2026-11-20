@@ -5,6 +5,7 @@
   height: 1rem;
   flex: 0 0 auto;
   place-items: center;
+  place-content: center;
   vertical-align: middle;
   font-size: var(--sidenav-emoji-size);
   line-height: 1;

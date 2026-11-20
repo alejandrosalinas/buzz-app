@@ -508,7 +508,7 @@ export function MessageReadStateItem({
       }}
     >
       <MenuIcon>{unread ? <EnvelopeOpenIcon /> : <EnvelopeIcon />}</MenuIcon>
-      {unread ? "Mark read" : "Mark unread"}
+      {unread ? "Mark as read" : "Mark as unread"}
     </MenuItem>
   );
 }
@@ -678,15 +678,15 @@ function ManagedMessageItems({
         <MenuItem
           onClick={() => {
             management.report(undefined);
-            try {
-              session.unread.follow(row.channelId, threadRootId, !following);
-            } catch (cause) {
-              management.report(
-                cause instanceof Error
-                  ? cause.message
-                  : "Could not save thread follow. Try again.",
+            session.unread
+              .follow(row.channelId, threadRootId, !following)
+              .catch((cause: unknown) =>
+                management.report(
+                  cause instanceof Error
+                    ? cause.message
+                    : "Could not save thread follow. Try again.",
+                ),
               );
-            }
           }}
         >
           <MenuIcon>{following ? <BellSlashIcon /> : <BellIcon />}</MenuIcon>

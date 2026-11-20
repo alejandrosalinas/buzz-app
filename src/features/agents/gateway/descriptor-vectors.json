@@ -1,0 +1,5491 @@
+{
+  "about": "Neutral shared vectors for BUZZ_AGENT_GATEWAY version 2. The TypeScript and native validators must accept every valid case with these normalized outputs, treat every off case as routing off, and refuse every invalid case with exactly its error code. raw is the literal input; otherwise descriptor is JSON-encoded. Names are folded (ASCII lowercase, _ to -) before comparison with protected. select cases pin how a build chooses its descriptor: an explicit BUZZ_AGENT_GATEWAY (explicit, a descriptor or raw) wins; else the entry of org-gateways.json (listed, or listed_raw for literal text) that lists the community of community_url; else none (expect null), including when community_url is blank or not a secure relay URL. explicit_error is the error code an invalid explicit descriptor fails with. Every listed entry is checked first, so a select case with error fails with exactly that message whatever else is set.",
+  "protected": {
+    "exact": [
+      "connection",
+      "keep-alive",
+      "proxy-connection",
+      "proxy-authorization",
+      "transfer-encoding",
+      "upgrade",
+      "te",
+      "trailer",
+      "host",
+      "origin",
+      "content-length",
+      "content-type",
+      "content-encoding",
+      "accept-encoding",
+      "expect",
+      "authorization",
+      "x-api-key",
+      "cookie",
+      "x-goog-api-key",
+      "user-agent",
+      "anthropic-version",
+      "anthropic-beta",
+      "x-claude-code-session-id",
+      "agent-session-id"
+    ],
+    "families": [
+      "x-amz-",
+      "anthropic-",
+      "x-stainless-",
+      "sec-",
+      "proxy-",
+      "content-"
+    ]
+  },
+  "valid": [
+    {
+      "name": "omitted launcher_client defaults to buzz",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "full profile",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      }
+    },
+    {
+      "name": "no reserved prefixes and no upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "version written as 2.0",
+      "raw": "{\"version\": 2.0, \"gateway\": \"https://gateway.example\", \"communities\": [{\"id\": \"22222222-2222-4222-8222-222222222222\", \"origin\": \"https://relay.example\"}], \"access_path\": \"/v9/access\", \"launcher_client\": \"client-a\", \"headers\": {\"launcher_client\": \"x-gw-launcher-client\", \"launcher_session\": \"x-gw-launcher-session\", \"human_pubkey\": \"x-gw-ctx-human-pubkey\", \"agent_pubkey\": \"x-gw-ctx-agent-pubkey\", \"community_id\": \"x-gw-ctx-community-id\", \"channel_id\": \"x-gw-ctx-channel-id\", \"message_id\": \"x-gw-ctx-message-id\", \"thread_id\": \"x-gw-ctx-thread-id\"}, \"reserved_prefixes\": [\"x-gw-ctx-\"], \"upstreams\": {\"claude-code\": {\"base\": \"/upstream/claude\"}, \"goose\": {\"base\": \"/upstream/goose\"}, \"pi\": {\"base\": \"/upstream/pi\"}}}",
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      }
+    },
+    {
+      "name": "a codex upstream, which native doesn't forward",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "codex": {
+            "base": "/upstream/codex"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "codex": {
+            "base": "/upstream/codex"
+          }
+        }
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      }
+    },
+    {
+      "name": "keys in any order",
+      "descriptor": {
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "launcher_client": "client-a",
+        "access_path": "/v9/access",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "gateway": "https://gateway.example",
+        "version": 2
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      }
+    },
+    {
+      "name": "community origin canonicalized",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://relay.example./"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      }
+    },
+    {
+      "name": "two communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "origin": "wss://other.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "origin": "https://other.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      },
+      "expect_native": {
+        "gateway": "https://gateway.example",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          }
+        }
+      }
+    }
+  ],
+  "off": [
+    {
+      "name": "unset",
+      "raw": ""
+    },
+    {
+      "name": "whitespace only",
+      "raw": " \n\t "
+    }
+  ],
+  "invalid": [
+    {
+      "name": "launcher_client null",
+      "error": "launcher_client",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {},
+        "launcher_client": null
+      }
+    },
+    {
+      "name": "not JSON",
+      "error": "json",
+      "raw": "{"
+    },
+    {
+      "name": "over 8 KiB",
+      "error": "size",
+      "raw": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+    },
+    {
+      "name": "over 8 KiB in UTF-8 bytes, not characters",
+      "error": "size",
+      "raw": "\"€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€\""
+    },
+    {
+      "name": "an array",
+      "error": "keys",
+      "descriptor": []
+    },
+    {
+      "name": "a string",
+      "error": "keys",
+      "descriptor": "x"
+    },
+    {
+      "name": "null",
+      "error": "keys",
+      "raw": "null"
+    },
+    {
+      "name": "a version 1 descriptor",
+      "error": "version",
+      "descriptor": {
+        "version": 1,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://relay.example"
+          }
+        ]
+      }
+    },
+    {
+      "name": "version as a string",
+      "error": "version",
+      "descriptor": {
+        "version": "2",
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "no version",
+      "error": "version",
+      "descriptor": {
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "version 3",
+      "error": "version",
+      "descriptor": {
+        "version": 3,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "a missing key",
+      "error": "keys",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"]
+      }
+    },
+    {
+      "name": "an extra key",
+      "error": "keys",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        },
+        "token": "x"
+      }
+    },
+    {
+      "name": "a version 2 descriptor with an extra legacy key",
+      "error": "keys",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        },
+        "model_access": "/x"
+      }
+    },
+    {
+      "name": "gateway 'http://gateway.example'",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": "http://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway 'https://gateway.example/'",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example/",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway 'https://gateway.example/path'",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example/path",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway 'https://user@gateway.example'",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://user@gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway 'https://GATEWAY.example'",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://GATEWAY.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway 'gateway.example'",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": "gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "gateway 7",
+      "error": "gateway",
+      "descriptor": {
+        "version": 2,
+        "gateway": 7,
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "no communities",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "17 communities",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "00000001-2222-4222-8222-222222222222",
+            "origin": "wss://r1.example"
+          },
+          {
+            "id": "00000002-2222-4222-8222-222222222222",
+            "origin": "wss://r2.example"
+          },
+          {
+            "id": "00000003-2222-4222-8222-222222222222",
+            "origin": "wss://r3.example"
+          },
+          {
+            "id": "00000004-2222-4222-8222-222222222222",
+            "origin": "wss://r4.example"
+          },
+          {
+            "id": "00000005-2222-4222-8222-222222222222",
+            "origin": "wss://r5.example"
+          },
+          {
+            "id": "00000006-2222-4222-8222-222222222222",
+            "origin": "wss://r6.example"
+          },
+          {
+            "id": "00000007-2222-4222-8222-222222222222",
+            "origin": "wss://r7.example"
+          },
+          {
+            "id": "00000008-2222-4222-8222-222222222222",
+            "origin": "wss://r8.example"
+          },
+          {
+            "id": "00000009-2222-4222-8222-222222222222",
+            "origin": "wss://r9.example"
+          },
+          {
+            "id": "0000000a-2222-4222-8222-222222222222",
+            "origin": "wss://r10.example"
+          },
+          {
+            "id": "0000000b-2222-4222-8222-222222222222",
+            "origin": "wss://r11.example"
+          },
+          {
+            "id": "0000000c-2222-4222-8222-222222222222",
+            "origin": "wss://r12.example"
+          },
+          {
+            "id": "0000000d-2222-4222-8222-222222222222",
+            "origin": "wss://r13.example"
+          },
+          {
+            "id": "0000000e-2222-4222-8222-222222222222",
+            "origin": "wss://r14.example"
+          },
+          {
+            "id": "0000000f-2222-4222-8222-222222222222",
+            "origin": "wss://r15.example"
+          },
+          {
+            "id": "00000010-2222-4222-8222-222222222222",
+            "origin": "wss://r16.example"
+          },
+          {
+            "id": "00000011-2222-4222-8222-222222222222",
+            "origin": "wss://r17.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate community id",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://a.example"
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://b.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate community origin",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://a.example"
+          },
+          {
+            "id": "44444444-4444-4444-8444-444444444444",
+            "origin": "https://a.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "non-canonical community id",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "AAAAAAAA-2222-4222-8222-222222222222",
+            "origin": "wss://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "nil community id",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "origin": "wss://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "community with an extra key",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://relay.example",
+            "name": "x"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "community origin with a path",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "wss://relay.example/x"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "insecure community origin",
+      "error": "communities",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "ws://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path ''",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path 'relative'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "relative",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a/'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a/",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '//host'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "//host",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a//b'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a//b",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a/../b'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a/../b",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/./a'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/./a",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a/.'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a/.",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a%2e'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a%2e",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a?x'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a?x",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a#x'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a#x",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/a\\\\b'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/a\\b",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/é'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/é",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path 'https://evil.example/a'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "https://evil.example/a",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path '/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "access_path 9",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": 9,
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "an upstream base escaping upward",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "goose": {
+            "base": "/upstream/../x"
+          }
+        }
+      }
+    },
+    {
+      "name": "an upstream base that is a URL",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "https://evil.example"
+          }
+        }
+      }
+    },
+    {
+      "name": "an upstream base with a trailing slash",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "pi": {
+            "base": "/upstream/"
+          }
+        }
+      }
+    },
+    {
+      "name": "launcher_client ''",
+      "error": "launcher_client",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "launcher_client 'has space'",
+      "error": "launcher_client",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "has space",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "launcher_client 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+      "error": "launcher_client",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "launcher_client 'slash/'",
+      "error": "launcher_client",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "slash/",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "launcher_client 5",
+      "error": "launcher_client",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": 5,
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "headers missing a role",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "headers with an extra role",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id",
+          "purpose": "x-gw-ctx-purpose"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "headers not an object",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": ["x-gw-a"],
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "header name 'X-Gw-Ctx-Thread-Id'",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "X-Gw-Ctx-Thread-Id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "header name 'x_gw_ctx_thread_id'",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x_gw_ctx_thread_id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "header name 'x-gw ctx'",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw ctx"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "header name ''",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": ""
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "header name 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "header name 3",
+      "error": "header_name",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": 3
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'authorization'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "authorization"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'content-md5'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "content-md5"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'anthropic-foo'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "anthropic-foo"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'x-amz-date'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-amz-date"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'sec-fetch-mode'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "sec-fetch-mode"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'proxy-thing'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "proxy-thing"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'x-stainless-os'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-stainless-os"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'x-claude-code-session-id'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-claude-code-session-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'agent-session-id'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "agent-session-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'host'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "host"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected header name 'te'",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "te"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate header names",
+      "error": "header_duplicate",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-message-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected and duplicate: protected is checked first",
+      "error": "header_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "cookie",
+          "thread_id": "cookie"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefix 'x-gw-ctx'",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefix 'x-'",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefix 'X-GW-'",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["X-GW-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefix 'x_gw_'",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x_gw_"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefix '---a'",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["---a"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefix 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-'",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-"
+        ],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "five reserved prefixes",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["aaa-", "bbb-", "ccc-", "ddd-", "eee-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate reserved prefixes",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-", "x-gw-ctx-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "reserved prefixes not a list",
+      "error": "prefix",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": "x-gw-ctx-",
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'content-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["content-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'x-amz-foo-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-amz-foo-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'anthropic-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["anthropic-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'x-api-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-api-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'agent-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["agent-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'x-claude-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-claude-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'user-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["user-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'accept-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["accept-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'proxy-x-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["proxy-x-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'sec-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["sec-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "protected reserved prefix 'x-stainless-a-'",
+      "error": "prefix_protected",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-stainless-a-"],
+        "upstreams": {
+          "claude-code": {
+            "base": "/upstream/claude"
+          },
+          "goose": {
+            "base": "/upstream/goose"
+          },
+          "pi": {
+            "base": "/upstream/pi"
+          }
+        }
+      }
+    },
+    {
+      "name": "a codex upstream base with a dot segment",
+      "error": "path",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "codex": {
+            "base": "/upstream/./codex"
+          }
+        }
+      }
+    },
+    {
+      "name": "a codex upstream with an extra key",
+      "error": "upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "codex": {
+            "base": "/upstream/codex",
+            "protocol": "x"
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown upstream",
+      "error": "upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "other": {
+            "base": "/x"
+          }
+        }
+      }
+    },
+    {
+      "name": "upstream with an extra key",
+      "error": "upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "goose": {
+            "base": "/x",
+            "url": "https://evil.example"
+          }
+        }
+      }
+    },
+    {
+      "name": "upstream not an object",
+      "error": "upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "goose": "/x"
+        }
+      }
+    },
+    {
+      "name": "upstreams a list",
+      "error": "upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": []
+      }
+    },
+    {
+      "name": "unknown upstream and bad base: shape is checked first",
+      "error": "upstreams",
+      "descriptor": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "client-a",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": ["x-gw-ctx-"],
+        "upstreams": {
+          "goose": {
+            "base": "/a/../b"
+          },
+          "other": {
+            "base": "/x"
+          }
+        }
+      }
+    }
+  ],
+  "select": [
+    {
+      "name": "an explicit descriptor wins over the list",
+      "explicit": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://staging-gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "wss://staging-relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://staging-relay.example",
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "the entry listing the default community",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://staging-gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "wss://staging-relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://staging-relay.example",
+      "expect": {
+        "version": 2,
+        "gateway": "https://staging-gateway.example",
+        "communities": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "origin": "https://staging-relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "the community URL is trimmed and compared as a relay origin",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://staging-gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "wss://staging-relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": " \uFEFF https://Relay.Example./ \uFEFF ",
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "no default community selects none",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://staging-gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "wss://staging-relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "",
+      "expect": null
+    },
+    {
+      "name": "an unlisted community selects none",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://staging-gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "wss://staging-relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://other.example",
+      "expect": null
+    },
+    {
+      "name": "an empty list selects none",
+      "listed": [],
+      "community_url": "wss://relay.example",
+      "expect": null
+    },
+    {
+      "name": "a blank explicit value falls through to the list",
+      "explicit_raw": "  ",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://relay.example",
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "not JSON",
+      "listed_raw": "",
+      "community_url": "",
+      "error": "src/bundled/org-gateways.json is invalid: it is not JSON."
+    },
+    {
+      "name": "not a list",
+      "listed": {},
+      "community_url": "",
+      "error": "src/bundled/org-gateways.json is invalid: it must be a list of at most 8 descriptors."
+    },
+    {
+      "name": "more than eight entries",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "",
+      "error": "src/bundled/org-gateways.json is invalid: it must be a list of at most 8 descriptors."
+    },
+    {
+      "name": "an entry that is not an object",
+      "listed": ["x"],
+      "community_url": "",
+      "error": "src/bundled/org-gateways.json is invalid: each entry must be a descriptor."
+    },
+    {
+      "name": "an invalid entry, even beside an explicit descriptor",
+      "explicit": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "listed": [
+        {
+          "version": 1,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "",
+      "error": "src/bundled/org-gateways.json is invalid: an entry is invalid (version)."
+    },
+    {
+      "name": "two entries listing one community",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://staging-gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "wss://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "",
+      "error": "src/bundled/org-gateways.json is invalid: two entries list the same community."
+    },
+    {
+      "name": "a non-secure community URL with an empty list selects none",
+      "listed": [],
+      "community_url": "ws://localhost:3000",
+      "expect": null
+    },
+    {
+      "name": "a non-secure URL for a listed community selects none",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "ws://relay.example",
+      "expect": null
+    },
+    {
+      "name": "an http:// URL for a listed community selects none",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "http://relay.example",
+      "expect": null
+    },
+    {
+      "name": "a URL with a path for a listed community selects none",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "https://relay.example/x",
+      "expect": null
+    },
+    {
+      "name": "a URL with userinfo for a listed community selects none",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://u@relay.example",
+      "expect": null
+    },
+    {
+      "name": "an entry matches on a community after its first",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "origin": "https://first-relay.example"
+            },
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://relay.example",
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "33333333-3333-4333-8333-333333333333",
+            "origin": "https://first-relay.example"
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "an uppercase scheme and :443 normalize to the listed origin",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "WSS://relay.example:443",
+      "expect": {
+        "version": 2,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "the same community id under two origins selects by origin",
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        },
+        {
+          "version": 2,
+          "gateway": "https://other-gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://other-relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://other-relay.example",
+      "expect": {
+        "version": 2,
+        "gateway": "https://other-gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://other-relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "launcher_client": "buzz",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      }
+    },
+    {
+      "name": "an invalid explicit descriptor fails even with a valid list",
+      "explicit": {
+        "version": 1,
+        "gateway": "https://gateway.example",
+        "communities": [
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "origin": "https://relay.example"
+          }
+        ],
+        "access_path": "/v9/access",
+        "headers": {
+          "launcher_client": "x-gw-launcher-client",
+          "launcher_session": "x-gw-launcher-session",
+          "human_pubkey": "x-gw-ctx-human-pubkey",
+          "agent_pubkey": "x-gw-ctx-agent-pubkey",
+          "community_id": "x-gw-ctx-community-id",
+          "channel_id": "x-gw-ctx-channel-id",
+          "message_id": "x-gw-ctx-message-id",
+          "thread_id": "x-gw-ctx-thread-id"
+        },
+        "reserved_prefixes": [],
+        "upstreams": {}
+      },
+      "listed": [
+        {
+          "version": 2,
+          "gateway": "https://gateway.example",
+          "communities": [
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "origin": "https://relay.example"
+            }
+          ],
+          "access_path": "/v9/access",
+          "headers": {
+            "launcher_client": "x-gw-launcher-client",
+            "launcher_session": "x-gw-launcher-session",
+            "human_pubkey": "x-gw-ctx-human-pubkey",
+            "agent_pubkey": "x-gw-ctx-agent-pubkey",
+            "community_id": "x-gw-ctx-community-id",
+            "channel_id": "x-gw-ctx-channel-id",
+            "message_id": "x-gw-ctx-message-id",
+            "thread_id": "x-gw-ctx-thread-id"
+          },
+          "reserved_prefixes": [],
+          "upstreams": {}
+        }
+      ],
+      "community_url": "wss://relay.example",
+      "explicit_error": "version"
+    }
+  ]
+}

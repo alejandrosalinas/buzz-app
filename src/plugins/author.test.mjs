@@ -33,7 +33,7 @@ test("generated author package exposes shared messages, captured-read Undo, host
       join(dir, "consumer.ts"),
       `
 import { createElement } from "react";
-import type { Context, ChannelMembersDialogProps, ChannelGeneralAccessProps, GeneralAccessPolicy, MemberChange, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, NetworkDiagnostics, NetworkDiagnosticsSnapshot, NetworkCaptureReset, NetworkLogLevel, PluginManifest, NamingPolicy, PagePreviewProps, PageSidebarProps, SidebarSectionContribution, SidebarSections, SidebarRowContribution, SidebarRows, ReadMutationResult, UnreadCapability, Backdrops } from "@buzz/author";
+import type { Context, DocumentEditorProps, DocumentEditorHandle, DocumentEditorSelection, ChannelMembersDialogProps, ChannelGeneralAccessProps, GeneralAccessPolicy, MemberChange, Delivery, HarnessConversation, McpHandler, StandaloneTurn, TurnResult, DecisionResult, Host, HostRequestOnceOptions, AddedTool, AddedToolContext, AddedToolReply, BuzzClient, Media, HostByteUpload, HostByteRequest, HostByteResponse, HostSavedBytes, NetworkDiagnostics, NetworkDiagnosticsSnapshot, NetworkCaptureReset, NetworkLogLevel, PluginManifest, NamingPolicy, PagePreviewProps, PageSidebarProps, SidebarSectionContribution, SidebarSections, SidebarRowContribution, SidebarRows, ReadMutationResult, UnreadCapability, Backdrops, PluginUi, Seen } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -69,6 +69,9 @@ export function apply(ctx: Context) {
     // @ts-expect-error The capability version is host-owned.
     diagnostics.version = 2;
   }
+  const seen: Seen | undefined = ctx.reflect.get("seen");
+  const key = "example.plugin/welcome";
+  if (seen?.has(key) === false) seen.mark(key);
   const sharingPolicy: GeneralAccessPolicy = { subject: "record", allowPublic: false, visibilityDescription: () => "Record access changes." };
   const general: ChannelGeneralAccessProps = { capability: ctx.relay.snapshot().session.channelDetails, channelId: "record", policy: sharingPolicy };
   const picker: ChannelMembersDialogProps = { session: ctx.relay.snapshot().session, channelId: "record", trigger: { current: null }, close() {},
@@ -76,11 +79,28 @@ export function apply(ctx: Context) {
     memberActions: { canAdd: true, pending: false, async change(change: MemberChange, signal: AbortSignal) { void [change.expectedRole, signal.aborted]; } },
     accessSettings: createElement(ctx.conversation.ui.GeneralAccess, general), shareLink: "buzz://plugin?id=example.plugin" };
   createElement(ctx.conversation.ui.MembersDialog, picker);
-  type HostPickerKeys = "agents" | "communities" | "navigator" | "signal" | "visit" | "canOpenLink" | "onOpenLink" | "onOpenConversation";
+  type HostPickerKeys = "agents" | "communities" | "navigator" | "signal" | "visit" | "canOpenLink" | "onOpenLink" | "onOpenMessage";
   const pickerHasNoHostProps: Extract<keyof ChannelMembersDialogProps, HostPickerKeys> extends never ? true : false = true;
   void pickerHasNoHostProps;
   // @ts-expect-error Host navigation visits are not plugin props.
   createElement(ctx.conversation.ui.MembersDialog, { ...picker, visit: true });
+  const editorRef: { current: DocumentEditorHandle | null } = { current: null };
+  const selection: DocumentEditorSelection = { start: 0, end: 1, source: false };
+  const editor: DocumentEditorProps = { ref: editorRef, value: "**Hello**", onChange(value) { void value.length; }, editing: true, source: false, onSourceChange() {}, linkOpen: false, onLinkOpenChange() {}, onSave() {}, maxLength: 32768, destinations: [{label: "Reference", href: "buzz://plugin?id=example.plugin"}] };
+  createElement(ctx.conversation.ui.DocumentEditor, editor);
+  editorRef.current?.focusSelection(selection);
+  // @ts-expect-error Source mode must be controlled with a boolean.
+  const invalidEditor: DocumentEditorProps = { ...editor, source: "Markdown" };
+  void invalidEditor;
+  const ui: PluginUi | undefined = ctx.reflect.get("ui");
+  if (ui) {
+    void createElement(ui.Dialog, { open: true, onOpenChange: (open: boolean) => void open, title: "Edit",
+      actions: createElement(ui.Button, { variant: "prominent", onClick: () => {} }, "Save") },
+      createElement(ui.Field, { label: "Name" }, createElement(ui.Input, { onValueChange: (value: string) => void value })));
+    void createElement(ui.Switch, { label: "Alerts", onCheckedChange: (checked: boolean) => void checked });
+    // @ts-expect-error Internal and legacy variants are not part of the plugin contract.
+    void createElement(ui.Button, { variant: "glass", children: "Glass" });
+  }
   const unread: UnreadCapability = ctx.relay.snapshot().session.unread;
   const conversations: ReturnType<UnreadCapability["inbox"]> = unread.inbox();
   if (unread.markCapturedMessagesRead) {
@@ -166,12 +186,17 @@ export function apply(ctx: Context) {
   const bytes: HostByteRequest = { url: "https://api.example.com/bytes", maxBytes: 1024 };
   void host.requestBytes?.(bytes).then((response: HostByteResponse) => {
     const body: Uint8Array = response.body;
-    void host.saveBytes?.(body, { sha256: "0".repeat(64) }).then((saved: HostSavedBytes) => {
-      void [saved.path, saved.size, saved.sha256, saved.expiresAt];
+    void host.saveBytes?.(body, { sha256: "0".repeat(64), releaseAfterSend: true }).then((saved: HostSavedBytes) => {
+      const acknowledged: true | undefined = saved.releaseAfterSend;
+      void [saved.path, saved.size, saved.sha256, saved.expiresAt, acknowledged];
     });
   });
   // @ts-expect-error Byte GET has no caller headers.
   host.requestBytes?.({ ...bytes, headers: {} });
+  // @ts-expect-error Release policy must be a boolean, not a callback.
+  host.saveBytes?.(new Uint8Array([1]), { sha256: "0".repeat(64), releaseAfterSend: () => true });
+  // @ts-expect-error Managed save has no caller account.
+  host.saveBytes?.(new Uint8Array([1]), { sha256: "0".repeat(64), owner: "caller supplied" });
   // @ts-expect-error Managed save has no caller path.
   host.saveBytes?.(new Uint8Array([1]), { sha256: "0".repeat(64), path: "/chosen" });
   ctx.pages.register({
@@ -279,6 +304,51 @@ import type { createServices } from "@buzz/author";
 `,
     );
     await writeFile(
+      join(dir, "document-consumer.ts"),
+      `
+import type { Context, MarkdownProps, PanelWorkspaceItem, PanelWorkspaceProps, PanelSplit } from "@buzz/author";
+export const inject = ["react", "conversation", "panels"];
+export function apply(ctx: Context) {
+  const React = ctx.react;
+  const document: MarkdownProps = { content: "**Hello**", scale: "document", openLink: () => false };
+  function Reader() {
+    ctx.panels.useTabTitle?.("A page", React.createElement("span", null, "A"));
+    return React.createElement(ctx.conversation.ui.Markdown, document);
+  }
+  function Workspace() {
+    const split: PanelSplit = ctx.panels.ui.useSplit(undefined, "example.plugin:reader", 448, 320);
+    const items: PanelWorkspaceItem[] = [{ id: "page", label: "Page", content: React.createElement(Reader), close: () => false }];
+    const props: PanelWorkspaceProps = { items, value: "page", select: () => {} };
+    return React.createElement("div", { ref: split.ref, style: split.style }, split.handle,
+      React.createElement(ctx.panels.ui.Workspace, props));
+  }
+  void Workspace;
+  // @ts-expect-error Channels tab menus are host-owned.
+  const tabMenu: PanelWorkspaceProps = { items: [], value: "", select: () => {}, tabMenu: undefined };
+  // @ts-expect-error Channels drag plumbing is host-owned.
+  const drag: PanelWorkspaceProps = { items: [], value: "", select: () => {}, drag: undefined };
+  // @ts-expect-error Conversation identity is host-owned.
+  const identity: PanelWorkspaceProps = { items: [], value: "", select: () => {}, identity: undefined };
+  // @ts-expect-error Native Close ownership is not a plugin option.
+  const main: PanelWorkspaceProps = { items: [], value: "", select: () => {}, main: true };
+  // @ts-expect-error Channels selection adoption is host-owned.
+  const adoption: PanelWorkspaceProps = { items: [], value: "", select: () => {}, adoptSelection: undefined };
+  // @ts-expect-error The injected component has the same narrow contract.
+  React.createElement(ctx.panels.ui.Workspace, { items: [], value: "", select: () => {}, main: true });
+  // @ts-expect-error Host opening identities are not plugin tab data.
+  const instance: PanelWorkspaceItem = { id: "page", label: "Page", content: null, instance: {} };
+  void [tabMenu, drag, identity, main, adoption, instance];
+  // @ts-expect-error Host link dispatch must synchronously report acceptance.
+  const bad: MarkdownProps = { content: "", openLink: async () => true };
+  // @ts-expect-error Only supported host heading scales are public.
+  const badScale: MarkdownProps = { content: "", scale: "custom" };
+  // @ts-expect-error Tab content is required.
+  const missing: PanelWorkspaceItem = { id: "page", label: "Page" };
+  void [bad, missing];
+}
+`,
+    );
+    await writeFile(
       join(dir, "plugin-status-consumer.ts"),
       `
 import type { Context } from "@buzz/author";
@@ -325,7 +395,11 @@ export function observePlugin(ctx: Context) {
             "@buzz/author": ["./author package/types/plugins/author.d.ts"],
           },
         },
-        files: ["consumer.ts", "plugin-status-consumer.ts"],
+        files: [
+          "consumer.ts",
+          "plugin-status-consumer.ts",
+          "document-consumer.ts",
+        ],
       }),
     );
     // Only generated declarations and the external consumer, never host source.

@@ -552,7 +552,14 @@ test("shared thread UI auto-loads, follows live replies, retries and isolates re
         1,
       );
     }
-    await expect(history.locator("pre code")).toHaveCSS("white-space", "pre");
+    await expect(history.locator("pre code")).toHaveCSS(
+      "white-space",
+      "pre-wrap",
+    );
+    await expect(history.locator("pre code")).toHaveCSS(
+      "overflow-wrap",
+      "anywhere",
+    );
     await expect(history.locator("table")).toContainText("wide-column-one-");
     await expect(history.locator("pre code")).toContainText("wide-content-");
     // Exercise native popup navigation without depending on a public website.
@@ -618,10 +625,12 @@ test("shared thread UI auto-loads, follows live replies, retries and isolates re
           element.getBoundingClientRect().right + 1
         )
           throw new Error(`${selector} overflows the thread`);
-        if (item.scrollWidth <= item.clientWidth)
+        if (selector === "table" && item.scrollWidth <= item.clientWidth)
           throw new Error(
             `${selector} does not provide local horizontal scrolling`,
           );
+        if (selector === "pre code" && item.scrollWidth > item.clientWidth)
+          throw new Error("Fenced code does not wrap inside the thread");
       }
     });
     await history.evaluate((el) => {

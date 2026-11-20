@@ -23,20 +23,20 @@ test("editing a saved group's name persists and keeps its channels", async ({
   await expect(work.locator('[data-channel-id="beta"]')).toBeVisible();
 
   await page.getByRole("button", { name: "More actions for Work" }).click();
-  await page.getByRole("menuitem", { name: "Rename section" }).click();
-  const dialog = page.getByRole("dialog", { name: "Rename section" });
-  const input = dialog.getByRole("textbox", { name: "Section name" });
+  await page.getByRole("menuitem", { name: "Workspace settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Workspace settings" });
+  const input = dialog.getByRole("textbox", { name: "Workspace name" });
   await expect(input).toHaveValue("Work");
   await input.fill("Projects");
-  await dialog.getByRole("button", { name: "Rename" }).click();
+  await dialog.getByRole("button", { name: "Save changes" }).click();
 
   await expect(dialog).toHaveCount(0);
   await expect(work.locator("summary")).toHaveAccessibleName("Projects");
   await expect(work.locator('[data-channel-id="beta"]')).toBeVisible();
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
   const { blob } = app.report.sidebarPublications.at(-1);
-  expect(blob.meta.s.work.name[2]).toBe("Projects");
-  expect(blob.meta.s.work.icon[2]).toBe(":stamp:");
+  expect(blob.sections.find(({ id }) => id === "work").name).toBe("Projects");
+  expect(blob.sections.find(({ id }) => id === "work").icon).toBe(":stamp:");
 
   await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
   await page.reload();
@@ -54,8 +54,8 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
   const more = page.getByRole("button", { name: "More actions for Work" });
   const openEditor = async () => {
     await more.click();
-    await page.getByRole("menuitem", { name: "Rename section" }).click();
-    const dialog = page.getByRole("dialog", { name: "Rename section" });
+    await page.getByRole("menuitem", { name: "Workspace settings" }).click();
+    const dialog = page.getByRole("dialog", { name: "Workspace settings" });
     await expect(dialog).toBeVisible();
     return dialog;
   };
@@ -74,8 +74,10 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
     await expect(trigger).toBeFocused();
   };
   let dialog = await openEditor();
-  const input = dialog.getByRole("textbox", { name: "Section name" });
+  const input = dialog.getByRole("textbox", { name: "Workspace name" });
   await expect(input).toHaveValue("Work");
+  await expect(input).toBeEnabled();
+  await input.focus();
   await expect(input).toBeFocused();
   const trigger = dialog.getByRole("button", {
     name: "Change section emoji",
@@ -89,7 +91,9 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
     path: testInfo.outputPath("edit-section-community-light.png"),
   });
   // A no-op Rename closes without publishing anything or resending a stale field.
-  await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
   await expect(dialog).toHaveCount(0);
   await expect(more).toBeFocused();
   expect(app.report.sidebarPublications ?? []).toHaveLength(0);
@@ -105,6 +109,28 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
   await expect(search).toHaveCount(0);
   await expect(dialog).toBeVisible();
   await expect(unicodeTrigger).toBeFocused();
+  await select("exclamation", "❗");
+  await expectIconCentered(dialog);
+  await unicodeTrigger.press("Enter");
+  await expect(search).toBeFocused();
+  await expectIconCentered(dialog);
+  await search.press("Escape");
+  await expect(unicodeTrigger).toBeFocused();
+  await expectIconCentered(dialog);
+
+  // A multi-codepoint emoji can have a wider advance than the fixed slot.
+  await unicodeTrigger.click();
+  await search.fill("woman technologist");
+  await page.getByRole("button", { name: "👩‍💻", exact: true }).click();
+  const tones = page.locator("em-emoji-picker #root > .menu");
+  await expect(tones).toBeVisible();
+  await tones.locator(".option").nth(3).click();
+  await expect(search).toHaveCount(0);
+  await expect(unicodeTrigger).toBeFocused();
+  await expect(unicodeTrigger).toHaveAccessibleName(
+    "Change section emoji, currently 👩🏽‍💻",
+  );
+  await expectIconCentered(dialog);
   await select("bus", "🚌");
   await expect(unicodeTrigger).toHaveAccessibleName(
     "Change section emoji, currently 🚌",
@@ -127,13 +153,15 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
   await dialog.screenshot({
     path: testInfo.outputPath("edit-section-unicode-dark.png"),
   });
-  await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
   await expect(dialog).toHaveCount(0);
   await expect(work.locator("summary")).toHaveAccessibleName("Work");
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
   let blob = app.report.sidebarPublications.at(-1).blob;
-  expect(blob.meta.s.work.name[2]).toBe("Work");
-  expect(blob.meta.s.work.icon[2]).toBe("🚌");
+  expect(blob.sections.find(({ id }) => id === "work").name).toBe("Work");
+  expect(blob.sections.find(({ id }) => id === "work").icon).toBe("🚌");
 
   dialog = await openEditor();
   await select("stamp", ":stamp:");
@@ -141,11 +169,13 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
   await dialog.screenshot({
     path: testInfo.outputPath("edit-section-community-dark.png"),
   });
-  await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(2);
   blob = app.report.sidebarPublications.at(-1).blob;
-  expect(blob.meta.s.work.icon[2]).toBe(":stamp:");
+  expect(blob.sections.find(({ id }) => id === "work").icon).toBe(":stamp:");
   await expect(work.locator("[data-sidebar-group-icon] img")).toBeVisible();
 
   // Keyboard removal changes only the draft; Cancel leaves the saved icon intact.
@@ -216,12 +246,13 @@ test("section emoji edits are centered, keyboard-safe, independently removable a
   await expect(search).toBeFocused();
   await expect(remove).toHaveCount(0);
   await search.press("Escape");
-  await dialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(3);
   blob = app.report.sidebarPublications.at(-1).blob;
-  expect(blob.meta.s.work.name[2]).toBe("Work");
-  expect(blob.meta.s.work.icon[2]).toBeNull();
+  expect(blob.sections.find(({ id }) => id === "work").name).toBe("Work");
   expect(blob.sections.find(({ id }) => id === "work")).not.toHaveProperty(
     "icon",
   );
@@ -258,8 +289,26 @@ async function expectIconCentered(dialog) {
       if (!artwork || !input) throw new Error("Section emoji geometry missing");
       const control = button.getBoundingClientRect();
       const icon = artwork.getBoundingClientRect();
+      // The fixed slot can be centered while its implicit grid track overflows.
+      // Range measures text advance, not the painted emoji's optical bounds.
+      const range = document.createRange();
+      range.selectNodeContents(artwork);
+      const content =
+        artwork.firstChild?.nodeType === Node.TEXT_NODE
+          ? range.getBoundingClientRect()
+          : (
+              artwork.querySelector("img, svg") ?? artwork
+            ).getBoundingClientRect();
       const name = input.getBoundingClientRect();
       return {
+        // The modest CSS nudge is Unicode-only, not a universal ink-centering gate.
+        unicode: artwork.firstChild?.nodeType === Node.TEXT_NODE,
+        nudge: new DOMMatrixReadOnly(
+          getComputedStyle(artwork.parentElement).transform,
+        ).m41,
+        contentX: Math.abs(
+          control.x + control.width / 2 - (content.x + content.width / 2),
+        ),
         x: Math.abs(control.x + control.width / 2 - (icon.x + icon.width / 2)),
         y: Math.abs(
           control.y + control.height / 2 - (icon.y + icon.height / 2),
@@ -269,6 +318,8 @@ async function expectIconCentered(dialog) {
         ),
       };
     });
+  expect(metrics.nudge).toBe(metrics.unicode ? 0.5 : 0);
+  expect(metrics.contentX).toBeLessThanOrEqual(1);
   expect(metrics.x).toBeLessThanOrEqual(1);
   expect(metrics.y).toBeLessThanOrEqual(1);
   expect(metrics.nameY).toBeLessThanOrEqual(1);

@@ -1,3 +1,7 @@
+import {
+  COMMUNITY_SESSION,
+  sessionScope,
+} from "../../features/agent-harness/session-scope";
 import { ModelDiscoveryRecovery } from "../../features/agents/ModelDiscoveryRecovery";
 // goose's New agent choices and agent settings. Providers, their keys and
 // their models are goose's own: listed from it, and saved into its config.
@@ -12,9 +16,14 @@ import {
 import { ProviderDialogActions } from "../../features/agents/ProviderDialogActions";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { TranscriptPanel } from "../../features/agents/TranscriptPanel";
-import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
+import {
+  AgentSaveButton,
+  ClearModelOverrides,
+} from "../../features/agents/AgentSaveButton";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { AISettings, runsOnDetails } from "../../features/agents/AISettings";
+import { CompactionField } from "../../features/agents/Compaction";
+import { withCompactAt } from "../../features/agents/compact-at";
 import {
   candidatesFor,
   offRecommended,
@@ -79,6 +88,7 @@ const SCOPES = [
     options: [
       { value: "thread", label: "One session per thread" },
       { value: "channel", label: "One session per channel" },
+      { value: "community", label: "One session per community" },
     ],
   },
 ];
@@ -129,6 +139,7 @@ type Row = Readonly<{
   sessionId: string;
   title: string;
   channelId: string;
+  community?: true;
   root?: string;
   at?: number;
   /** The goose sessions saved for its place. */
@@ -153,6 +164,7 @@ export function activityRows(
     conversation?: string | null;
   }[],
   label: (channelId: string) => { name?: string } | undefined = () => undefined,
+  source: (key: string) => Place = placeOf,
 ) {
   const running = new Map(
     live.flatMap((session) =>
@@ -170,7 +182,7 @@ export function activityRows(
     .map(([key, { at, sessions }]): Row => {
       const id = running.get(key)?.sessionId;
       const ids = [...new Set([...(id ? [id] : []), ...sessions])];
-      const place = placeOf(key);
+      const place = source(key);
       return {
         key,
         sessionId: ids[0] ?? "",
@@ -865,7 +877,15 @@ export function createTabs({
           workspace,
           ...(row.sessionId ? { sessionId: row.sessionId } : {}),
           ...(row.sessions ? { sessions: row.sessions } : {}),
-          ...(row.channelId ? { place: placeOf(row.key) } : {}),
+          ...(row.channelId
+            ? {
+                place: {
+                  channelId: row.channelId,
+                  ...(row.root ? { root: row.root } : {}),
+                  ...(row.community ? { community: true } : {}),
+                },
+              }
+            : {}),
           ...(working ? { working } : {}),
         },
         signal,
@@ -942,6 +962,7 @@ export function createTabs({
       live,
       starts,
       (id) => runtime.channelLabel(agent.key, id),
+      (key) => runtime.source(agent.key, key),
     );
     // The opened conversation's session: a thread's saved or live one, else
     // its channel's, read again each render so a first save is picked up.
@@ -950,18 +971,29 @@ export function createTabs({
     const match = (channelId: string, root?: string) =>
       conversations.find(
         (row) =>
-          row.sessionId && row.channelId === channelId && row.root === root,
+          !row.community &&
+          row.sessionId &&
+          row.channelId === channelId &&
+          row.root === root,
       );
     const here =
       conversation &&
       (() => {
         const { channelId, rootId } = conversation;
-        const found = (rootId && match(channelId, rootId)) || match(channelId);
+        const shared = readConfig(agent.config).scope === "community";
+        const found = shared
+          ? conversations.find((row) => row.community)
+          : (rootId && match(channelId, rootId)) || match(channelId);
         if (found) return found;
         const root =
-          readConfig(agent.config).scope === "channel" ? undefined : rootId;
+          readConfig(agent.config).scope !== "thread" ? undefined : rootId;
         return {
-          key: root ? `${channelId}/${root}` : channelId,
+          key: shared
+            ? COMMUNITY_SESSION
+            : root
+              ? `${channelId}/${root}`
+              : channelId,
+          ...(shared ? { community: true as const } : {}),
           sessionId: "",
           title: "",
           channelId,
@@ -976,9 +1008,11 @@ export function createTabs({
       return working === undefined ? undefined : working ? "Working" : "Idle";
     };
     const label = (row: Row) =>
-      row.title
-        ? titled(agent.name, row.title)
-        : `${row.name || row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
+      row.community
+        ? "Community session"
+        : row.title
+          ? titled(agent.name, row.title)
+          : `${row.name || row.channelId.slice(0, 8)} · ${row.root ? `thread ${row.root.slice(0, 8)}` : "channel"}`;
     const { open, show, back } = useOpenTranscript(
       conversation,
       label,
@@ -1373,6 +1407,35 @@ export function createTabs({
         if (!validWorkspace(workspace))
           throw new Error("Enter an absolute or ~/… workspace path.");
         const next = { ...draft, model: draft.model.trim(), workspace };
+        if (
+          settingsHost?.proposedModelOrEffort &&
+          (next.model || next.effort)
+        ) {
+          if (agent.executionBinding)
+            throw new Error(
+              "Clear the model and thinking overrides to use the target’s defaults.",
+            );
+          if (next.model) {
+            const provider =
+              next.provider || (await setup.providers()).defaults.provider;
+            if (
+              !provider ||
+              !(await setup.models(provider)).some(
+                (model) => model.id === next.model,
+              )
+            )
+              throw new Error(
+                "Choose an available Goose model or clear the model and thinking overrides.",
+              );
+          }
+          if (
+            next.effort &&
+            !(await setup.efforts(next)).levels.includes(next.effort)
+          )
+            throw new Error(
+              "Choose a thinking level this Goose model supports or use Default.",
+            );
+        }
         // A Custom agent's save drops a mark left from before, which a later
         // blank synced model would otherwise turn back on.
         await save(onRecommended(next) ? next : offRecommended(next));
@@ -1426,6 +1489,11 @@ export function createTabs({
               ) : (
                 manual
               )}
+              <CompactionField
+                value={draft.compactAt}
+                disabled={saving}
+                onChange={(value) => setDraft(withCompactAt(draft, value))}
+              />
             </SettingsGroup>
             <AgentInstructions
               value={draft.instructions}
@@ -1450,19 +1518,29 @@ export function createTabs({
               />
             </Field>
             <Select
-              label="Sessions"
+              label="Session scope"
+              description="Choose how your agent uses sessions to keep context."
               variant="preference"
               value={draft.scope}
               groups={SCOPES}
               onValueChange={(value) =>
                 setDraft({
                   ...draft,
-                  scope: value === "channel" ? "channel" : "thread",
+                  scope: sessionScope(value),
                 })
               }
             />
           </>
         )}
+        {settingsHost?.proposedModelOrEffort &&
+          (draft.model || draft.effort) && (
+            <ClearModelOverrides
+              disabled={saving}
+              onClick={() =>
+                setDraft(offRecommended({ ...draft, model: "", effort: "" }))
+              }
+            />
+          )}
         <AgentSaveButton form={form} saving={saving} disabled={!changed} />
         {settingsSection !== "identity" && settingsContent}
       </form>

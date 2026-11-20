@@ -7,6 +7,7 @@ import { parseInviteLink, type InviteLink } from "../communities/invite-link";
 import { communityDestination } from "../communities/destination";
 import type { ClientSnapshot } from "../communities/service";
 import { agentCardTarget, parseBuzzLink, settingsTarget } from "./buzz-links";
+import { newMessageTarget } from "../channel-navigation/new-message-route";
 import { entityTarget } from "../repos/routes";
 import type { Navigation, OpenFailure, OpenResult } from "./controller";
 import { parseOpenTarget, type OpenTarget } from "./targets";
@@ -96,6 +97,16 @@ export function deepLinkStep(
           viewer: client.viewer,
           communityOrigin: communityDestination(client.selected).url,
         }),
+      };
+    if (link.format === "new-message")
+      return {
+        open: newMessageTarget(
+          {
+            viewer: client.viewer,
+            communityOrigin: communityDestination(client.selected).url,
+          },
+          link.to,
+        ),
       };
     if (link.format === "entity")
       return {

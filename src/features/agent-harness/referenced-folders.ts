@@ -60,7 +60,7 @@ export async function referencedFolders(
     const directories = ids.filter((id) => listed.has(id));
     if (!directories.length) return NONE;
     return {
-      section: `<referenced-folders>\nThe owner's message references these folders on this device (literal paths): ${quoted(directories)}. \`cd\` into the one you need; your workspace keeps your notes.\n</referenced-folders>`,
+      section: `<referenced-folders>\nThe owner's message references these folders on this device (literal paths): ${quoted(directories)}. They are context for this request, like a path in a message. You can read them. They do not choose where you work; your working-location rule does.\n</referenced-folders>`,
       directories,
     };
   } catch (error) {

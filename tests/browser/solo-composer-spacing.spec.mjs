@@ -19,8 +19,8 @@ test("Solo choices preserve composer geometry while settled and refreshing", asy
   await page.goto(app.origin);
   await newChat(page);
   await page
-    .getByRole("navigation", { name: "Solo conversations" })
-    .locator(`[data-solo-channel-id="${channelId}"]`)
+    .getByRole("navigation", { name: "Subscribed channels" })
+    .locator(`[data-solo-destination-id="${channelId}"]`)
     .click();
   const input = page.getByRole("textbox", {
     name: "Message your agents",

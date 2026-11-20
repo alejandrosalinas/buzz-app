@@ -5,7 +5,10 @@ import type { CompletionEdit } from "./contracts";
 /** A new chat's workspace, as its composer's workspace control shows it. */
 export type WorkspaceCompletionTarget = Readonly<{
   /** The list the workspace control offers. */
-  preferences: Pick<RelaySession["soloPreferences"], "snapshot" | "subscribe">;
+  preferences: Pick<
+    RelaySession["sidebarPreferences"],
+    "snapshot" | "subscribe"
+  >;
   /** What choosing it in the workspace control does. */
   choose(workspaceId: string): void;
 }>;

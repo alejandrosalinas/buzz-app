@@ -17,31 +17,53 @@ const plugin = JSON.parse(
 if (process.platform !== "darwin")
   throw new Error("This fixture requires macOS");
 const base = `https://downloads.claude.ai/claude-code-releases/${version}`;
-function download(path, destination) {
+const root = join(process.cwd(), "target/protected-claude-test");
+await mkdir(root, { recursive: true });
+// CDN transfers can reset mid-stream (curl 92). curl discards a failed
+// attempt's partial -o output before retrying; the checksum gates the result.
+const retries = 3;
+const retryDelaySeconds = 5;
+function download(path, destination, attemptSeconds) {
   const result = spawnSync(
     "curl",
     [
-      "-fsSL",
+      "-fSL",
+      "--no-progress-meter",
       "--connect-timeout",
       "15",
       "--max-time",
-      "300",
+      String(attemptSeconds),
       "--speed-limit",
       "1024",
       "--speed-time",
       "60",
-      ...(destination ? ["-o", destination] : []),
+      "--retry",
+      String(retries),
+      "--retry-delay",
+      String(retryDelaySeconds),
+      // Bounds server Retry-After waits, which override --retry-delay.
+      "--retry-max-time",
+      String(retries * attemptSeconds),
+      "--retry-all-errors",
+      "-o",
+      destination,
       `${base}/${path}`,
     ],
-    { encoding: "utf8", timeout: 310000, maxBuffer: 1024 * 1024 },
+    {
+      encoding: "utf8",
+      timeout: (retries + 1) * (attemptSeconds + retryDelaySeconds + 10) * 1000,
+    },
   );
   if (result.status !== 0)
     throw new Error(
-      `Claude fixture download failed: ${result.stderr || result.error || result.status}`,
+      `Claude fixture download failed (${result.error ?? `exit ${result.status}`}): ${result.stderr}`,
     );
-  return result.stdout;
+  // Keep recovered transfer errors visible in the CI log.
+  process.stderr.write(result.stderr);
 }
-const manifest = JSON.parse(download("manifest.json"));
+const manifestPath = join(root, "manifest.json");
+download("manifest.json", manifestPath, 30);
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const checksum = manifest.platforms?.[platform]?.checksum;
 if (typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum))
   throw new Error("The pinned release has no valid platform checksum");
@@ -57,11 +79,9 @@ for (const arch of ["arm64", "x64"]) {
       `The plugin's ${arch} Claude pin does not match the release`,
     );
 }
-const root = join(process.cwd(), "target/protected-claude-test");
-await mkdir(root, { recursive: true });
 const binary = join(root, "claude");
 console.log(`Downloading pinned Claude ${version} (${platform})`);
-download(`${platform}/claude`, binary);
+download(`${platform}/claude`, binary, 300);
 const hash = createHash("sha256");
 for await (const chunk of createReadStream(binary)) hash.update(chunk);
 if (hash.digest("hex") !== checksum)

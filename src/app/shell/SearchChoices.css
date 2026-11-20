@@ -16,32 +16,9 @@
     max-width: 45%;
   }
 
-  .search-palette-author-chip {
-    display: block;
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    border: 0;
-    border-radius: var(--radius-chip);
-    padding: var(--space-half) var(--space-2);
-    background: var(--affordance-subtle);
-    color: var(--text-link);
-    font: inherit;
-    font-size: var(--text-body-sm);
-    cursor: pointer;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .search-palette-author-chip:hover {
-      background: var(--affordance-subtle-hover);
-    }
-  }
-
   /* Each filter keeps the hue of what it names: people, conversations and
-     agents as their results show them, dates orange. A chosen filter is
-     tinted; Ask keeps its icon in the same hue. */
+     agents as their results show them, dates orange. A chosen filter leads
+     with its dot; Ask keeps its icon in the same hue. */
   .search-palette [data-operator="from"] {
     --filter-fill: var(--surface-categorical-green);
     --filter-fill-hover: var(--surface-categorical-green-hover);
@@ -54,20 +31,17 @@
     --filter-ink: var(--text-categorical-blue);
     --filter-dot: var(--icon-categorical-blue);
   }
-  .search-palette [data-operator="during"] {
+  .search-palette
+    :is(
+      [data-operator="during"],
+      [data-operator="before"],
+      [data-operator="after"],
+      [data-operator="on"]
+    ) {
     --filter-dot: var(--icon-categorical-orange);
   }
   .search-palette [data-operator="ask"] {
     --filter-dot: var(--icon-categorical-amber);
-  }
-  .search-palette-author-chip[data-operator] {
-    background: var(--filter-fill, var(--affordance-subtle));
-    color: var(--filter-ink, var(--text-link));
-  }
-  @media (hover: hover) and (pointer: fine) {
-    .search-palette-author-chip[data-operator]:hover {
-      background: var(--filter-fill-hover, var(--affordance-subtle-hover));
-    }
   }
   .search-peek-filter-icon {
     color: var(--filter-dot);
@@ -369,12 +343,22 @@
     color: var(--text-subtle);
     font-size: var(--text-caption);
   }
-  .search-palette-group .navigation-section-heading[data-search-action] {
-    padding-inline: var(--space-2);
+  .search-peek-reranked {
+    flex: none;
+    color: var(--text-subtle);
   }
-  .navigation-section-heading[data-search-action] .buzz-button {
-    width: 100%;
-    justify-content: flex-start;
+  .search-palette-group .navigation-section-heading[data-search-cut] {
+    position: sticky;
+    /* Over the scroller's top padding, so no row shows above it. */
+    top: calc(-1 * var(--space-1));
+    z-index: 1;
+    background: var(--surface-panel);
+  }
+  /* A row the keyboard reveals stops below its pinned heading. */
+  .navigation-section-heading[data-search-cut]
+    + .navigation-section-rows
+    :is([data-search-result], .search-control-row) {
+    scroll-margin-top: var(--size-row);
   }
 
   /* virtua places each drawn row itself, outside the rows' flex gap, so
@@ -560,6 +544,44 @@
     font-family: var(--font-mono);
   }
 
+  /* Filters overhangs the field as Clear does, so the field keeps its
+     height. */
+  /* Chosen filters lead the field. Long names shorten rather than
+     squeeze the typed text out. */
+  .search-palette-author-prefix > * {
+    flex-shrink: 1;
+  }
+  .search-filter-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The dot matches the filter's row in the guide. */
+  .search-filter-dot {
+    flex: none;
+    width: var(--space-1h);
+    height: var(--space-1h);
+    border-radius: var(--radius-pill);
+    background: var(--filter-dot, var(--icon-subtle));
+  }
+
+  /* A guide pill's dot, in its filter's hue. */
+  .search-guide-dot {
+    fill: var(--filter-dot, var(--icon-subtle));
+  }
+  .search-guide-examples {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  /* Example rows keep their text in line with the headings; their hover
+     and focus fill reach past it. */
+  .search-guide-tries {
+    display: flex;
+    flex-direction: column;
+    margin-inline: calc(-1 * var(--space-2));
+  }
   .search-peek-keys {
     display: flex;
     flex-wrap: wrap;

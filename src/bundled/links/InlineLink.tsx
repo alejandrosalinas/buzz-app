@@ -20,11 +20,17 @@ import {
   HashIcon,
   LockIcon,
 } from "../../shared/design-system/icons/index";
-import { useContext, type ComponentProps, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import {
   LinkLabelContext,
   LinkContentContext,
-  LinkChannelPrivateContext,
+  LinkChannelKindContext,
+  LinkAccessibleNameContext,
 } from "../../features/conversation/LinkLabelContext";
 import { buzzLinkKind } from "../../features/navigation/buzz-links";
 import styles from "../../shared/InlineReference.module.css";
@@ -46,6 +52,51 @@ const serviceHosts = {
 } as const;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+/** Presentation only; the host keeps the source URL and chooses how to open it. */
+export function githubSkillLabel(href: string): string | undefined {
+  try {
+    const url = new URL(href);
+    // Read the original path because URL normalizes dot segments away.
+    const raw = href.match(/^https:\/\/([^/?#]+)(\/[^?#]*)?(?:[?#]|$)/i);
+    if (
+      !raw ||
+      raw[1]?.toLowerCase() !== url.hostname ||
+      !["github.com", "www.github.com", "raw.githubusercontent.com"].includes(
+        url.hostname,
+      )
+    )
+      return;
+    const parts = (raw[2] ?? "").slice(1).split("/").map(decodeURIComponent);
+    if (
+      parts.some(
+        (part) =>
+          !part || part === "." || part === ".." || /[/\\\p{Cc}]/u.test(part),
+      )
+    )
+      return;
+    const [owner, repo, ...path] = parts;
+    if (
+      !owner ||
+      !repo ||
+      !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner) ||
+      !/^[A-Za-z0-9._-]{1,100}$/.test(repo)
+    )
+      return;
+    if (
+      url.hostname !== "raw.githubusercontent.com" &&
+      !["blob", "raw"].includes(path.shift() ?? "")
+    )
+      return;
+    if (path[0] === "refs" && ["heads", "tags"].includes(path[1] ?? ""))
+      path.splice(0, 2);
+    // A ref, a skill directory, and SKILL.md must all be present.
+    if (path.length < 3 || path.at(-1) !== "SKILL.md") return;
+    return `Skill: ${path.at(-2)} · ${owner}/${repo}`;
+  } catch {
+    return;
+  }
+}
+
 export function linkKind(href: string) {
   try {
     const url = new URL(href);
@@ -53,6 +104,7 @@ export function linkKind(href: string) {
       return buzzLinkKind(href);
     }
     if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (githubSkillLabel(href)) return "github";
     // Microsoft's OneDrive for Business host shape; ordinary SharePoint stays generic.
     if (/^[a-z0-9-]+-my\.sharepoint\.com$/.test(url.hostname))
       return "onedrive";
@@ -98,8 +150,9 @@ const icons = {
   spreadsheet: TableIcon,
   presentation: PresentationIcon,
   buzz: ChatCircleIcon,
+  chat: ChatCircleIcon,
   channel: HashIcon,
-  message: ChatCircleIcon,
+  message: ThreadIcon,
   thread: ThreadIcon,
 };
 
@@ -133,12 +186,14 @@ export function LinkLabel({
 }) {
   const contextualLabel = useContext(LinkLabelContext);
   const content = useContext(LinkContentContext);
-  const privateChannel = useContext(LinkChannelPrivateContext);
-  const kind = linkKind(href);
-  if (!kind) return <>{label}</>;
-  if (label === href && contextualLabel) label = contextualLabel;
+  const channelKind = useContext(LinkChannelKindContext);
+  const destination = linkKind(href);
+  const kind =
+    destination === "channel" && channelKind === "chat" ? "chat" : destination;
+  if (kind && label === href && contextualLabel) label = contextualLabel;
   if (label === href) {
     if (kind === "channel") label = "Channel";
+    else if (kind === "chat") label = "Chat";
     else if (kind === "message") label = "Message";
     else if (kind === "thread") label = "Thread";
     else if (kind === "buzz") label = "Buzz";
@@ -152,15 +207,29 @@ export function LinkLabel({
   // Markdown encodes Unicode in destinations while retaining it in visible text.
   const rawDestination =
     label === href ||
-    (linkKind(label) !== null && new URL(label).href === new URL(href).href);
-  const Icon = kind === "channel" && privateChannel ? LockIcon : icons[kind];
+    (kind !== null &&
+      linkKind(label) !== null &&
+      new URL(label).href === new URL(href).href);
+  const skill =
+    rawDestination || label.trim().toLowerCase() === "skill.md"
+      ? githubSkillLabel(href)
+      : undefined;
+  const setAccessibleName = useContext(LinkAccessibleNameContext);
+  useEffect(() => {
+    setAccessibleName?.(skill);
+    return () => setAccessibleName?.(undefined);
+  }, [setAccessibleName, skill]);
+  if (!kind) return <>{label}</>;
+  if (skill) label = skill;
+  const Icon =
+    kind === "channel" && channelKind === "private" ? LockIcon : icons[kind];
   icon ??= (
     <Icon
       aria-hidden="true"
       className={kind === "channel" ? channelIconClass(Icon) : styles.icon}
     />
   );
-  if (content !== undefined && !rawDestination)
+  if (!skill && content !== undefined && !rawDestination)
     return (
       <span data-link-kind={kind}>
         {icon}
@@ -168,7 +237,7 @@ export function LinkLabel({
       </span>
     );
   // Shorten only raw destinations; authored labels and resolved channel names stay intact.
-  if (rawDestination) {
+  if (rawDestination && !skill) {
     const characters = Array.from(label);
     if (characters.length > 45)
       label = `${characters.slice(0, 34).join("")}…${characters.slice(-10).join("")}`;

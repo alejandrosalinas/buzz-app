@@ -14,7 +14,7 @@ test.use({
 // The browser boundary here is real menu focus/portal interaction plus signed,
 // encrypted sidebar preference persistence across a full page reload. Component
 // tests cover the placement state transitions without app startup.
-test("Move conversation saves a DM in a section and restores it there after reload", async ({
+test("Move to… saves a DM in a workspace and restores it there after reload", async ({
   page,
   app,
 }) => {
@@ -35,13 +35,13 @@ test("Move conversation saves a DM in a section and restores it there after relo
     path: test.info().outputPath("dm-move-row-menu.png"),
   });
   const move = page.getByRole("menuitem", {
-    name: "Move conversation",
+    name: "Move to…",
     exact: true,
   });
   await move.focus();
   await page.keyboard.press("ArrowRight");
   const destinations = page.getByRole("menu", {
-    name: "Move Alice Fixture to section",
+    name: "Move Alice Fixture to workspace",
     exact: true,
   });
   await expect(destinations).toBeVisible();
@@ -69,7 +69,7 @@ test("Move conversation saves a DM in a section and restores it there after relo
   await expect.poll(() => app.report.sidebarPublications?.length ?? 0).toBe(1);
   expect(
     app.report.sidebarPublications.find(
-      ({ coordinate }) => coordinate === "channel-sections",
+      ({ coordinate }) => coordinate === "channel-workspaces",
     ).blob.assignments,
   ).toEqual({ beta: "work", "dm-move": "work" });
 
@@ -78,10 +78,10 @@ test("Move conversation saves a DM in a section and restores it there after relo
   await expect(directMessages).toHaveCount(0);
 
   await work.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move conversation" }).focus();
+  await page.getByRole("menuitem", { name: "Move to…" }).focus();
   await page.keyboard.press("ArrowRight");
   const returnDestinations = page.getByRole("menu", {
-    name: "Move Alice Fixture to section",
+    name: "Move Alice Fixture to workspace",
     exact: true,
   });
   await expect(returnDestinations).toBeVisible();
@@ -130,7 +130,7 @@ async function pull(page, row, section) {
   );
 }
 
-test("dragging a DM files it in a section and back, and Channels and Direct messages refuse each other's rows", async ({
+test("dragging a DM files it in a section and back, and Team and Direct messages refuse each other's rows", async ({
   page,
   app,
 }) => {

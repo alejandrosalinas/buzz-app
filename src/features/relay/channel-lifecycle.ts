@@ -58,10 +58,11 @@ export interface ChannelLifecycleCapability {
   /** `ifStale` lets a read that succeeded within `FRESH_FOR` answer, for
    * triggers that only suggest visibility may have changed. `trailing` needs
    * a read that starts after this call: repeated calls during a pending read
-   * share one more read after it. */
+   * share one more read after it. `strong` reads from the relay's writer, for
+   * a trigger that follows a relay write the read must see. */
   refreshVisibility(
     signal?: AbortSignal,
-    options?: { ifStale?: boolean; trailing?: boolean },
+    options?: { ifStale?: boolean; trailing?: boolean; strong?: boolean },
   ): Promise<void>;
   observeRemoval(listener: (channelId: string) => void): () => void;
 }
@@ -74,6 +75,7 @@ export function createChannelLifecycle({
   canAccess,
   acceptDiscovery,
   removed,
+  deleted,
 }: {
   reader?: RelayReader | undefined;
   writer?: RelayWriter | undefined;
@@ -82,6 +84,7 @@ export function createChannelLifecycle({
   canAccess(id: string): boolean;
   acceptDiscovery(events: readonly RelayEvent[]): void;
   removed(id: string): void;
+  deleted?: (id: string) => void;
 }) {
   let closed = false;
   let busy = false;
@@ -104,6 +107,7 @@ export function createChannelLifecycle({
   let refreshController: AbortController | undefined;
   // The one read `trailing` refreshes queue behind a pending read.
   let trailing: Promise<void> | undefined;
+  let trailingStrong = false;
   // When this epoch's last visibility refresh succeeded.
   let refreshedAt: number | undefined;
   const available = !!reader && !!writer;
@@ -327,17 +331,25 @@ export function createChannelLifecycle({
     },
     refreshVisibility(
       caller?: AbortSignal,
-      options?: { ifStale?: boolean; trailing?: boolean },
+      options?: { ifStale?: boolean; trailing?: boolean; strong?: boolean },
     ) {
       if (!reader || closed || caller?.aborted) return Promise.resolve();
       if (refresh && !refreshSignal?.aborted) {
         if (!options?.trailing) return refresh;
         // The pending read may predate this call.
+        if (options.strong) trailingStrong = true;
         if (!trailing) {
           const started = epoch;
           const next: Promise<void> = refresh.then(() => {
-            if (trailing === next) trailing = undefined;
-            if (started === epoch) return capability.refreshVisibility(caller);
+            // A clear retired this read; its shared state is a newer one's.
+            if (trailing !== next || started !== epoch) return;
+            trailing = undefined;
+            const strong = trailingStrong;
+            trailingStrong = false;
+            return capability.refreshVisibility(
+              caller,
+              strong ? { strong } : undefined,
+            );
           });
           trailing = next;
         }
@@ -364,7 +376,9 @@ export function createChannelLifecycle({
       // retries within the same budget.
       const operation = retryRead(
         async () => {
-          await owned({ caller: signal }, readVisibility);
+          await owned({ caller: signal }, (read) =>
+            readVisibility(read, options?.strong),
+          );
           if (started === epoch) refreshedAt = Date.now();
         },
         signal,
@@ -581,6 +595,7 @@ export function createChannelLifecycle({
                 }
               } else if (!record) {
                 removed(id);
+                if (action === "delete") deleted?.(id);
                 for (const listener of removalListeners) listener(id);
                 return;
               }
@@ -617,6 +632,7 @@ export function createChannelLifecycle({
       for (const controller of controllers.keys()) controller.abort();
       refresh = undefined;
       trailing = undefined;
+      trailingStrong = false;
       refreshedAt = undefined;
       visibility = undefined;
       emit({ status: "idle", hidden: Object.freeze([]) });

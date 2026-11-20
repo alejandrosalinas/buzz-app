@@ -390,3 +390,95 @@ it("retains opening revisions for ordinary tabs and forwards explicitly reconcil
     base: { settings: "reconciled" },
   });
 });
+
+it("offers a direct history link for incompatible synced settings", async () => {
+  const content = {
+    version: 1,
+    agentType: "test/echo",
+    future: { keep: true },
+    settings: { scope: "community", voice: "maple", model: 42, effort: "high" },
+  };
+  const expected = {
+    channel: "9b353519-f4fe-4757-aef4-bec6cc0ae54c",
+    d: "settings",
+    type: "buzz.agent.settings" as const,
+  };
+  const head = {
+    kind: 45010,
+    id: "broken",
+    pubkey: agent.pubkey,
+    sig: "",
+    created_at: 1,
+    tags: [
+      ["ar", "1"],
+      ["h", expected.channel],
+      ["d", expected.d],
+      ["type", expected.type],
+      ["op", "create"],
+      ["title", "Agent settings"],
+    ],
+    content: JSON.stringify(content),
+  };
+  const revise = vi.fn(async () => ({ status: "accepted" as const }));
+  const openVersionHistory = vi.fn();
+  const history = {
+    read: async () => [],
+    sides: [{ side: "settings", expected, head, version: 1 }],
+    settings: {
+      agentType: agent.type,
+      schema: {
+        scope: ["thread", "channel"],
+        model: "string",
+        effort: ["low", "high"],
+      },
+    },
+    revise,
+  };
+  const agents = {
+    configHistory: () => history,
+    addedTabs: () => [],
+    save: vi.fn(),
+    snapshot: () => ({ agents: [agent] }),
+  } as unknown as Agents;
+  const type = {
+    tabs: [
+      {
+        id: "settings",
+        title: "Identity",
+        role: "settings",
+        component: () => <p>Harness settings</p>,
+      },
+    ],
+  } as unknown as import("./service").RegisteredAgentType;
+  render(
+    agentSections({
+      agents,
+      agent: {
+        ...agent,
+        configProblem:
+          'These agent settings aren\'t compatible with this version of Buzz: Setting "scope" has an unsupported value',
+      },
+      type,
+      openVersionHistory,
+      memories: undefined,
+    })
+      .find((section) => section.value === "agent:settings")
+      ?.render(),
+  );
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(
+    'These agent settings aren\'t compatible with this version of Buzz: Setting "scope" has an unsupported value',
+  );
+  expect(alert).toHaveTextContent(
+    "Use a Buzz version that supports them, or open Previous Versions to look for a compatible revision.",
+  );
+  const historyLink = screen.getByRole("button", { name: "Previous Versions" });
+  expect(historyLink.closest("p")).toBe(alert);
+  expect(historyLink).toHaveAttribute("data-variant", "link");
+  expect(historyLink).toHaveAttribute("data-size", "text");
+  const user = userEvent.setup();
+  await user.click(historyLink);
+  expect(openVersionHistory).toHaveBeenCalledOnce();
+  expect(revise).not.toHaveBeenCalled();
+  expect(agents.save).not.toHaveBeenCalled();
+});

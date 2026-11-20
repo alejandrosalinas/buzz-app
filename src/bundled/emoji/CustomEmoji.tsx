@@ -1,8 +1,6 @@
-import { useEffect, useState } from "react";
+import { useReadyImage } from "../../shared/design-system/useReadyImage";
 import type { CustomEmoji as Emoji } from "../../features/relay/emoji";
 import styles from "./Emoji.module.css";
-
-const RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 
 /** Event URLs never bypass the captured community's media policy. */
 export function CustomEmoji({
@@ -18,33 +16,26 @@ export function CustomEmoji({
 }
 
 function EmojiImage({ src, literal }: { src: string; literal: string }) {
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  // Transient media failures must recover while the message stays mounted.
-  // Bound requests for missing images and cancel recovery when the source leaves.
-  useEffect(() => {
-    const delay = RETRY_DELAYS_MS[attempt];
-    if (!failed || delay === undefined) return;
-    const timer = window.setTimeout(() => {
-      setAttempt(attempt + 1);
-      setFailed(false);
-    }, delay);
-    return () => window.clearTimeout(timer);
-  }, [failed, attempt]);
-  return !failed ? (
-    <img
-      className={styles.customEmoji}
-      data-copy-emoji={literal}
-      draggable={false}
-      src={src}
-      alt={literal}
-      title={literal}
-      width={22}
-      height={22}
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
-  ) : (
-    literal
+  const { status, failing, image } = useReadyImage(src);
+  // A source that failed keeps its text until a retry loads; the hidden retry
+  // loads eagerly and copies nothing, so the text is copied once.
+  const placeholder = failing && status !== "loaded";
+  if (status === "failed") return literal;
+  return (
+    <>
+      {placeholder && literal}
+      <img
+        {...image}
+        className={styles.customEmoji}
+        data-copy-emoji={placeholder ? undefined : literal}
+        draggable={false}
+        alt={placeholder ? "" : literal}
+        title={placeholder ? undefined : literal}
+        width={22}
+        height={22}
+        loading={placeholder ? "eager" : image.loading}
+        hidden={placeholder}
+      />
+    </>
   );
 }

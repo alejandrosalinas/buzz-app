@@ -17,6 +17,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 function fixture(resume = Promise.resolve()) {
+  const decoder = {
+    muted: false,
+    srcObject: null as unknown,
+    play: vi.fn(async () => {}),
+    pause: vi.fn(),
+  };
+  vi.stubGlobal(
+    "Audio",
+    vi.fn(function AudioMock() {
+      return decoder;
+    }),
+  );
+  vi.stubGlobal(
+    "MediaStream",
+    vi.fn(function MediaStreamMock(tracks) {
+      return { tracks };
+    }),
+  );
   const tracks = [{ stop: vi.fn() }];
   const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
   const source = {
@@ -51,7 +69,7 @@ function fixture(resume = Promise.resolve()) {
   const peer = {
     connectionState: "new",
     onconnectionstatechange: () => {},
-    ontrack: () => {},
+    ontrack: (_event: { track: { kind: string } }) => {},
     close: vi.fn(),
     addTrack: vi.fn(),
     createDataChannel: vi.fn(() => events),
@@ -109,7 +127,10 @@ function fixture(resume = Promise.resolve()) {
   const abort = new AbortController();
   const ended = vi.fn();
   const output = vi.fn(async (_samples: number[]) => {});
-  const open = (send: (samples: number[]) => Promise<void> = output) =>
+  const open = (
+    send: (samples: number[]) => Promise<void> = output,
+    voice?: string,
+  ) =>
     openVoice(
       rpc as unknown as AppServer,
       "thread",
@@ -118,6 +139,7 @@ function fixture(resume = Promise.resolve()) {
       ended,
       "instructions",
       thinking,
+      voice,
     );
   return {
     open,
@@ -133,8 +155,20 @@ function fixture(resume = Promise.resolve()) {
     capture,
     tracks,
     listeners,
+    decoder,
   };
 }
+it("keeps incoming WebRTC audio decoding and releases its muted sink on close", async () => {
+  const f = fixture();
+  const connection = await f.open();
+  f.peer.ontrack({ track: { kind: "audio" } });
+  expect(f.decoder.muted).toBe(true);
+  expect(f.decoder.play).toHaveBeenCalledOnce();
+  expect(f.decoder.srcObject).toEqual({ tracks: [{ kind: "audio" }] });
+  await connection.close();
+  expect(f.decoder.pause).toHaveBeenCalledOnce();
+  expect(f.decoder.srcObject).toBeNull();
+});
 it("forwards output while the seat is busy and cuts it on close", async () => {
   const f = fixture();
   const connection = await f.open();
@@ -356,3 +390,18 @@ it("projects realtime thinking until speech, completion or interruption, and ign
   f.events.onmessage?.({ data: JSON.stringify({ type: "response.created" }) });
   expect(f.thinking).not.toHaveBeenCalled();
 });
+
+it.each(["cove", "maple", ""])(
+  "starts realtime with the assigned voice %s",
+  async (voice) => {
+    const f = fixture();
+    const connection = await f.open(f.output, voice);
+    const start = vi
+      .mocked(f.rpc.request as unknown as AppServer["request"])
+      .mock.calls.find(([method]) => method === "thread/realtime/start");
+    expect(start?.[1]).toEqual(expect.objectContaining({ threadId: "thread" }));
+    if (voice) expect(start?.[1]).toHaveProperty("voice", voice);
+    else expect(start?.[1]).not.toHaveProperty("voice");
+    await connection.close();
+  },
+);

@@ -420,8 +420,12 @@ it("keys choices by channel and canonical root and keeps them across reload", as
   });
   // A decided choice needs no conversation lookup.
   expect(second.reader.read).not.toHaveBeenCalled();
-  expect(() => second.unread.follow("missing", root.id, true)).toThrow();
-  expect(() => second.unread.follow("c0", "not-an-event", true)).toThrow();
+  await expect(
+    second.unread.follow("missing", root.id, true),
+  ).rejects.toThrow();
+  await expect(
+    second.unread.follow("c0", "not-an-event", true),
+  ).rejects.toThrow();
 });
 
 it("leaves the saved choice and every projection unchanged when saving fails", async () => {
@@ -439,7 +443,9 @@ it("leaves the saved choice and every projection unchanged when saving fails", a
   await settled(answer);
   const woken = vi.fn();
   const stop = unread.subscribeSync(woken);
-  expect(() => unread.follow("c0", root.id, true)).toThrow("Quota exceeded");
+  await expect(unread.follow("c0", root.id, true)).rejects.toThrow(
+    "Quota exceeded",
+  );
   expect(woken).not.toHaveBeenCalled();
   expect(unread.following("c0", root.id)).toBe(false);
   expect(unread.attention("c0", answer.id).category).toBeUndefined();
@@ -548,4 +554,69 @@ it("invalidates the evicted channel and Activity at the shared choice limit", as
   expect(activityNotified).toHaveBeenCalled();
   stopActivity();
   stop();
+});
+
+it("shows a follow publication error that happens after the tap, and retries it", async () => {
+  const saved = memoryThreadFollows();
+  let health: { status: string; error?: string } = { status: "synchronized" };
+  const listeners = new Set<() => void>();
+  const retry = vi.fn(async () => {});
+  const follows: ThreadFollowStorage = {
+    ...saved,
+    syncHealth: () => health,
+    retry,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const { unread } = await setup(follows);
+  const woken = vi.fn();
+  const stop = unread.subscribeSync(woken);
+  expect(unread.sync().status).not.toBe("error");
+  health = { status: "failed", error: "Relay refused the follow choices" };
+  for (const listener of listeners) listener();
+  expect(woken).toHaveBeenCalled();
+  expect(unread.sync()).toMatchObject({
+    status: "error",
+    error: "Relay refused the follow choices",
+  });
+  expect(unread.sync()).toBe(unread.sync());
+  await unread.retrySync();
+  expect(retry).toHaveBeenCalledOnce();
+  stop();
+});
+
+it("startup gate: a refused Inbox follow changes nothing while mark unread still works", async () => {
+  const saved = memoryThreadFollows();
+  const follows: ThreadFollowStorage = {
+    ...saved,
+    async set() {
+      throw new Error("Follow choices are not ready. Connect and try again.");
+    },
+  };
+  const { owner, unread, settled } = await setup(follows);
+  const root = event(peer, 10, []);
+  const answer = reply(peer, 20, root);
+  owner.accept([root, answer]);
+  await settled(answer);
+  await expect(unread.follow("c0", root.id, true)).rejects.toThrow("not ready");
+  expect(unread.following("c0", root.id)).toBe(false);
+  await unread.markUnreadLocal({
+    kind: "message",
+    channelId: "c0",
+    messageId: answer.id,
+  });
+  await unread.markUnreadLocal({ kind: "channel", channelId: "c1" });
+});
+
+it("warns when a peer's follow choices can't be read, without failing read sync", async () => {
+  const saved = memoryThreadFollows();
+  const follows: ThreadFollowStorage = {
+    ...saved,
+    syncHealth: () => ({ status: "synchronized", complete: false }),
+  };
+  const { unread } = await setup(follows);
+  expect(unread.sync().status).not.toBe("error");
+  expect(unread.sync().error).toMatch("can't be read here");
 });

@@ -7,7 +7,7 @@ import {
 } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
-import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
+import { SpringLoadedNavigationItem } from "./SpringLoadedNavigationItem";
 import { OwnedContribution } from "../../plugins/OwnedContribution";
 import styles from "../../bundled/channels/Channels.module.css";
 import type { Navigation } from "../navigation/controller";
@@ -256,7 +256,7 @@ function SectionContents({
         const destination = entry.select(row);
         return (
           <div key={row.id} className={styles.contributionNavigationItem}>
-            <NavigationItem
+            <SpringLoadedNavigationItem
               label={row.label}
               icon={row.icon}
               trailing={
@@ -268,6 +268,12 @@ function SectionContents({
               }
               selected={isSelectedDestination(destination, current)}
               onClick={() => select(destination)}
+              // Only a conversation has a composer for the dragged files.
+              onSpring={
+                destination.kind === "conversation"
+                  ? () => select(destination)
+                  : undefined
+              }
             />
           </div>
         );

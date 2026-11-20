@@ -102,7 +102,7 @@ export const GOOSE: AcpHooks = {
     // The session's whole tool set: goose's developer tools and the Buzz
     // tools, so extensions in the owner's goose config and plugins never load
     // into a Buzz agent. The pinned Goose persists this list, including the
-    // Buzz MCP token; aaif-goose/goose#12908 is not in v1.59.2. Keep the entry
+    // Buzz MCP token; aaif-goose/goose#12908 is not in v1.60.1. Keep the entry
     // until upstream supports client MCP servers alongside this allowlist.
     // The non-persistence acceptance test remains a known failure.
     // Mesh sessions pass a narrower `platform` set (see mesh-compute).
@@ -199,6 +199,8 @@ export const GooseProcess = {
     launch: Readonly<{
       cwd: string;
       env?: Readonly<Record<string, string | null>>;
+      /** The context size, in tokens, its sessions compact by. */
+      compactAt?: number;
       serve?: ServeMcp;
       protected?: boolean;
       signal?: AbortSignal;
@@ -212,6 +214,10 @@ export const GooseProcess = {
         ...databricks(),
         ...launch.env,
         ...(launch.protected && { GOOSE_DISABLE_SESSION_NAMING: "true" }),
+        // goose compacts at the lower of this and its share of the window.
+        ...(launch.compactAt && {
+          GOOSE_AUTO_COMPACT_TOKEN_LIMIT: String(launch.compactAt),
+        }),
       },
     });
     const cancel = () => void goose.kill();

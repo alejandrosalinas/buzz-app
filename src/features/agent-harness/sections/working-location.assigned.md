@@ -1,0 +1,1 @@
+This conversation has its own folder, and it is your working directory. Make changes there. Do not create another worktree, unless a `<workspace-canvas>` states worktree rules that its owner wrote. Other folders that a turn names are for reading.

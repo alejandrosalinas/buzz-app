@@ -8,7 +8,8 @@ import {
   useChannelActivitySnapshot,
   useStableRowActivity,
 } from "./activity-presentation";
-import { activityRuns } from "./activity-groups";
+import { activityRuns, relayedRuns } from "./activity-groups";
+import { RelayedRunPreview } from "./RelayedRunPreview";
 import { DayDivider } from "./MessageTimestamp";
 import { workflowLabel } from "../relay/workflow-attribution";
 import { usePanelTabHost } from "../panels/PanelWorkspace";
@@ -16,7 +17,6 @@ import { moveMessageSelection } from "./message-selection";
 import { MessageSelection } from "./use-message-selection";
 import { MessageEditScope } from "./MessageEditScope";
 import { useMessageSelectionCopy } from "./selection-copy";
-import { SelectionQuote } from "./SelectionQuote";
 import { ReplySummary } from "./ReplySummary";
 import { ReplyBranch } from "./ReplyBranch";
 import { replyTree } from "./reply-tree";
@@ -40,6 +40,7 @@ import {
 import { XIcon } from "../../shared/design-system/icons/index";
 import type { ConversationExtensions } from "../conversation/contracts";
 import type { ChannelMessage } from "../relay/contracts";
+import { compareMessages } from "../relay/message-order";
 import type { RelaySession } from "../relay/session";
 import {
   threadFailure,
@@ -47,7 +48,8 @@ import {
   type ThreadView,
 } from "../relay/threads";
 import { useProfileGeneration, useRowProfiles } from "../relay/react";
-import { rowProfileIds } from "../relay/membership";
+import { diffPreview, rowProfileIds } from "../relay/membership";
+import { plainText } from "../notifications/content";
 import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
 import { MessageContextMenus } from "./MessageActionBar";
 import {
@@ -100,6 +102,7 @@ export type ThreadPanelProps = {
   revealFocus?: boolean | undefined;
   /** With revealSelected: each new value reveals the selected message again. */
   revealRequest?: number | undefined;
+  latestRequest?: AbortSignal | undefined;
   /** An opening that reads the thread as it opens it names the thread's read
    * time from before that read; each new request decides the divider again. */
   unreadRequest?: { readThrough: number } | undefined;
@@ -129,6 +132,17 @@ export type ThreadPanelProps = {
 
 // Read errors are diagnostics, not copy; the notice says what happened.
 const THREAD_FAILED = "This thread didn’t load.";
+
+/** The ids of the folded group, activity or relayed, that holds a reply. */
+function foldedGroupOf(tree: ReturnType<typeof replyTree>, id: string) {
+  return [...tree.children.values()]
+    .flatMap((rows) => [
+      ...activityRuns(rows),
+      ...relayedRuns(rows).map((run) => run.relayed),
+    ])
+    .find((group) => group.some((row) => row.id === id))
+    ?.map((row) => row.id);
+}
 
 /** Safe to retarget through ordinary props; callers do not own internal remount keys. */
 export function ThreadPanel(props: ThreadPanelProps) {
@@ -352,11 +366,10 @@ function RetainedThreadPanel(props: ThreadPanelProps) {
           revealSelected ||
           (navigation?.target.kind === "conversation" &&
             navigation.target.threadRootId !== messageId);
-        const view = session.thread(
-          channelId,
-          messageId,
-          exact ? { exact: true } : undefined,
-        );
+        const view = session.thread(channelId, messageId, {
+          exact,
+          reading: true,
+        });
         prior?.view.dispose();
         const next = {
           view,
@@ -461,9 +474,10 @@ function OwnedThreadPanel({
         revealSelected ||
         (navigation?.target.kind === "conversation" &&
           navigation.target.threadRootId !== messageId);
-      const owned = exact
-        ? session.thread(channelId, messageId, { exact: true })
-        : session.thread(channelId, messageId);
+      const owned = session.thread(channelId, messageId, {
+        exact,
+        reading: true,
+      });
       const cancel = () => {
         owned.dispose();
         setView(undefined);
@@ -553,6 +567,7 @@ function ThreadMessages({
   revealSelected,
   revealFocus,
   revealRequest,
+  latestRequest,
   unreadRequest,
   requireReadyRoot,
   onDraftSaved,
@@ -587,6 +602,7 @@ function ThreadMessages({
   /** Reveal an inline target without taking focus from its host. */
   revealFocus?: boolean | undefined;
   revealRequest?: number | undefined;
+  latestRequest?: AbortSignal | undefined;
   unreadRequest?: ThreadPanelProps["unreadRequest"];
   requireReadyRoot?: boolean | undefined;
   onDraftSaved?: ThreadPanelProps["onDraftSaved"];
@@ -689,19 +705,20 @@ function ThreadMessages({
   );
   const activityVisit = useRef<unknown[]>([]);
   useLayoutEffect(() => {
-    const request = [messageId, navigation?.signal, revealRequest];
-    if (
-      !messageId ||
-      request.every((part, index) => part === activityVisit.current[index]) ||
-      !snapshot.replies.some((row) => row.id === messageId)
-    )
+    if (!messageId || !snapshot.replies.some((row) => row.id === messageId))
+      return;
+    const group = foldedGroupOf(tree, messageId);
+    // A target that joins a group later, as a relay does once its owner
+    // verifies, opens that group. One that stays in a group stays as the
+    // reader left it, even when paging or the unread line reshapes the group.
+    const request = [messageId, navigation?.signal, revealRequest, !!group];
+    if (request.every((part, index) => part === activityVisit.current[index]))
       return;
     activityVisit.current = request;
-    const group = [...tree.children.values()]
-      .flatMap((rows) => activityRuns(rows))
-      .find((group) => group.some((row) => row.id === messageId));
-    const first = group?.[0]?.id;
-    if (first) setExpandedActivity((current) => new Set([...current, first]));
+    // Every id, so a group split at the unread line opens where the target is.
+    const ids = group ?? [];
+    if (ids.length)
+      setExpandedActivity((current) => new Set([...current, ...ids]));
   }, [messageId, navigation?.signal, revealRequest, snapshot.replies, tree]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [replyParent, setReplyParent] = useState<string>();
@@ -746,6 +763,7 @@ function ThreadMessages({
   const agentPubkeys = useKnownAgentPubkeys(session, profiles);
   const scroller = useRef<HTMLElement>(null);
   const positioned = useRef(false);
+  const positionedLatestRequest = useRef<AbortSignal | undefined>(undefined);
   const shown = useRef(active);
   const readingSettled = useRef(false);
   const [initialPositioned, setInitialPositioned] = useState(false);
@@ -760,6 +778,7 @@ function ThreadMessages({
         contentHeight: number;
         scrollTop: number;
         anchor?: { element: HTMLElement; top: number };
+        line?: number;
       }
     | undefined
   >(undefined);
@@ -770,6 +789,9 @@ function ThreadMessages({
     const row = [
       ...element.querySelectorAll<HTMLElement>("[data-message-id]"),
     ].find((row) => row.getBoundingClientRect().bottom > top);
+    const line = element.querySelector<HTMLElement>(
+      "[data-new-messages-boundary]",
+    );
     resizePosition.current = {
       width: element.clientWidth,
       height: element.clientHeight,
@@ -783,6 +805,7 @@ function ThreadMessages({
             },
           }
         : {}),
+      ...(line ? { line: line.getBoundingClientRect().top - top } : {}),
     };
   }, []);
   const jumpingToLatest = useRef(false);
@@ -813,10 +836,27 @@ function ThreadMessages({
     lostPlace !== navigation.signal &&
     navigation.position(THREAD_PLACE) !== undefined;
   const restoredVisit = useRef<AbortSignal | undefined>(undefined);
+  // The row Back/Forward restored. If it joins a folded group later, as a
+  // relay does once its owner verifies, that group opens once to keep it shown;
+  // the reader can close it again.
+  const restoredRow = useRef<
+    { signal: AbortSignal; id: string; grouped: boolean } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    const restored = restoredRow.current;
+    if (!restored || restored.signal !== navigation?.signal) return;
+    const group = foldedGroupOf(tree, restored.id);
+    if (!!group === restored.grouped) return;
+    restored.grouped = !!group;
+    if (group)
+      setExpandedActivity((current) => new Set([...current, ...group]));
+  }, [tree, navigation?.signal]);
   const olderAnchor = useRef<
     { id: string; top: number; ancestors: readonly string[] } | undefined
   >(undefined);
   const olderDemand = useRef(false);
+  // The reading anchor's id while its row is detached, until it remounts.
+  const remounted = useRef<{ id: string; top: number } | undefined>(undefined);
   const targetAnchor = useRef<number | undefined>(undefined);
   // biome-ignore lint/correctness/useExhaustiveDependencies: each new target request retires the previous reveal anchor, not the reader's state.
   useLayoutEffect(() => {
@@ -889,20 +929,20 @@ function ThreadMessages({
     request: [] as unknown[],
     ids: new Set<string>(),
   });
-  // A continuation may supply the parent of the visible reply. Commit its new
-  // ancestors before restoring geometry; expanded branches stay open.
+  // A page may supply the parent of a reply shown without it. The reply stays
+  // shown, in its parent's branch: commit that before restoring geometry.
+  const shownTree = useRef(tree);
   useLayoutEffect(() => {
-    const anchor = olderAnchor.current;
-    if (!anchor || snapshot.status === "loading") return;
-    const added = tree
-      .ancestors(anchor.id)
-      .filter((id) => !anchor.ancestors.includes(id));
+    const added = (shownTree.current.children.get(undefined) ?? []).flatMap(
+      (row) => tree.parents.get(row.id) ?? [],
+    );
+    shownTree.current = tree;
     if (added.length)
       setExpanded((current) => {
         if (added.every((id) => current.has(id))) return current;
         return new Set([...current, ...added]);
       });
-  }, [tree, snapshot.status]);
+  }, [tree]);
   // Exact targets may precede their ancestors in bounded history. Reveal every
   // available ancestor as it arrives; missing parents remain visible at the top.
   useLayoutEffect(() => {
@@ -974,9 +1014,20 @@ function ThreadMessages({
     opening?: object | undefined;
     id?: string | null;
     failed?: true;
+    shown?: string | null | undefined;
   }>(() => ({ opening }));
-  if (opening && opening !== boundary.opening) setBoundary({ opening });
+  // A route can arrive after its opening already showed a line; keep that line
+  // on screen until the new decision replaces it, rather than blinking it out.
+  if (opening && opening !== boundary.opening)
+    setBoundary({
+      opening,
+      shown: boundary.id === undefined ? boundary.shown : boundary.id,
+    });
   const unreadBoundary = boundary.id;
+  const shownBoundary =
+    unreadBoundary === undefined ? boundary.shown : unreadBoundary;
+  // The line stays with a reply that moved under its late parent.
+  const lineRow = tree.parents.get(shownBoundary ?? "") ?? shownBoundary;
   const placed = useRef<typeof boundary>(undefined);
   // Focus as this panel opened, and whether pointer or keyboard input has
   // come since: either way the person owns focus now.
@@ -1001,7 +1052,11 @@ function ThreadMessages({
     if (boundary.id !== undefined) {
       // A failed read decided nothing: decide again once it recovers, unless
       // the reader has left the latest reply since.
-      if (boundary.failed && snapshot.status === "ready")
+      if (
+        boundary.failed &&
+        snapshot.status === "ready" &&
+        !snapshot.recovering
+      )
         setBoundary(
           follow.current
             ? { opening: boundary.opening }
@@ -1012,13 +1067,15 @@ function ThreadMessages({
     if (
       revealSelected ||
       returning ||
+      (latestRequest && positionedLatestRequest.current === latestRequest) ||
       (navigation && !rootTarget) ||
       (snapshot.status === "ready" && snapshot.root?.id !== messageId)
     ) {
       setBoundary({ ...boundary, id: null });
       return;
     }
-    if (snapshot.status === "error") {
+    // A read waiting on recovery may wait long: show what is loaded.
+    if (snapshot.status === "error" || snapshot.recovering) {
       setBoundary({ ...boundary, id: null, failed: true });
       return;
     }
@@ -1081,16 +1138,21 @@ function ThreadMessages({
       (row) => row && session.unread.attention(channelId, row.id).unread,
     ).length;
     const unreadOlder = (threadUnread?.observedCount ?? 0) > loadedUnread;
+    const readThrough =
+      since ?? session.unread.threadReadThrough(channelId, messageId);
     if (
       known &&
       snapshot.direction === "older" &&
       (snapshot.canLoadMore || snapshot.limited) &&
       oldest &&
-      (unreadOlder ||
-        oldest.createdAt >
-          (since ?? session.unread.threadReadThrough(channelId, messageId)))
+      (unreadOlder || oldest.createdAt > readThrough)
     ) {
-      if (snapshot.canLoadMore) void view.loadMore();
+      // Page to the frontier in one read, not one page per decision. Read
+      // per page: a read synced mid-load can move it.
+      if (snapshot.canLoadMore)
+        void view.loadMore(
+          () => since ?? session.unread.threadReadThrough(channelId, messageId),
+        );
       // Past the page limit the first unread reply stays unknown.
       else setBoundary({ ...boundary, id: null });
       return;
@@ -1109,6 +1171,7 @@ function ThreadMessages({
     active,
     unreadRequest,
     revealSelected,
+    latestRequest,
     returning,
     navigation,
     rootTarget,
@@ -1392,6 +1455,12 @@ function ThreadMessages({
       revealed.current = navigation.signal;
       navigation.complete({ status: "opened" });
     }
+    const openLatest =
+      active &&
+      element.clientHeight > 0 &&
+      latestRequest &&
+      !latestRequest.aborted &&
+      positionedLatestRequest.current !== latestRequest;
     if (
       (revealSelected && !inlineReveal) ||
       (revealSignal && revealed.current !== revealSignal) ||
@@ -1401,7 +1470,7 @@ function ThreadMessages({
         !(snapshot.root && snapshot.direction) &&
         (snapshot.status !== "ready" ||
           (snapshot.direction !== "older" && snapshot.canLoadMore))) ||
-      (!positioned.current && unreadBoundary === undefined)
+      (!positioned.current && unreadBoundary === undefined && !openLatest)
     )
       return;
     // Native scroll anchoring is off here, so this panel owns ordinary reading
@@ -1422,7 +1491,15 @@ function ThreadMessages({
     // Back/Forward returns once to where this visit was left: its row, with
     // the branch holding it reopened, or else its nearest ancestor shown.
     // When neither is loaded the visit opens again as it first did.
-    if (
+    if (openLatest) {
+      positionedLatestRequest.current = latestRequest;
+      targetAnchor.current = undefined;
+      olderAnchor.current = undefined;
+      remounted.current = undefined;
+      lineTop.current = undefined;
+      jumpingToLatest.current = false;
+      follow.current = true;
+    } else if (
       navigation &&
       returning &&
       restoredVisit.current !== navigation.signal
@@ -1433,6 +1510,16 @@ function ThreadMessages({
         : [];
       if (closed.length) {
         setExpanded((current) => new Set([...current, ...closed]));
+        return;
+      }
+      // A place inside a folded group reopens that group before it is
+      // measured: every member, so either side of the unread line opens.
+      const folded =
+        anchor && !element.querySelector(`[data-message-id="${anchor.id}"]`)
+          ? foldedGroupOf(tree, anchor.id)
+          : undefined;
+      if (folded?.some((id) => !expandedActivity.has(id))) {
+        setExpandedActivity((current) => new Set([...current, ...folded]));
         return;
       }
       const row =
@@ -1448,25 +1535,72 @@ function ThreadMessages({
         return;
       }
       restoredVisit.current = navigation.signal;
+      lineTop.current = undefined;
+      const restoredId = row?.dataset.messageId;
+      restoredRow.current = restoredId
+        ? {
+            signal: navigation.signal,
+            id: restoredId,
+            grouped: !!foldedGroupOf(tree, restoredId),
+          }
+        : undefined;
       targetAnchor.current = undefined;
       follow.current = !row;
       if (row && anchor)
-        element.scrollTop += readingDrift(element, {
-          element: row,
-          top: anchor.top,
-        });
+        element.scrollTop += readingDrift(
+          element,
+          shownAnchor({ element: row, top: anchor.top }),
+        );
     } else if (
       !olderAnchor.current &&
       targetAnchor.current === undefined &&
       !follow.current &&
       !jumpingToLatest.current &&
-      reading?.anchor &&
-      (reading.scrollTop === element.scrollTop || clamped || reshown) &&
-      element.contains(reading.anchor.element)
+      reading &&
+      (reading.scrollTop === element.scrollTop || clamped || reshown)
     ) {
-      correctScrollTop(element, readingDrift(element, reading.anchor));
-      if (lineTop.current !== undefined) lineTop.current = element.scrollTop;
+      // While the reader still starts at a placed line, the line holds its
+      // offset: replies around it can fold away, the first unread one too.
+      const line =
+        lineTop.current !== undefined && reading.line !== undefined
+          ? element.querySelector<HTMLElement>("[data-new-messages-boundary]")
+          : null;
+      // A row remounted in place, as when a group folds and then opens around
+      // it, keeps the saved offset on its replacement. The commit between may
+      // anchor on another row; the remounted one still wins when it returns.
+      const saved = reading.anchor;
+      const id = saved?.element.dataset.messageId;
+      if (saved && id && !element.contains(saved.element))
+        remounted.current = { id, top: saved.top };
+      const pending = remounted.current;
+      const row =
+        pending &&
+        element.querySelector<HTMLElement>(`[data-message-id="${pending.id}"]`);
+      if (row) remounted.current = undefined;
+      const anchor =
+        pending && row
+          ? { element: row, top: pending.top }
+          : saved && element.contains(saved.element)
+            ? saved
+            : undefined;
+      if (line && reading.line !== undefined) {
+        correctScrollTop(
+          element,
+          Math.round(
+            line.getBoundingClientRect().top -
+              element.getBoundingClientRect().top -
+              reading.line,
+          ),
+        );
+        lineTop.current = element.scrollTop;
+      } else if (anchor) {
+        correctScrollTop(element, readingDrift(element, shownAnchor(anchor)));
+        if (lineTop.current !== undefined) lineTop.current = element.scrollTop;
+      }
     }
+    // An exact target holds its own place through a page: a second anchor
+    // would correct for the same page again.
+    if (targetAnchor.current !== undefined) olderAnchor.current = undefined;
     if (olderAnchor.current) {
       const anchor = olderAnchor.current;
       const added = tree
@@ -1503,7 +1637,7 @@ function ThreadMessages({
     const placing = unreadBoundary !== undefined && placed.current !== boundary;
     if (placing) placed.current = boundary;
     const line =
-      placing && unreadBoundary
+      !openLatest && placing && unreadBoundary
         ? element.querySelector<HTMLElement>("[data-new-messages-boundary]")
         : null;
     if (line) {
@@ -1551,6 +1685,7 @@ function ThreadMessages({
   }, [
     captureResizePosition,
     active,
+    latestRequest,
     revealSelected,
     inlineReveal,
     revealSignal,
@@ -1572,6 +1707,7 @@ function ThreadMessages({
     selectedOffset,
     tree,
     expanded,
+    expandedActivity,
     boundary,
   ]);
   // The effect above re-pins only when thread data changes. A growing composer
@@ -1654,7 +1790,10 @@ function ThreadMessages({
       if (follow.current) {
         element.scrollTop = element.scrollHeight;
       } else if (previous.anchor && element.contains(previous.anchor.element)) {
-        correctScrollTop(element, readingDrift(element, previous.anchor));
+        correctScrollTop(
+          element,
+          readingDrift(element, shownAnchor(previous.anchor)),
+        );
         if (lineTop.current !== undefined) lineTop.current = element.scrollTop;
       }
       // Exact-history restoration must start from this corrected geometry,
@@ -1697,6 +1836,7 @@ function ThreadMessages({
   };
   const keepReadingPosition = () => {
     jumpingToLatest.current = false;
+    remounted.current = undefined;
     if (jumpTimer.current !== undefined) {
       clearTimeout(jumpTimer.current);
       jumpTimer.current = undefined;
@@ -1733,16 +1873,21 @@ function ThreadMessages({
       (failure) => !tree.children.get(failure.id)?.length,
       loadedRows,
     );
-    const groups = presentation.groups.filter((group) =>
+    const groups = [
+      ...presentation.groups,
+      ...relayedRuns(chronologicalSiblings, lineRow ?? undefined),
+    ].filter((group) =>
       group.ids.every((id) => !tree.children.get(id)?.length),
     );
     const siblings = chronologicalSiblings;
     const groupsByFirst = new Map(groups.map((group) => [group.ids[0], group]));
     const groupedIds = new Set(groups.flatMap((group) => group.ids));
+    // A group stays open while any of its rows was opened, so one that gains
+    // an earlier row from paging keeps the reader's choice.
+    const open = (ids: readonly string[]) =>
+      ids.some((id) => expandedActivity.has(id));
     const hidden = new Set(
-      groups.flatMap((group) =>
-        expandedActivity.has(group.ids[0] ?? "") ? [] : group.ids,
-      ),
+      groups.flatMap((group) => (open(group.ids) ? [] : group.ids)),
     );
     return siblings.map((row, index) => {
       const group = groupsByFirst.get(row.id);
@@ -1835,10 +1980,29 @@ function ThreadMessages({
           />
         );
       };
+      const renderHistory = (entry: ChannelMessage) => (
+        <div ref={entry.id === messageId ? selectedBranchRef : undefined}>
+          {renderMessage(entry, true)}
+        </div>
+      );
+      const toggleGroup = () => {
+        follow.current = false;
+        targetAnchor.current = undefined;
+        setExpandedActivity((current) => {
+          const next = new Set(current);
+          const ids = group?.ids ?? [row.id];
+          const opened = ids.some((id) => next.has(id));
+          for (const id of ids) {
+            if (opened) next.delete(id);
+            else next.add(id);
+          }
+          return next;
+        });
+      };
       const message = (
         <ActivityExpansion
           open={!hidden.has(row.id) && !groupedIds.has(row.id)}
-          enabled={row.audience === "agents"}
+          enabled={row.audience === "agents" || !!row.relayedFrom?.verified}
         >
           {renderMessage(row)}
         </ActivityExpansion>
@@ -1854,7 +2018,7 @@ function ThreadMessages({
           className={styles.replyItem}
           data-layout={continuation ? "continuation" : "thread"}
         >
-          {!parent && row.id === unreadBoundary && (
+          {!parent && row.id === lineRow && (
             <div className={styles.newMessages} data-new-messages-boundary>
               <hr className="sr-only select-none" aria-label="New messages" />
               <span className="select-none" aria-hidden="true">
@@ -1862,7 +2026,10 @@ function ThreadMessages({
               </span>
             </div>
           )}
+          {/* Not while the root, or history that may hold the parent, loads. */}
           {!parent &&
+            rootId &&
+            !snapshot.seeking &&
             row.replyParentId &&
             row.replyParentId !== rootId &&
             !requestRows.has(row.replyParentId) && (
@@ -1873,37 +2040,39 @@ function ThreadMessages({
 
           {group && (
             <>
-              {day && hidden.has(row.id) && (
+              {/* A relayed run lists its lines without their own dividers. */}
+              {day && ("relayed" in group || hidden.has(row.id)) && (
                 <DayDivider createdAt={row.createdAt} />
               )}
-              <ActivityGroupPreview
-                session={session}
-                group={group}
-                openActivity={onOpenLink}
-                canOpenActivity={canOpenLink}
-                renderHistory={(entry) => (
-                  <div
-                    ref={entry.id === messageId ? selectedBranchRef : undefined}
-                  >
-                    {renderMessage(entry, true)}
-                  </div>
-                )}
-                profiles={profiles}
-                media={session.media}
-                layout="thread"
-                expanded={expandedActivity.has(group.ids[0] ?? "")}
-                onToggle={() => {
-                  follow.current = false;
-                  targetAnchor.current = undefined;
-                  setExpandedActivity((current) => {
-                    const next = new Set(current);
-                    const first = group.ids[0] ?? row.id;
-                    if (next.has(first)) next.delete(first);
-                    else next.add(first);
-                    return next;
-                  });
-                }}
-              />
+              {"relayed" in group ? (
+                <RelayedRunPreview
+                  session={session}
+                  run={group}
+                  renderHistory={renderHistory}
+                  profiles={profiles}
+                  agentPubkeys={agentPubkeys}
+                  media={session.media}
+                  expanded={open(group.ids)}
+                  onToggle={toggleGroup}
+                  extensions={extensions}
+                  scope={scope}
+                  onOpenLink={onOpenLink}
+                  layout="thread"
+                />
+              ) : (
+                <ActivityGroupPreview
+                  session={session}
+                  group={group}
+                  openActivity={onOpenLink}
+                  canOpenActivity={canOpenLink}
+                  renderHistory={renderHistory}
+                  profiles={profiles}
+                  media={session.media}
+                  layout="thread"
+                  expanded={open(group.ids)}
+                  onToggle={toggleGroup}
+                />
+              )}
             </>
           )}
           <ReplyBranch
@@ -1915,7 +2084,9 @@ function ThreadMessages({
               <ReplySummary
                 count={descendants.length}
                 participants={[
-                  ...new Set(descendants.map((reply) => reply.authorId)),
+                  ...new Set(
+                    descendants.map((reply) => reply.authorId).reverse(),
+                  ),
                 ]}
                 profiles={profiles}
                 agentPubkeys={agentPubkeys}
@@ -1951,8 +2122,22 @@ function ThreadMessages({
     });
   }
   const selectedParent = snapshot.replies.find((row) => row.id === replyParent);
-  const captureOlderAnchor = (element: HTMLElement) => {
-    follow.current = false;
+  // The banner's one line about its target. `plainText` flattens CommonMark,
+  // replaces control characters and cuts the result at 200 characters; GFM
+  // that the row renders (strikethrough, tables, task-list boxes) still
+  // reaches the banner as source. A diff's content is a raw patch, never
+  // Markdown, so it gets the sidebar's summary instead. `diffPreview` prints
+  // the diff's file and description tags as sent: no length bound and no
+  // control-character cleanup.
+  const selectedParentText = useMemo(
+    () =>
+      selectedParent?.diff
+        ? diffPreview(selectedParent.diff)
+        : plainText(selectedParent?.content ?? ""),
+    [selectedParent?.diff, selectedParent?.content],
+  );
+  const captureOlderAnchor = (element: HTMLElement, following = false) => {
+    follow.current &&= following;
     const row = [
       ...element.querySelectorAll<HTMLElement>("ol [data-message-id]"),
     ].find(
@@ -1968,6 +2153,18 @@ function ThreadMessages({
         }
       : undefined;
   };
+  // A page read for a missing parent lands with no gesture: hold the reader's
+  // place through it as through a page scrolled for, still following. Every
+  // commit may have used the anchor or moved its row.
+  useLayoutEffect(() => {
+    if (
+      snapshot.seeking &&
+      !olderAnchor.current &&
+      positioned.current &&
+      scroller.current
+    )
+      captureOlderAnchor(scroller.current, true);
+  });
   const loadOlder = () => {
     const element = scroller.current;
     if (
@@ -2029,11 +2226,13 @@ function ThreadMessages({
         rootId={snapshot.root?.id ?? messageId}
         // A visible exact reply can outlive its unavailable root. Until resolved,
         // observe rows individually; an absent root must not mean channel catch-up.
+        // The same order the rows are shown in, so a same-second tie names
+        // the row a folded group shows as its latest.
         latestMessageId={
           snapshot.root
             ? snapshot.replies.reduce<ChannelMessage | undefined>(
                 (latest, row) =>
-                  !latest || row.createdAt > latest.createdAt ? row : latest,
+                  !latest || compareMessages(row, latest) > 0 ? row : latest,
                 undefined,
               )?.id
             : undefined
@@ -2272,8 +2471,12 @@ function ThreadMessages({
         />
       </section>
       {/* After the scroller, so its ref is attached when this registers. */}
-      <MessageSelection list={scroller} rows={rows} session={session} />
-      <SelectionQuote list={scroller} />
+      <MessageSelection
+        list={scroller}
+        rows={rows}
+        session={session}
+        conversationId={rootId}
+      />
       {preview && (
         <ChannelJoinNotice
           ready={
@@ -2334,7 +2537,7 @@ function ThreadMessages({
                   />
                   <div>
                     <span>Replying to {senderName(selectedParent)}</span>
-                    <p>{selectedParent.content}</p>
+                    {selectedParentText && <p>{selectedParentText}</p>}
                   </div>
                   <IconButton
                     size="sm"
@@ -2392,6 +2595,16 @@ function readingDrift(
       element.getBoundingClientRect().top -
       anchor.top,
   );
+}
+
+// A saved row that has since shrunk, as a reply does when it becomes a group's
+// line, keeps its offset only while part of it stays shown. Otherwise its top
+// meets the viewport's. A row without a laid-out box keeps its offset.
+function shownAnchor(anchor: { element: HTMLElement; top: number }) {
+  const { height } = anchor.element.getBoundingClientRect();
+  return !height || anchor.top + height > 0
+    ? anchor
+    : { element: anchor.element, top: 0 };
 }
 
 function ThreadLoading() {

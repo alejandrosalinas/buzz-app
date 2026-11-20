@@ -104,7 +104,7 @@ async function setup(
   navigation?: {
     canOpenLink?(target: string): boolean;
     onOpenLink?(target: string, returnFocus?: HTMLElement): boolean;
-    onOpenConversation?(channelId: string): boolean;
+    onOpenMessage?(link: string): boolean;
   },
   agents?: Agents,
   options: {
@@ -1695,8 +1695,8 @@ it("a person joins a DM with its history when the adder includes it", async () =
   expect(t.publish).not.toHaveBeenCalled();
 });
 it("a person added without history opens a new DM of its people and them", async () => {
-  const onOpenConversation = vi.fn(() => true);
-  const t = await setup("dm", false, false, { onOpenConversation }, undefined, {
+  const onOpenMessage = vi.fn(() => true);
+  const t = await setup("dm", false, false, { onOpenMessage }, undefined, {
     directMessages: true,
     extraMembers: 1,
   });
@@ -1707,7 +1707,9 @@ it("a person added without history opens a new DM of its people and them", async
     ).getByRole("button", { name: "Start a new DM" }),
   );
   await vi.waitFor(() =>
-    expect(onOpenConversation).toHaveBeenCalledWith(t.forkId),
+    expect(onOpenMessage).toHaveBeenCalledWith(
+      `buzz://channel/${encodeURIComponent(t.forkId)}`,
+    ),
   );
   expect(t.openDirectMessage).toHaveBeenLastCalledWith(
     [t.person.pubkey],
@@ -1716,13 +1718,15 @@ it("a person added without history opens a new DM of its people and them", async
   );
 });
 it("a person added to a DM of one person and their agents starts a new DM without asking", async () => {
-  const onOpenConversation = vi.fn(() => true);
-  const t = await setup("dm", false, false, { onOpenConversation }, undefined, {
+  const onOpenMessage = vi.fn(() => true);
+  const t = await setup("dm", false, false, { onOpenMessage }, undefined, {
     directMessages: true,
   });
   await t.user.click(await t.search());
   await vi.waitFor(() =>
-    expect(onOpenConversation).toHaveBeenCalledWith(t.forkId),
+    expect(onOpenMessage).toHaveBeenCalledWith(
+      `buzz://channel/${encodeURIComponent(t.forkId)}`,
+    ),
   );
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   expect(t.openDirectMessage).toHaveBeenCalledOnce();
@@ -1733,15 +1737,15 @@ it("a person added to a DM of one person and their agents starts a new DM withou
   );
 });
 it("an agent whose owner is not shown joins a DM of one person and their agents", async () => {
-  const onOpenConversation = vi.fn(() => true);
-  const t = await setup("dm", false, false, { onOpenConversation }, undefined, {
+  const onOpenMessage = vi.fn(() => true);
+  const t = await setup("dm", false, false, { onOpenMessage }, undefined, {
     directMessages: true,
     personIsRelayAgent: true,
   });
   await t.user.click(await t.search());
   await screen.findByText("Morgan added.");
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-  expect(onOpenConversation).not.toHaveBeenCalled();
+  expect(onOpenMessage).not.toHaveBeenCalled();
   expect(t.openDirectMessage).toHaveBeenCalledOnce();
 });
 it("a member who attests their own profile as an agent counts as a person in a DM", async () => {

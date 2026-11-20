@@ -25,19 +25,76 @@
   position: relative;
   z-index: 1;
 }
+/* Keep the menu trigger compact enough for the row. */
+.row:has([data-solo-row-action]) {
+  --solo-row-action-size: calc(var(--space-6) + var(--space-1));
+}
+.row [data-solo-row-action] {
+  flex-shrink: 0;
+  width: var(--solo-row-action-size);
+  height: var(--solo-row-action-size);
+  min-height: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .row [data-solo-row-action] {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .row:hover [data-solo-row-action],
+  .row:has(:focus-visible) [data-solo-row-action],
+  .row [data-solo-row-action][aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  /* Keep badges in their usual column until the trailing menu appears.
+     Move the badge visually so the title's layout stays fixed. */
+  .row:has([data-solo-row-action]) {
+    & [data-solo-row-action] {
+      position: absolute;
+      inset-inline-end: var(--channel-row-fill-end, 0%);
+    }
+    /* Shared keeps its hit area when the menu appears beside it. */
+    &:has([data-solo-shared]) [data-solo-row-action] {
+      inset-inline-end: var(--size-control-sm);
+    }
+    &:is(
+        :hover,
+        :has(:focus-visible),
+        :has([data-solo-row-action][aria-expanded="true"])
+      ) {
+      & .badges {
+        position: relative;
+        inset-inline-end: var(--solo-row-action-size);
+      }
+      /* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules global selector; a class selector, not [class~=], because Chromium treats [class~=] as a class-attribute feature and this :has() rule would restyle every classed element in the sidebar on unread changes. */
+      & .select :global(.navigation-item-label) {
+        mask-image: linear-gradient(
+          to left,
+          transparent var(--solo-row-action-size),
+          black calc(var(--solo-row-action-size) + var(--space-2))
+        );
+      }
+    }
+  }
+}
 .row:is(:hover, :has([data-context-menu-present])):not(
-  [data-selected]
+  [data-selected],
+  :has([data-spring-loaded="on"])
 )::before {
   background: var(--affordance-panel-hover);
 }
-.row[data-selected] {
+/* A spring-loaded file drag selects the row until it opens or blinks off. */
+.row:is([data-selected], :has([data-spring-loaded="on"])) {
   --text-row: var(--text-sidebar-selected);
   --text-subtle: var(--text-sidebar-selected);
   --text-metadata: var(--text-sidebar-selected);
   color: var(--text-sidebar-selected);
 }
-.row[data-selected]::before {
+.row:is([data-selected], :has([data-spring-loaded="on"]))::before {
   background: var(--surface-sidebar-selected);
+}
+.row:has([data-spring-loaded]) {
+  transition: none;
 }
 .row .select [data-buzz-ui][data-variant="row"] {
   background: transparent;
@@ -50,11 +107,15 @@
   display: flex;
   width: 100%;
   margin-inline: 0;
-  padding-inline: var(--space-2)
-    calc(var(--channel-row-fill-end, 0%) + var(--space-1) + var(--space-half));
+  padding-inline: calc(var(--space-2) + var(--space-half))
+    calc(var(--channel-row-fill-end, 0%) + var(--space-2));
 }
 .row .select [data-variant="row"][data-working] {
-  padding-inline-end: calc(var(--channel-row-fill-end, 0%) + var(--space-2));
+  padding-inline-end: calc(
+    var(--channel-row-fill-end, 0%) +
+    var(--space-2) +
+    var(--space-half)
+  );
 }
 .select [class~="navigation-item-label"] {
   text-overflow: clip;

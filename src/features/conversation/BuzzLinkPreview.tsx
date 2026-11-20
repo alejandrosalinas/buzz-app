@@ -228,7 +228,8 @@ function PreviewFailure({
     <>
       {channel && <ChannelByline channel={channel} />}
       <span role="status">{previewFailures[reason]}</span>
-      <span className={styles.hint}>Open link</span>
+      {/* A withheld destination's card explains why; it opens nothing. */}
+      {reason !== "withheld" && <span className={styles.hint}>Open link</span>}
     </>
   );
 }

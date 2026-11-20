@@ -87,7 +87,7 @@
 ## code
 <div class="_text_7a7508">
   <pre>
-    <code>
+    <code tabindex="-1">
       "plain\n"
     <span class="_codeActions_7a7508">
       <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
@@ -96,7 +96,7 @@
             <path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666">
             <path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1">
   <pre>
-    <code class="language-ts">
+    <code class="language-ts" tabindex="-1">
       "const x = 1\n"
     <span class="_codeActions_7a7508">
       <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
@@ -120,7 +120,7 @@
 ## throwing
 <div class="_text_7a7508">
   <pre>
-    <code class="language-Broken">
+    <code class="language-Broken" tabindex="-1">
       "boom\n"
     <span class="_codeActions_7a7508">
       <button aria-disabled="false" aria-label="Copy code block" class="buzz-button" data-base-ui-tooltip-trigger="" data-button-shape="capsule" data-buzz-ui="" data-icon-shape="control" data-icon-size="sm" data-icon-variant="ghost" data-size="sm" data-variant="ghost" id=<react id> tabindex="0" type="button">
@@ -171,9 +171,10 @@
     "hi "
     <button aria-label="View Mic profile" class="_link_594017" data-mention-kind="person" data-mention-name="Mic" data-profile-target="nostr:npub1hwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwasxw04hu" type="button">
       <span class="_lead_594017">
-        <svg aria-hidden="true" class="tabler-icon tabler-icon-at _icon_594017" fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
-          <path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0">
-          <path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28">
+        <span aria-label="@" role="img">
+          <svg aria-hidden="true" class="tabler-icon tabler-icon-at _icon_594017" fill="none" height="1em" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0">
+            <path d="M16 12v1.5a2.5 2.5 0 0 0 5 0v-1.5a9 9 0 1 0 -5.5 8.28">
         "M"
       "ic"
 

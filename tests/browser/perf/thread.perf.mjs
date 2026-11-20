@@ -51,7 +51,12 @@ function populate(app) {
         : i % 8 === 7
           ? ["mp4", "video/mp4"]
           : null;
-    const nested = i % 6 === 3;
+    // Setup's search palette may preview #Alpha, which reads its newest three
+    // messages: this thread's last replies. A thread shows such a reply at
+    // once, and one whose parent is not among them keeps its branch open when
+    // the parent's page lands. Keep those three top-level, so the mounted rows
+    // do not depend on whether the preview ran.
+    const nested = i % 6 === 1;
     replies.push(
       finalizeEvent(
         {

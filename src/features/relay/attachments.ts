@@ -22,6 +22,23 @@ export type UploadedAttachment = Readonly<{
   dim?: string;
   voice?: Readonly<{ duration: number; waveform: readonly number[] }>;
 }>;
+/** A descriptor read back from device storage. */
+export function isUploadedAttachment(a: unknown): a is UploadedAttachment {
+  const v = a as UploadedAttachment | null;
+  return (
+    !!v &&
+    typeof v.name === "string" &&
+    typeof v.url === "string" &&
+    typeof v.type === "string" &&
+    typeof v.sha256 === "string" &&
+    Number.isFinite(v.size) &&
+    (v.voice === undefined ||
+      (!!v.voice &&
+        Number.isFinite(v.voice.duration) &&
+        Array.isArray(v.voice.waveform) &&
+        v.voice.waveform.every(Number.isFinite)))
+  );
+}
 /** Bytes of the transferred file handed to the connection so far. */
 export type UploadProgress = (sent: number, total: number) => void;
 export type AttachmentUpload = (

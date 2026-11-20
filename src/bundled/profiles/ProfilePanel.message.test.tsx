@@ -14,6 +14,7 @@ import type { Navigation } from "../../features/navigation/controller";
 import { createRelaySession } from "../../features/relay/session";
 import type { RelayData, RelaySnapshot } from "../../features/relay/service";
 import { profileTarget } from "../../features/profiles/target";
+import { newMessageTarget } from "../../features/channel-navigation/routes";
 import { ProfilePanel } from "./ProfilePanel";
 
 const viewer = "b".repeat(64);
@@ -22,8 +23,10 @@ const other = "c".repeat(64);
 const origin = "https://relay.example.test";
 afterEach(cleanup);
 
-function fixture(available = true) {
+/** Without `dm`, the viewer has no DM with `person` yet. */
+function fixture(available = true, dm = true) {
   const owner = createRelaySession(null);
+  const list = owner.session.channels.list();
   const open =
     vi.fn<(keys: readonly string[], signal: AbortSignal) => Promise<string>>();
   let choices = owner.session.agentChoices.snapshot();
@@ -31,6 +34,22 @@ function fixture(available = true) {
   const session = {
     ...owner.session,
     directMessages: { ...owner.session.directMessages, available, open },
+    channels: {
+      ...owner.session.channels,
+      list: () => ({
+        ...list,
+        channels: dm
+          ? [
+              {
+                id: "dm-1",
+                name: "Person",
+                channelType: "dm" as const,
+                participants: [person],
+              },
+            ]
+          : [],
+      }),
+    },
     agentChoices: {
       ...owner.session.agentChoices,
       snapshot: () => choices,
@@ -213,6 +232,23 @@ it("opens the DM, shows pending state, then navigates in the captured scope", as
     scope: { viewer, communityOrigin: origin },
   });
   expect(message()?.getAttribute("aria-busy")).not.toBe("true");
+  f.owner.dispose();
+});
+
+it("opens a draft to someone without a DM, creating nothing until it is sent", async () => {
+  const f = fixture(true, false);
+  render(f.panel(person));
+  fireEvent.click(message() as HTMLElement);
+  await waitFor(() =>
+    expect(f.navigate).toHaveBeenCalledExactlyOnceWith(
+      newMessageTarget(
+        { viewer, communityOrigin: origin },
+        person,
+        expect.any(Number),
+      ),
+    ),
+  );
+  expect(f.open).not.toHaveBeenCalled();
   f.owner.dispose();
 });
 

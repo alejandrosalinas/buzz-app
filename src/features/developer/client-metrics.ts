@@ -1,6 +1,8 @@
-/** Local, bounded client performance metrics for development builds.
- * Nothing here leaves the device: the Developer settings panel reads and
- * exports it. Records are per open, request, batch or long task, never per event. */
+/** Development session metrics, plus numeric batch/read taps for on-demand
+ * agent snapshots. Development records stay in the page until exported.
+ * Records are per open, request, batch or long task, never per event. */
+
+import { runtimePerformance } from "./runtime-performance";
 
 export type OpenTrigger = "click" | "keyboard" | "route";
 /** Where the first painted rows came from. `disk-late` means the open waited,
@@ -330,35 +332,39 @@ export function createClientMetrics({
     }),
     /** A finite relay read finished. One call per request, never per event.
      * `session` names the relay session; only the first one seen is recorded. */
-    query: active(
-      (
-        session: string,
-        input: {
-          ms: number;
-          bytes: number;
-          priority: "foreground" | "background";
-          ok: boolean;
-        },
-      ) => {
-        if (!owns(session)) return;
-        const current = currentPhase();
-        current.queries++;
-        current.bytes += input.bytes;
-        if (input.priority === "background") current.background++;
-        push(
-          queries,
-          Object.freeze({ ...input, at: now(), phase: phase() }),
-          QUERY_LIMIT,
-        );
+    query(
+      session: string,
+      input: {
+        ms: number;
+        bytes: number;
+        priority: "foreground" | "background";
+        ok: boolean;
       },
-    ),
+    ) {
+      runtimePerformance.read(input);
+      if (!enabled) return;
+      startMonitor();
+      if (!owns(session)) return;
+      const current = currentPhase();
+      current.queries++;
+      current.bytes += input.bytes;
+      if (input.priority === "background") current.background++;
+      push(
+        queries,
+        Object.freeze({ ...input, at: now(), phase: phase() }),
+        QUERY_LIMIT,
+      );
+    },
     /** Synchronous main-thread work measured by its caller, per batch. */
-    cpu: active((stage: string, ms: number, count: number) => {
+    cpu(stage: string, ms: number, count: number) {
+      runtimePerformance.work(stage, ms, count);
+      if (!enabled) return;
+      startMonitor();
       const entry = cpu.get(stage) ?? { ms: 0, count: 0 };
       entry.ms += ms;
       entry.count += count;
       cpu.set(stage, entry);
-    }),
+    },
     /** Observe live route state; derives connect/reconnect phases and coverage. */
     live: active((session: string, state: LiveState) => {
       if (!owns(session)) return;

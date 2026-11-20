@@ -4,14 +4,19 @@
 // saves only `preset: "recommended"` in its config. Its type runs it on the
 // first candidate for its harness whose model is still offered, found once per
 // launch, so a later build's recommendation reaches it; with none, it runs on
-// the harness's own default. Its harness is never changed for it.
+// the harness's own default. Once per launch, the copy that runs it moves it
+// to the harness of the first candidate ready here, by the usual harness
+// change, unless a check ahead of that one didn't answer
+// (`followRecommendedHarness`, service.ts).
 // The build config parses candidates too, so this module imports nothing.
 //
 // What the agent UI uses (it owns none of the logic below):
 // - The setup: `recommendedSetup()` carries its optional attribution;
 //   `recommendedCandidates()` and `candidatesFor(harness)` read its list to
 //   tell whether a harness's settings offer Automatic at all. It is the
-//   build's, unless `setRuntimeRecommendation(setup)` replaced it for the launch.
+//   build's, unless a bundled plugin's `ctx.agents.recommend` answer
+//   (`awaitRecommendation`) or `setRuntimeRecommendation(setup)` replaced it
+//   for the launch. Finds and picks wait for `recommendationReady()` first.
 // - The mark on a config: `onRecommended(config)` reads it,
 //   `withRecommended(config)` sets it (dropping model, provider and effort),
 //   `offRecommended(config)` clears it; a manual model or thinking choice
@@ -172,6 +177,66 @@ export function setRuntimeRecommendation(
   }
 }
 
+/** How long a launch waits for plugins to start and one to give its setup
+ * (`ctx.agents.recommend`), counted from the agents service's start. */
+export const SOURCE_MS = 5_000;
+/** Settles once this launch's setup is final; at once when nothing waits. */
+let setupReady: Promise<void> = Promise.resolve();
+let setupFinal = true;
+/** What finds and picks wait for before they read the setup. */
+export const recommendationReady = () => setupReady;
+/** Whether the setup is final for this launch, so a pick from it may be
+ * kept. Until then, readers see the build's and should read again once
+ * `recommendationReady` settles. */
+export const recommendationFinal = () => setupFinal;
+
+/** Once per launch: waits at most `SOURCE_MS` for `answer`, a plugin's
+ * recommended setup for this launch (`{recommendedBy?, description?,
+ * candidates}`), and uses it in place of this build's through
+ * `setRuntimeRecommendation`. No answer (undefined, `null` or no
+ * candidates), a rejection, an invalid setup, or one later than `SOURCE_MS`
+ * keeps the build's, so finds made after the wait never see it change.
+ * `signal` aborts when the wait ends. Views that read the setup before it
+ * settles see the build's. */
+export function awaitRecommendation(
+  answer: (signal: AbortSignal) => unknown,
+): Promise<void> {
+  const ended = new AbortController();
+  setupFinal = false;
+  const ready: Promise<void> = new Promise<void>((resolve) => {
+    const end = () => {
+      clearTimeout(timer);
+      ended.abort();
+      // Only this launch's latest wait says the setup is final.
+      if (setupReady === ready) setupFinal = true;
+      resolve();
+    };
+    const timer = setTimeout(end, SOURCE_MS);
+    void (async () => answer(ended.signal))()
+      .then((value) => {
+        if (ended.signal.aborted || value == null) return;
+        const { candidates } = value as { candidates?: unknown };
+        if (Array.isArray(candidates) && !candidates.length) return;
+        if (
+          typeof value !== "object" ||
+          Array.isArray(value) ||
+          !setRuntimeRecommendation(value as RecommendedSetup)
+        )
+          throw new Error("it is not a valid recommended agent setup");
+      })
+      .catch((error: unknown) => {
+        if (!ended.signal.aborted)
+          console.warn(
+            "A plugin's recommended agent setup was not used",
+            error instanceof Error ? error.message : error,
+          );
+      })
+      .finally(end);
+  });
+  setupReady = ready;
+  return setupReady;
+}
+
 /** The current recommendation and attribution, supplied by runtime or build. */
 export function recommendedSetup(): RecommendedSetup {
   if (runtimeRecommendation) return runtimeRecommendation;
@@ -259,16 +324,23 @@ export const CHECK_MS = 8_000;
 /** How long a launch keeps a finding that found nothing, before a harness
  * set up or signed in since then is asked again. */
 export const RETRY_MS = 60_000;
-/** A check's answer, as no once it rejects or takes longer than `CHECK_MS`. */
-const bounded = (check: Promise<boolean> | undefined) =>
-  new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), CHECK_MS);
-    const done = (answer: boolean) => {
+/** A check's answer: "unsure" once it rejects or takes longer than
+ * `CHECK_MS`, "no" when there is no check. */
+const answer = (check: Promise<boolean> | undefined) =>
+  new Promise<"yes" | "no" | "unsure">((resolve) => {
+    const timer = setTimeout(() => resolve("unsure"), CHECK_MS);
+    const done = (value: "yes" | "no" | "unsure") => {
       clearTimeout(timer);
-      resolve(answer);
+      resolve(value);
     };
-    (check ?? Promise.resolve(false)).then(done, () => done(false));
+    (check ?? Promise.resolve(false)).then(
+      (ready) => done(ready ? "yes" : "no"),
+      () => done("unsure"),
+    );
   });
+/** A check's answer, as no once it rejects or takes longer than `CHECK_MS`. */
+export const bounded = async (check: Promise<boolean> | undefined) =>
+  (await answer(check)) === "yes";
 
 /** What one harness's agents on Recommended run on, found once per launch. */
 export type RecommendedRun = Readonly<{
@@ -299,6 +371,7 @@ export function recommendedRun(
         emptyAt = undefined;
       }
       finding ??= (async () => {
+        await recommendationReady();
         for (const candidate of candidatesFor(harness))
           if (await bounded(offered(candidate))) return candidate;
         emptyAt = Date.now();
@@ -355,6 +428,23 @@ export const recommendedNote = (pick: RecommendedPick<RecommendedHarness>) => {
 export async function pickRecommended<T extends RecommendedHarness>(
   types: readonly T[],
 ): Promise<RecommendedPick<T> | undefined> {
+  const pick = await firstReady(types, false);
+  return pick === "unsure" ? undefined : pick;
+}
+
+/** `pickRecommended`, but "unsure" when a check ahead of the pick, or every
+ * check when none is ready, rejected or took longer than `CHECK_MS`: then
+ * nobody knows which candidate is first. */
+export const pickRecommendedSurely = <T extends RecommendedHarness>(
+  types: readonly T[],
+) => firstReady(types, true);
+
+async function firstReady<T extends RecommendedHarness>(
+  types: readonly T[],
+  sure: boolean,
+): Promise<RecommendedPick<T> | "unsure" | undefined> {
+  // A bundled plugin may still be giving this launch its setup.
+  await recommendationReady();
   const skipped: T[] = [];
   for (const candidate of recommendedCandidates()) {
     const type = types.find(
@@ -362,12 +452,14 @@ export async function pickRecommended<T extends RecommendedHarness>(
         item.id === candidate.harness && item.recommends && !item.remote,
     );
     if (!type) continue;
-    if (await bounded(type.recommends?.(candidate)))
+    const answered = await answer(type.recommends?.(candidate));
+    if (answered === "yes")
       return {
         type,
         candidate,
         skipped: skipped.filter((item) => item !== type),
       };
+    if (sure && answered === "unsure") return "unsure";
     if (!skipped.includes(type)) skipped.push(type);
   }
   return undefined;

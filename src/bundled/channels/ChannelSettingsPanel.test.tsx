@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createPortal } from "react-dom";
@@ -20,6 +21,7 @@ import {
 import { PublishNotSent, PublishRejected } from "../../features/relay/outbox";
 import type { Role } from "../../features/communities/roster";
 import type { CommunityMembership } from "../moderation/membership";
+import type { ChannelDetailsCapability } from "../../features/relay/channel-details";
 
 afterEach(() => {
   cleanup();
@@ -148,6 +150,103 @@ it("does not invent unknown metadata and still exposes diagnostics without a cha
   expect(screen.queryByText("Channel ID")).not.toBeInTheDocument();
   await user.click(screen.getByText("Diagnostics"));
   expect(screen.getByText("Diagnostics content")).toBeVisible();
+});
+
+function detailsCapability(): ChannelDetailsCapability {
+  return {
+    available: true,
+    load: vi.fn(() => new Promise<never>(() => {})),
+    save: vi.fn(async () => {}),
+    check: vi.fn(async () => {}),
+    snapshot: () => undefined,
+    subscribe: () => () => {},
+  };
+}
+
+it.each([
+  ["public", "member", "Public"],
+  ["public", "guest", "View only"],
+  ["private", "member", "Private"],
+] as const)(
+  "shows %s/%s access under Description without a way to change it",
+  (visibility, joinRole, label) => {
+    render(
+      <ChannelSettingsPanel
+        scope="community:viewer"
+        channel={{
+          id: "alpha",
+          name: "Alpha",
+          channelType: "stream",
+          visibility,
+          joinRole,
+        }}
+        details={detailsCapability()}
+        openMembers={() => {}}
+        close={() => {}}
+      >
+        Diagnostics
+      </ChannelSettingsPanel>,
+    );
+    const row = screen.getByText("Access", { exact: true }).closest("div");
+    assert(row);
+    expect(row).toHaveTextContent(new RegExp(`^Access${label}$`));
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
+  },
+);
+
+it("opens Members to change access for someone who can edit the channel", async () => {
+  const openMembers = vi.fn();
+  const user = userEvent.setup();
+  const details = detailsCapability();
+  details.load = vi.fn(async () => ({
+    channelId: "alpha",
+    version: "v1",
+    name: "Alpha",
+    description: "",
+    visibility: "public" as const,
+    canEdit: true,
+  }));
+  render(
+    <ChannelSettingsPanel
+      scope="community:viewer"
+      channel={{
+        id: "alpha",
+        name: "Alpha",
+        channelType: "stream",
+        visibility: "public",
+      }}
+      details={details}
+      openMembers={openMembers}
+      close={() => {}}
+    >
+      Diagnostics
+    </ChannelSettingsPanel>,
+  );
+  const access = await screen.findByRole("button", { name: "Change access" });
+  expect(access).toHaveAccessibleDescription("Public");
+  await user.click(access);
+  expect(openMembers).toHaveBeenCalledWith(access);
+});
+
+it("leaves access out of an archived channel", () => {
+  render(
+    <ChannelSettingsPanel
+      scope="community:viewer"
+      channel={{
+        id: "alpha",
+        name: "Alpha",
+        channelType: "stream",
+        visibility: "public",
+        archived: true,
+      }}
+      details={detailsCapability()}
+      openMembers={() => {}}
+      close={() => {}}
+    >
+      Diagnostics
+    </ChannelSettingsPanel>,
+  );
+  expect(screen.queryByText("Access", { exact: true })).not.toBeInTheDocument();
 });
 
 it("opens even an empty members list without an Edit ingress", async () => {

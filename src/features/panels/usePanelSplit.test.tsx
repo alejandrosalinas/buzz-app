@@ -11,12 +11,83 @@ import {
 import { afterEach, expect, test, vi } from "vitest";
 import { clearView, writeView } from "../../shared/view-state";
 import { usePanelSplit } from "./usePanelSplit";
+import { Context } from "@deepseek-ai/cordis";
+import { PanelsService } from "./service";
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("plugin split names cannot read, overwrite or reset host widths", async () => {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(960);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const root = new Context();
+  root.provide("pluginStatus", {
+    isActive: () => true,
+    subscribe: () => () => {},
+  });
+  const panels = new PanelsService(root);
+  function Host() {
+    const split = usePanelSplit("one", "notes", 448, 320);
+    return (
+      <div ref={split.ref} data-testid="host">
+        {split.handle}
+      </div>
+    );
+  }
+  function Plugin() {
+    const split = panels.ui.useSplit("one", "notes", 448, 320);
+    return (
+      <div ref={split.ref} data-testid="plugin">
+        {split.handle}
+      </div>
+    );
+  }
+  try {
+    act(() => writeView("one", "panel-split:notes", 500));
+    const view = render(
+      <>
+        <Host />
+        <Plugin />
+      </>,
+    );
+    const width = (name: string) =>
+      screen
+        .getByTestId(name)
+        .style.getPropertyValue("--secondary-panel-width");
+    const [, plugin] = screen.getAllByRole("separator");
+    if (!plugin) throw new Error("missing plugin split handle");
+    expect(width("host")).toBe("500px");
+    expect(width("plugin")).toBe("");
+    fireEvent.keyDown(plugin, { key: "End" });
+    expect(width("plugin")).toBe("640px");
+    expect(width("host")).toBe("500px");
+    view.unmount();
+    render(
+      <>
+        <Host />
+        <Plugin />
+      </>,
+    );
+    const [, againPlugin] = screen.getAllByRole("separator");
+    if (!againPlugin) throw new Error("missing restored plugin split handle");
+    expect(width("plugin")).toBe("640px");
+    fireEvent.doubleClick(againPlugin);
+    expect(width("plugin")).toBe("");
+    expect(width("host")).toBe("500px");
+  } finally {
+    cleanup();
+    await root.fiber.dispose();
+  }
 });
 
 // Controlled container measurements exercise the hook's clamp and observer

@@ -10,6 +10,7 @@ import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelayRecovery } from "../../features/relay/recovery";
 import { useReauthorizedRetry } from "../../features/relay/RecoveryNotice";
 import type {
+  ChannelAccess,
   ChannelDetails,
   ChannelDetailsDraft,
 } from "../../features/relay/channel-details-protocol";
@@ -114,6 +115,7 @@ export function ChannelGeneralAccess({
       recovery={recovery}
       channelId={channelId}
       mayHaveGuestMembers={mayHaveGuestMembers}
+      summary={channel && capability.summaryAccess?.(channel)}
       autoJoin={channel?.autoJoin ?? false}
       policy={policy}
     />
@@ -125,6 +127,7 @@ function ChannelGeneralAccessEditor({
   recovery,
   channelId,
   mayHaveGuestMembers,
+  summary,
   autoJoin,
   policy,
 }: {
@@ -132,6 +135,8 @@ function ChannelGeneralAccessEditor({
   recovery: RelayRecovery | undefined;
   channelId: string;
   mayHaveGuestMembers: boolean;
+  /** Absent without a summary the capability accepts; a details read supplies access. */
+  summary: ChannelAccess | undefined;
   autoJoin: boolean;
   policy: GeneralAccessPolicy | undefined;
 }) {
@@ -140,7 +145,7 @@ function ChannelGeneralAccessEditor({
   );
   const [base, setBase] = useState<ChannelDetails>();
   const [choice, setChoice] = useState<ChannelDetailsDraft>();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!summary);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -176,26 +181,36 @@ function ChannelGeneralAccessEditor({
     },
     [capability, channelId, reauthorized],
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another channel or capability starts a new lifetime.
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
     setBase(undefined);
     setChoice(undefined);
+    setLoading(!summary);
     setPending(false);
+    setError("");
     setStatus("");
     busy.current = false;
-    void load(controller.signal);
     return () => controller.abort();
-  }, [load]);
-  const locked = loading || pending || !!attempt || !base?.canEdit;
-  const solo = soloLabels(base?.labels);
+  }, [capability, channelId]);
+  // Without a summary, a details read supplies access (and hydrates the
+  // channel store). Changing access still reads a fresh snapshot before consent.
+  const known = !!summary;
+  useEffect(() => {
+    const signal = lifetime.current?.signal;
+    if (!known && signal && !signal.aborted) void load(signal);
+  }, [known, load]);
+  const shown = summary ?? base;
+  const locked = loading || pending || !!attempt || !shown?.canEdit;
+  const solo = soloLabels(shown?.labels);
   const place = policy?.subject ?? (solo ? "chat" : "channel");
   const restrictPublic = solo || policy?.allowPublic === false;
   const policyAllowsChoice =
     !restrictPublic ||
     choice?.visibility !== "public" ||
     choice.joinRole === "guest";
-  const access = base ? generalAccessValue(base) : "";
+  const access = shown ? generalAccessValue(shown) : "";
   const Icon =
     access === "public"
       ? GlobeIcon
@@ -203,7 +218,7 @@ function ChannelGeneralAccessEditor({
         ? EyeIcon
         : LockIcon;
   async function choose(value: string) {
-    if (locked || !base) return;
+    if (locked || !shown) return;
     const option = Object.values(generalAccessOptions).find(
       (option) => option.value === value,
     );

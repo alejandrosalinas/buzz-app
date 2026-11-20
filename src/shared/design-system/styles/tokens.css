@@ -1223,6 +1223,9 @@
   --affordance-backdrop-hover: var(--backdrop-hover-fill);
   --affordance-backdrop-pressed: var(--backdrop-pressed-fill);
   --affordance-subtle-pressed: var(--neutral-4);
+  --affordance-toast: var(--affordance-subtle);
+  --affordance-toast-hover: var(--affordance-subtle-hover);
+  --affordance-toast-pressed: var(--affordance-subtle-pressed);
   /* Rows: hover and the ink on hovered or selected rows. Distinct from quiet
      control fills, so rows can take color before controls do. */
   --affordance-row-hover: var(--affordance-subtle);
@@ -1398,6 +1401,9 @@
   --affordance-backdrop-hover: var(--backdrop-hover-fill);
   --affordance-backdrop-pressed: var(--backdrop-pressed-fill);
   --affordance-subtle-pressed: var(--neutral-5);
+  --affordance-toast: var(--neutral-quiet-hover);
+  --affordance-toast-hover: var(--neutral-6);
+  --affordance-toast-pressed: var(--neutral-7);
   --affordance-row-hover: var(--affordance-subtle);
   --text-row-subtle: var(--text-subtle);
   --text-row-metadata: var(--text-metadata);
@@ -1465,6 +1471,7 @@
   --size-emoji-display: calc(var(--type-rem) * 2.625);
   --size-emoji-line: calc(var(--type-rem) * 3);
   --size-emoji-inline: calc(var(--type-rem) * 1.375);
+  --size-emoji-picker: calc(var(--type-rem) * 1.75);
 
   --text-primary: var(--text-standard);
   --text-secondary: var(--text-subtle);

@@ -530,8 +530,8 @@ describe.skipIf(!BIN)("goose-acp", () => {
         )
         .toBe(true);
       const second = session.send("Also put the word banana in that reply.");
-      await expect(first).resolves.toEqual({ ok: true });
-      await expect(second).resolves.toEqual({ ok: true });
+      await expect(first).resolves.toMatchObject({ ok: true });
+      await expect(second).resolves.toMatchObject({ ok: true });
       expect(
         requests.filter(
           (item) => item.method === "_goose/unstable/session/steer",

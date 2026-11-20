@@ -130,7 +130,10 @@ import { SplitButton } from "../../shared/design-system/ui/SplitButton";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { Textarea } from "../../shared/design-system/ui/Textarea";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
-import { publicKeyLabels } from "../../shared/identity/public-key";
+import {
+  canonicalPublicKey,
+  publicKeyLabels,
+} from "../../shared/identity/public-key";
 import { readView, writeView } from "../../shared/view-state";
 import {
   agentCardRoute,
@@ -1506,9 +1509,9 @@ function InventoryCard({
       )}
       <MenuItem
         onClick={() => {
-          void writeClipboardText(agent.pubkey).catch((reason) =>
-            setError(message(reason)),
-          );
+          void writeClipboardText(
+            canonicalPublicKey(agent.pubkey) ?? agent.pubkey,
+          ).catch((reason) => setError(message(reason)));
         }}
       >
         Copy public key

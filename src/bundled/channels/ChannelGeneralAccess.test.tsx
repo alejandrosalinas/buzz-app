@@ -7,7 +7,10 @@ import type {
   ChannelDetailsCapability,
   DetailsAttempt,
 } from "../../features/relay/channel-details";
-import type { ChannelDetails } from "../../features/relay/channel-details-protocol";
+import {
+  summaryAccess,
+  type ChannelDetails,
+} from "../../features/relay/channel-details-protocol";
 import { ChannelGeneralAccess } from "./ChannelGeneralAccess";
 
 afterEach(cleanup);
@@ -58,7 +61,7 @@ const base: ChannelDetails = {
   joinRole: "guest",
   canEdit: true,
 };
-function harness() {
+function harness(summaries = false) {
   let attempt: DetailsAttempt | undefined;
   const listeners = new Set<() => void>();
   const load = vi.fn(async () => base);
@@ -70,6 +73,7 @@ function harness() {
     save,
     check,
     snapshot: () => attempt,
+    ...(summaries ? { summaryAccess } : {}),
     subscribe: (fn) => {
       listeners.add(fn);
       return () => {
@@ -124,6 +128,133 @@ it("reviews fresh details before restoring privacy after a title update", async 
   );
 });
 
+it("renders a channel summary without reading, and reads fresh details only to change access", async () => {
+  const h = harness(true);
+  const user = userEvent.setup();
+  const channel = {
+    id: "alpha",
+    name: "Alpha",
+    visibility: "public" as const,
+    joinRole: "guest" as const,
+    viewerRole: "admin" as const,
+    channelType: "stream" as const,
+  };
+  const { rerender } = render(
+    <ChannelGeneralAccess
+      capability={h.capability}
+      channelId="alpha"
+      channel={channel}
+    />,
+  );
+  const region = screen.getByRole("region", { name: "General access" });
+  expect(region).toHaveTextContent("New people can only view.");
+  expect(region).not.toHaveTextContent("Checking current access…");
+  const control = screen.getByRole("combobox", { name: "General access" });
+  expect(control).toBeEnabled();
+  expect(control).toHaveTextContent("View only");
+  expect(h.load).not.toHaveBeenCalled();
+  // The live summary is the cache: a store update repaints without a read.
+  rerender(
+    <ChannelGeneralAccess
+      capability={h.capability}
+      channelId="alpha"
+      channel={{ ...channel, joinRole: "member" }}
+    />,
+  );
+  expect(region).toHaveTextContent("New people can participate.");
+  expect(h.load).not.toHaveBeenCalled();
+  rerender(
+    <ChannelGeneralAccess
+      capability={h.capability}
+      channelId="alpha"
+      channel={channel}
+    />,
+  );
+  await select(user, "General access", "Private");
+  expect(h.load).toHaveBeenCalledOnce();
+  await user.click(
+    await screen.findByRole("button", { name: "Change access" }),
+  );
+  expect(h.save).toHaveBeenCalledExactlyOnceWith(
+    base,
+    expect.objectContaining({ visibility: "private" }),
+    expect.any(AbortSignal),
+  );
+});
+it.each([
+  { viewerRole: "member" as const, channelType: "stream" as const },
+  {
+    viewerRole: "admin" as const,
+    archived: true as const,
+    channelType: "stream" as const,
+  },
+  { viewerRole: "owner" as const, channelType: "dm" as const },
+  // Without a known channel type, details would refuse editing.
+  { viewerRole: "owner" as const },
+])("a summary without edit authority locks the choice: %o", (extra) => {
+  const h = harness(true);
+  render(
+    <ChannelGeneralAccess
+      capability={h.capability}
+      channelId="alpha"
+      channel={{ id: "alpha", name: "Alpha", visibility: "private", ...extra }}
+    />,
+  );
+  expect(
+    screen.getByRole("combobox", { name: "General access" }),
+  ).toBeDisabled();
+  expect(
+    screen.getByRole("region", { name: "General access" }),
+  ).toHaveTextContent("Only people you add");
+  expect(h.load).not.toHaveBeenCalled();
+});
+it("a reused instance moving from a failed read to a channel summary clears the read's state", async () => {
+  const h = harness(true);
+  h.load.mockRejectedValueOnce(new Error("Relay offline"));
+  const { rerender } = render(
+    <ChannelGeneralAccess capability={h.capability} channelId="alpha" />,
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent("Relay offline");
+  rerender(
+    <ChannelGeneralAccess
+      capability={h.capability}
+      channelId="beta"
+      channel={{
+        id: "beta",
+        name: "Beta",
+        visibility: "private",
+        viewerRole: "admin",
+        channelType: "stream",
+      }}
+    />,
+  );
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("combobox", { name: "General access" }),
+  ).toBeEnabled();
+  expect(h.load).toHaveBeenCalledOnce();
+});
+it("a capability without a summary rule reads its own access even with a channel summary", async () => {
+  const h = harness();
+  h.load.mockResolvedValue({ ...base, canEdit: false });
+  render(
+    <ChannelGeneralAccess
+      capability={h.capability}
+      channelId="alpha"
+      channel={{
+        id: "alpha",
+        name: "Alpha",
+        visibility: "public",
+        joinRole: "guest",
+        viewerRole: "owner",
+      }}
+    />,
+  );
+  expect(h.load).toHaveBeenCalledOnce();
+  const control = screen.getByRole("combobox", { name: "General access" });
+  await waitFor(() => expect(control).toHaveTextContent("View only"));
+  expect(control).toBeDisabled();
+});
 it("keeps writes and consent closed when the fresh access read fails", async () => {
   const h = harness();
   const user = userEvent.setup();

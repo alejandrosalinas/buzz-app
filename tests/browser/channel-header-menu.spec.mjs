@@ -130,31 +130,16 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
   await expect(
     settings.getByRole("button", { name: "Edit details", exact: true }),
   ).toHaveCount(0);
-  const checkInlineIcon = async (action, { wholeRow = true } = {}) => {
+  const checkInlineIcon = async (action, { wholeRow = false } = {}) => {
     const row = action.locator("xpath=../..");
     const icon = action.locator("svg");
     const affordance = icon.locator("..");
     await action.scrollIntoViewIfNeeded();
     await page.mouse.move(0, 0);
-    await expect(affordance).toHaveCSS("opacity", "0");
-    await expect(affordance).toHaveCSS(
-      "transform",
-      "matrix(1, 0, 0, 1, -4, 0)",
-    );
+    await expect(affordance).toHaveCSS("opacity", "1");
     await expect(affordance).toHaveAttribute("aria-hidden", "true");
     await expect(icon).toHaveAttribute("width", "0.875rem");
     await expect(action.getByText(/^(Edit|Copy)$/)).toHaveCount(0);
-    const before = await row.boundingBox();
-    // A whole-row action reveals from the value/padding, not just its label.
-    if (wholeRow)
-      await page.mouse.move(
-        before.x + before.width / 2,
-        before.y + before.height - 8,
-      );
-    else await action.hover();
-    await expect(affordance).toHaveCSS("opacity", "1");
-    await expect(affordance).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
-    expect(await row.boundingBox()).toEqual(before);
     const geometry = await action.evaluate((node) => {
       // Measure the flex item's box, not a text Range's engine-specific glyph bounds.
       const label =
@@ -168,14 +153,13 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     });
     expect(geometry.gap).toBe(8);
     expect(Math.abs(geometry.centerOffset)).toBeLessThan(2);
-    await page.mouse.move(0, 0);
-    await expect(affordance).toHaveCSS("opacity", "0");
     // Establish keyboard modality without assuming macOS WebKit's Tab policy.
     await page.keyboard.press("Tab");
     await action.focus();
     await expect(action).toBeFocused();
-    await expect(affordance).toHaveCSS("opacity", "1");
-    await expect(row).toHaveCSS("outline-style", "none");
+    // Whole-row actions ring the row; label actions ring only the label.
+    await expect(wholeRow ? row : action).toHaveCSS("outline-style", "solid");
+    await expect(wholeRow ? action : row).toHaveCSS("outline-style", "none");
     await row.screenshot({
       path: testInfo.outputPath("metadata-keyboard-focus.png"),
     });
@@ -198,14 +182,14 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
       await page.mouse.move(box.x + box.width / 2, box.y + box.height - 8);
       await expect.poll(background).not.toBe(resting);
     } else {
-      // Hover the value text. The revealed pencil proves the row is hovered,
-      // but only the label takes the click, so the row stays unpainted.
-      const value = await row.locator("dd").boundingBox();
-      await page.mouse.move(value.x + 4, value.y + value.height / 2);
-      await expect(action.locator("svg").locator("..")).toHaveCSS(
-        "opacity",
-        "1",
-      );
+      // Hover the value text. Only the label takes the click, so the row
+      // stays unpainted.
+      const value = row.locator("dd");
+      const valueBox = await value.boundingBox();
+      await page.mouse.move(valueBox.x + 4, valueBox.y + valueBox.height / 2);
+      await expect
+        .poll(() => value.evaluate((node) => node.matches(":hover")))
+        .toBe(true);
       expect(await background()).toBe(resting);
       // Hovering the label itself doesn't paint the whole row either.
       await action.hover();
@@ -222,8 +206,12 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
         "aria-hidden",
         "true",
       );
+      await page.keyboard.press("Tab");
+      await action.focus();
+      await expect(row).toHaveCSS("outline-style", "solid");
+      await expect(action).toHaveCSS("outline-style", "none");
     } else {
-      await checkInlineIcon(action, { wholeRow });
+      await checkInlineIcon(action);
     }
     await page.mouse.click(box.x + box.width / 2, box.y + box.height - 8);
     const dialog = page.getByRole("dialog", {
@@ -259,13 +247,7 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
   });
   const pencil = title.locator("svg").locator("..");
   await page.mouse.move(0, 0);
-  await expect(pencil).toHaveCSS("opacity", "0");
-  await expect(pencil).toHaveCSS("transform", "matrix(1, 0, 0, 1, -4, 0)");
-  const titleBefore = await title.boundingBox();
-  await title.hover();
   await expect(pencil).toHaveCSS("opacity", "1");
-  await expect(pencil).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
-  expect(await title.boundingBox()).toEqual(titleBefore);
   const checkTitleGeometry = async () => {
     const geometry = await title.evaluate((node) => {
       const textNode = node.querySelector("span");
@@ -330,7 +312,7 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     name: "Copy channel id",
     exact: true,
   });
-  await checkInlineIcon(copy);
+  await checkInlineIcon(copy, { wholeRow: true });
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   const idRow = copy.locator("xpath=../..");
   const rowHeight = (await idRow.boundingBox()).height;
@@ -354,7 +336,7 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     name: "Edit description",
     exact: true,
   });
-  await descriptionAction.hover();
+  await page.mouse.move(0, 0);
   await expect(descriptionAction.locator("svg").locator("..")).toHaveCSS(
     "opacity",
     "1",
@@ -363,31 +345,21 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     path: testInfo.outputPath("channel-details-actions.png"),
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await title.hover();
   const narrow = await checkTitleGeometry();
   expect(narrow.textHeight).toBeGreaterThan(narrow.lineHeight);
   await settings.screenshot({
     path: testInfo.outputPath("channel-details-title-narrow.png"),
   });
-  // Reduced-motion users get immediate reveal without translation or fading.
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const descriptionIcon = descriptionAction.locator("svg").locator("..");
-  await expect(descriptionIcon).toHaveCSS("transition-duration", "0s");
-  await expect(descriptionIcon).toHaveCSS("transform", "none");
-  await descriptionAction.hover();
-  await expect(descriptionIcon).toHaveCSS("opacity", "1");
-  await expect(descriptionIcon).toHaveCSS("transform", "none");
-  await expect(pencil).toHaveCSS("transition-duration", "0s");
-  await expect(pencil).toHaveCSS("transform", "none");
-  await title.hover();
-  await expect(pencil).toHaveCSS("opacity", "1");
-  await expect(pencil).toHaveCSS("transform", "none");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.setViewportSize({ width: 1440, height: 950 });
   await page
     .getByRole("button", { name: "Close Channel settings tab", exact: true })
     .click();
   await expect(trigger).toBeFocused();
+  // The split moves the trigger until the closing dock leaves; a mouseup
+  // outside the moved trigger cancels the menu it opened on mousedown.
+  await expect(
+    page.locator("[data-channel-workspace] > [data-panel-dock]:not([hidden])"),
+  ).toHaveCount(0);
   await trigger.click();
   await menu
     .getByRole("menuitem", { name: "View canvas", exact: true })
@@ -413,6 +385,11 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     .click();
   await expect(canvas).toHaveCount(0);
   await expect(trigger).toBeFocused();
+  // The split moves the trigger until the closing dock leaves; a mouseup
+  // outside the moved trigger cancels the menu it opened on mousedown.
+  await expect(
+    page.locator("[data-channel-workspace] > [data-panel-dock]:not([hidden])"),
+  ).toHaveCount(0);
   for (const label of ["Archive channel", "Delete channel"]) {
     await trigger.click();
     await menu.getByRole("menuitem", { name: label, exact: true }).click();
@@ -464,13 +441,13 @@ test.describe("sidebar actions in the header", () => {
     const openMove = async () => {
       await trigger.click();
       const move = menu.getByRole("menuitem", {
-        name: "Move channel",
+        name: "Move to…",
         exact: true,
       });
       await move.focus();
       await page.keyboard.press("ArrowRight");
       return page.getByRole("menu", {
-        name: "Move Beta to section",
+        name: "Move Beta to workspace",
         exact: true,
       });
     };
@@ -483,12 +460,10 @@ test.describe("sidebar actions in the header", () => {
       .getByRole("menuitem", { name: "Create new…", exact: true })
       .click();
     const create = page.getByRole("dialog", {
-      name: "Move to new section",
+      name: "Move to new workspace",
       exact: true,
     });
-    await expect(
-      create.getByRole("textbox", { name: "Section name" }),
-    ).toBeFocused();
+    await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
     await expect(menu).toHaveCount(0);
     await create.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(trigger).toBeFocused();
@@ -652,7 +627,7 @@ test.describe("dialog origin retirement", () => {
             .click({ button: "right" });
         if (action === "create") {
           await page
-            .getByRole("menuitem", { name: "Move channel", exact: true })
+            .getByRole("menuitem", { name: "Move to…", exact: true })
             .focus();
           await page.keyboard.press("ArrowRight");
           await page
@@ -663,7 +638,7 @@ test.describe("dialog origin retirement", () => {
             .getByRole("menuitem", { name: "Delete channel", exact: true })
             .click();
         const dialog = page.getByRole("dialog", {
-          name: action === "create" ? "Move to new section" : /^Delete .+\?$/,
+          name: action === "create" ? "Move to new workspace" : /^Delete .+\?$/,
         });
         await expect(dialog).toBeVisible();
         await back(page);

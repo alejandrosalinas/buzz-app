@@ -230,7 +230,7 @@ it("keeps all unresolved recovery controls accessible, including after Escape an
   expect(screen.getAllByRole("button", { name: /Retry/ })).toHaveLength(5);
 });
 
-it("explicit dismissal calls the source once", async () => {
+it("explicit dismissal calls the source once, synchronously on button activation", async () => {
   const dismiss = vi.fn();
   render(
     <ToastProvider>
@@ -240,6 +240,7 @@ it("explicit dismissal calls the source once", async () => {
   fireEvent.click(
     await screen.findByRole("button", { name: "Dismiss notification" }),
   );
+  expect(dismiss).toHaveBeenCalledOnce();
   await waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );
@@ -350,6 +351,32 @@ it("keeps completed feedback after its source leaves and dismisses by its return
   view.unmount();
 });
 
+it("runs a completed-feedback action once while its card exits", async () => {
+  const undo = vi.fn();
+  function Source() {
+    const notify = useToastNotification();
+    return (
+      <Button
+        onClick={() =>
+          notify("Archived", "success", { label: "Undo", onClick: undo })
+        }
+      >
+        Archive
+      </Button>
+    );
+  }
+  render(
+    <ToastProvider>
+      <Source />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+  const action = await screen.findByRole("button", { name: "Undo" });
+  fireEvent.click(action);
+  fireEvent.click(action);
+  expect(undo).toHaveBeenCalledOnce();
+});
+
 it("preserves a toast action's focus destination after the toast host leaves", async () => {
   function Host() {
     const [visible, setVisible] = useState(true);
@@ -402,10 +429,11 @@ it("cancels a dismissed toast's pending removal when its host unmounts", async (
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("keeps docked clearance off the document root and skips unchanged values", async () => {
+it("keeps header clearance off the document root and skips unchanged values", async () => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-    top: window.innerHeight - 80,
-    height: 80,
+    top: 0,
+    bottom: 48,
+    height: 48,
   } as DOMRect);
   const rootWrite = vi.spyOn(document.documentElement.style, "setProperty");
   function Docked() {
@@ -422,9 +450,9 @@ it("keeps docked clearance off the document root and skips unchanged values", as
   await act(async () => {});
   const viewport = screen.getByRole("region", { name: "App notifications" });
   const clearance = () =>
-    viewport.style.getPropertyValue("--buzz-toast-clearance");
-  expect(clearance()).toBe("80px");
-  // Switching channels replaces the composer with one of the same height.
+    viewport.style.getPropertyValue("--buzz-toast-top-clearance");
+  expect(clearance()).toBe("48px");
+  // Replacing the header with one of the same height writes nothing.
   const write = vi.spyOn(viewport.style, "setProperty");
   view.rerender(host("second"));
   await act(async () => {});

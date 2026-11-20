@@ -4,3 +4,8 @@
   line-height: 1;
   --sidenav-emoji-size: var(--space-4);
 }
+
+/* A small optical compromise for native glyphs; images keep their placement. */
+.icon[data-unicode] {
+  transform: translateX(0.5px);
+}

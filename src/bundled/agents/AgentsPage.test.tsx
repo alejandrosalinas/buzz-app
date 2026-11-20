@@ -56,6 +56,7 @@ import {
 } from "../../features/solo/default-agent";
 import { readView, writeView } from "../../shared/view-state";
 import type { RelayData } from "../../features/relay/service";
+import { keypair, signed } from "../../features/relay/testing";
 import type { CommunityReader } from "../../features/communities/service";
 import {
   createNavigationController,
@@ -487,6 +488,7 @@ function setup(
         : [],
     registerTab: () => {},
     controlAttention: () => {},
+    recommend: () => {},
     registerSessionRouter: () => {},
     registerExecution: () => {},
     bindExecution: async () => {},
@@ -495,6 +497,14 @@ function setup(
     execution: async () => undefined,
     harness: {} as Agents["harness"],
     subscribeSteps: () => () => {},
+    isReady: () => true,
+    whenReady: async () => {},
+    switchable: () => false,
+    switchableAgents: () => [],
+    switchToAutomatic: async () => ({ previous: {} }),
+    restoreSettings: async () => {},
+    readNote: () => undefined,
+    setNote: async () => {},
   } satisfies Agents;
   const disconnected = { status: "disconnected", generation: 0, scope };
   const relay = {
@@ -612,10 +622,23 @@ it("opens memory Buzz links in their community and rejects a retired page's call
     channelId = "11111111-1111-4111-8111-111111111111",
     messageId = "e".repeat(64);
   const url = `buzz://message?channel=${channelId}&id=${messageId}`;
+  // The relay names the linked channel, so its link isn't withheld.
+  const relayKey = keypair();
+  const metadata = signed(relayKey, {
+    kind: 39000,
+    content: "",
+    tags: [["d", channelId], ["name", "open"], ["public"]],
+  });
   const owner = createRelaySession({
     viewer,
-    relayAuthor: "d".repeat(64),
-    query: async () => [],
+    relayAuthor: relayKey.pubkey,
+    query: async (filters) =>
+      filters.some(
+        (filter) =>
+          filter.kinds?.includes(39000) && filter["#d"]?.includes(channelId),
+      )
+        ? [metadata]
+        : [],
     media: () => undefined,
   });
   const memories = createAgentMemories(
@@ -5367,8 +5390,10 @@ it("asks before Create or another card's Open settings replaces an unsaved draft
 });
 
 it("announces the Bestie on its card without repeating it in actions", async () => {
+  const user = userEvent.setup();
   const ada = agent("Ada", 1);
   const view = setup([ada]);
+  const copy = vi.spyOn(navigator.clipboard, "writeText");
   const choices = {
     status: "ready",
     complete: true,
@@ -5404,10 +5429,17 @@ it("announces the Bestie on its card without repeating it in actions", async () 
     within(menu).queryByRole("menuitem", { name: "Remove as bestie" }),
   ).toBeNull();
   // Right-click carries the same ordinary actions as the card's "..." menu.
-  expect(
-    within(menu).getByRole("menuitem", { name: "Copy public key" }),
-  ).toBeVisible();
+  const copyKey = within(menu).getByRole("menuitem", {
+    name: "Copy public key",
+  });
+  expect(copyKey).toBeVisible();
   expect(within(menu).queryByRole("menuitemcheckbox")).toBeNull();
+  // It copies the npub that the Settings row copies, never the raw hex key.
+  await user.click(copyKey);
+  expect(copy).toHaveBeenCalledExactlyOnceWith(
+    "npub1zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygse4sl3h",
+  );
+  copy.mockRestore();
 });
 
 it("offers Make my bestie from the card's actions button", async () => {

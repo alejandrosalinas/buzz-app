@@ -74,6 +74,10 @@
   max-width: 100%;
   max-height: 100%;
 }
+.unifiedChatName {
+  --session-row-inset: calc(var(--space-2) + var(--space-half));
+  --session-action-size: calc(var(--space-6) + var(--space-1));
+}
 .sidebarIcon {
   display: inline-grid;
   width: 1.125rem;
@@ -105,14 +109,21 @@
    recipe; the panel's subtle fill nearly matches the sidebar in both themes. */
 .unreadEdge {
   @apply interaction-floating;
+  --unread-edge-inline-start: var(--space-1);
+  --unread-edge-inline-end: calc(var(--space-1) + var(--sidebar-padding-end));
   position: absolute;
-  left: 50%;
+  inset-inline: var(--unread-edge-inline-start) var(--unread-edge-inline-end);
+  margin-inline: auto;
   display: grid;
-  transform: translateX(-50%) translateY(2px) scale(0.97);
+  transform: translateY(2px) scale(0.97);
   z-index: 3;
   isolation: isolate;
   width: max-content;
-  max-width: calc(100% - var(--space-2));
+  max-width: calc(
+    100% -
+    var(--unread-edge-inline-start) -
+    var(--unread-edge-inline-end)
+  );
   /* Button owns the fill; a second backing makes its soft edge muddy. */
   box-shadow: var(--shadow-sm);
   border-radius: var(--radius-capsule);
@@ -130,7 +141,7 @@
   visibility: visible;
   pointer-events: auto;
   opacity: 1;
-  transform: translateX(-50%) translateY(0) scale(1);
+  transform: translateY(0) scale(1);
   filter: blur(0);
   transition-duration: var(--duration-state);
   transition-delay: 0s;
@@ -138,7 +149,7 @@
 @media (prefers-reduced-motion: reduce) {
   .unreadEdge,
   .unreadEdge[data-visible="true"] {
-    transform: translateX(-50%);
+    transform: none;
     filter: none;
     transition-property: opacity, visibility;
   }
@@ -183,17 +194,78 @@
 .unreadEdge[data-edge="below"] {
   bottom: var(--space-3);
 }
+.unreadEdge[data-edge="below"][data-lifted] {
+  bottom: calc(var(--space-3) + var(--sidebar-floating-action-clearance));
+}
+.unreadEdge[data-preview-limit="0"] .unreadDmPreviews,
+.unreadEdge[data-preview-limit="1"] .unreadDmAvatar:nth-child(n + 2),
+.unreadEdge[data-preview-limit="2"] .unreadDmAvatar:nth-child(n + 3) {
+  display: none;
+}
+.unreadEdge[data-edge="below"] [class~="buzz-button-label"] {
+  flex-wrap: wrap;
+}
+.unreadEdge[data-edge][data-beside-action] {
+  --unread-edge-inline-start: var(--sidebar-floating-action-clearance);
+  top: auto;
+  bottom: calc(var(--space-2) + (var(--size-control) - var(--space-6)) / 2);
+}
+.unreadEdge[data-share-action-row="split"] {
+  --unread-row-split: calc(
+    (
+      100% +
+      var(--sidebar-floating-action-clearance) -
+      var(--sidebar-padding-end) -
+      var(--space-1)
+    ) /
+    2
+  );
+}
+.unreadEdge[data-edge="above"][data-share-action-row="split"] {
+  --unread-edge-inline-start: calc(var(--unread-row-split) + var(--space-1));
+}
+.unreadEdge[data-edge="below"][data-share-action-row="split"] {
+  --unread-edge-inline-end: calc(
+    100% -
+    var(--unread-row-split) +
+    var(--space-1)
+  );
+}
+.unreadEdge[data-beside-action] > [class~="buzz-button"] {
+  padding-inline: var(--space-1);
+}
+.unreadEdge[data-edge="above"][data-share-action-row="stacked"] {
+  top: var(--space-half);
+  bottom: auto;
+}
+.unreadEdge[data-edge="below"][data-share-action-row="stacked"] {
+  bottom: var(--space-half);
+}
+.unreadEdge[data-share-action-row="stacked"] > [class~="buzz-button"] {
+  min-block-size: var(--sidebar-stacked-cue-height);
+  padding-block: var(--space-half);
+}
+.unreadEdge[data-beside-action] [class~="buzz-button-label"] {
+  flex-wrap: nowrap;
+}
+.unreadEdge[data-beside-action] :is(.unreadDmPreviews, .unreadEdgeSuffix) {
+  display: none;
+}
 .channelSection {
   position: relative;
   flex-shrink: 0;
+  --sidebar-section-gap: var(--space-2);
+}
+.channelSection[data-sidebar-section="starred"] {
+  --sidebar-section-gap: var(--space-4);
 }
 .channelSection + .channelSection {
-  margin-top: var(--space-4);
+  margin-top: var(--sidebar-section-gap);
 }
 [data-sidebar-slot]:has(> .channelSection)
   ~ [data-sidebar-slot]
   > .channelSection:first-child {
-  margin-top: var(--space-4);
+  margin-top: var(--sidebar-section-gap);
 }
 .channelSection[data-drop-target] {
   border-radius: var(--radius-row);
@@ -204,7 +276,7 @@
 }
 .createSectionHitArea {
   position: absolute;
-  inset: calc(-1 * var(--space-4)) 0 0;
+  inset: calc(-1 * var(--sidebar-section-gap)) 0 0;
   pointer-events: none;
 }
 .createSectionReveal {
@@ -300,9 +372,6 @@ body:has([data-create-section-drop][data-drop-target]) .channelDragOverlay {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-}
-.scopeSectionTitle {
-  color: var(--text-standard);
 }
 /* Collapsed headings stand in for their hidden rows, using the same unread
    evidence as the sidebar edge cues. Muted destinations stay quiet. */
@@ -569,29 +638,12 @@ details:not([open]) > summary .sectionChevron {
   width: 0;
   height: 1em;
   vertical-align: middle;
-  opacity: 0;
-  transform: translateX(calc(-1 * var(--space-1)));
-  transition:
-    opacity var(--duration-state) var(--easing-state),
-    transform var(--duration-state) var(--easing-state);
 }
 .settingsTitlePencil > svg {
   position: absolute;
   inset-inline-start: var(--space-2);
   top: 50%;
   transform: translateY(-50%);
-}
-.settingsTitleAction[aria-busy="true"] .settingsTitlePencil,
-.settingsTitleAction:hover .settingsTitlePencil,
-.settingsTitleAction:focus-visible .settingsTitlePencil {
-  opacity: 1;
-  transform: translateX(0);
-}
-@media (hover: none) {
-  .settingsTitlePencil {
-    opacity: 1;
-    transform: none;
-  }
 }
 .settingsIcon {
   display: grid;
@@ -648,39 +700,21 @@ details:not([open]) > summary .sectionChevron {
 .settingsDetailIcon {
   display: inline-flex;
   color: var(--text-subtle);
-  opacity: 0;
-  transform: translateX(calc(-1 * var(--space-1)));
-  transition:
-    opacity var(--duration-state) var(--easing-state),
-    transform var(--duration-state) var(--easing-state);
 }
-.settingsDetailAction[aria-busy="true"] .settingsDetailIcon,
-.settingsDetailAction:hover .settingsDetailIcon,
-.settingsDetailAction:focus-visible .settingsDetailIcon,
-.settingsDetails > div:hover .settingsLabelAction .settingsDetailIcon {
-  opacity: 1;
-  transform: translateX(0);
+html[data-keyboard-navigation] .settingsTitleAction:focus-visible,
+html[data-keyboard-navigation] .settingsLabelAction:focus-visible {
+  border-radius: var(--radius-control);
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
-@media (hover: none) {
-  .settingsDetailIcon {
-    opacity: 1;
-    transform: none;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .settingsTitlePencil,
-  .settingsTitleAction:hover .settingsTitlePencil,
-  .settingsTitleAction:focus-visible .settingsTitlePencil,
-  .settingsDetailIcon,
-  .settingsDetailAction:hover .settingsDetailIcon,
-  .settingsDetailAction:focus-visible .settingsDetailIcon,
-  .settingsDetails > div:hover .settingsLabelAction .settingsDetailIcon {
-    transform: none;
-    transition: none;
-  }
-}
-.settingsDetailAction:focus-visible {
+.settingsDetailAction:not(.settingsLabelAction):focus-visible {
   outline: none;
+}
+html[data-keyboard-navigation]
+  .settingsDetails
+  > div:has(.settingsDetailAction:not(.settingsLabelAction):focus-visible) {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 .settingsDetailAction:not(.settingsLabelAction)::after {
   content: "";
@@ -701,6 +735,11 @@ details:not([open]) > summary .sectionChevron {
 .settingsDetails dd {
   margin: var(--space-1) 0 0;
   color: var(--text-subtle);
+}
+.settingsAccess {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 /* The switch trails its description; an error spans the row below both. */
 .settingsSwitch > dd {
@@ -999,4 +1038,41 @@ details:not([open]) > summary .sectionChevron {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+}
+
+/* Show more and Show fewer are text actions sharing one row below a capped
+   section, which spans the row fill. Like ChannelSidebarRow, Show more's caret
+   and label sit on the row icons and titles, and Show fewer ends where trailing
+   content ends, 8px inside the fill. Show more fills the space between them, so
+   the inner edges need little padding: at the 220px minimum the two labels
+   leave only about 9px between them. */
+.sectionShowMore {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-inline: var(--channel-row-fill-start, 0) var(--channel-row-fill-end, 0);
+}
+.sectionShowMore > [data-show-more-expand] {
+  --space-row-gap: calc(var(--space-1) + var(--space-half));
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  padding-inline: calc(
+      var(--space-2) +
+      var(--space-half) -
+      var(--channel-row-fill-start, 0%)
+    )
+    0;
+}
+.sectionShowMore > [data-show-more-fold] {
+  flex: 0 0 auto;
+  width: auto;
+  padding-inline: var(--space-1) var(--space-2);
+}
+.sectionShowMoreIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  flex: 0 0 var(--space-5);
 }

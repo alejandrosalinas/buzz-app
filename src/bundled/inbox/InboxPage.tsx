@@ -28,6 +28,8 @@ import {
   rowIdentity,
   rowProfileIds,
 } from "./InboxRow";
+import { withMentionedIds } from "../../features/messages/PreviewText";
+import { activityConversation, useActivityMutes } from "./useActivityMutes";
 import {
   useChannelList,
   useProfileGeneration,
@@ -49,16 +51,23 @@ import {
   PanelHeader,
   PanelHeaderLabel,
 } from "../../shared/design-system/ui/PanelHeader";
-import { BellIcon, CheckIcon } from "../../shared/design-system/icons";
+import {
+  BellIcon,
+  CheckIcon,
+  EnvelopeIcon,
+  EnvelopeOpenIcon,
+} from "../../shared/design-system/icons";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import {
   ContextMenuRoot,
   ContextMenuTrigger,
+  MenuIcon,
   MenuItem,
   MenuPopup,
 } from "../../shared/design-system/ui/Menu";
 import { communityRefusalTitle } from "../../features/federated-identity/CommunitySignIn";
 import styles from "./Inbox.module.css";
+import listRowStyles from "../../features/messages/MessageListRow.module.css";
 import {
   readView,
   subscribeView,
@@ -292,6 +301,7 @@ function InboxList({
 }) {
   const previewId = useId();
   const list = useChannelList(session.channels);
+  const muted = useActivityMutes(session);
   const inbox = useSyncExternalStore(
     session.unread.subscribeInbox,
     session.unread.inbox,
@@ -473,7 +483,11 @@ function InboxList({
   }, [session, list.status, list.asOf, refreshAfterRoster]);
   const items = inbox.items;
   const activityItems = items
-    .map((item) => (activity === "mentions" ? item.mention : item))
+    .map((item) =>
+      activity === "mentions"
+        ? item.mention
+        : activityConversation(item, muted),
+    )
     .filter(
       (item): item is InboxItem =>
         !!item &&
@@ -557,9 +571,17 @@ function InboxList({
   // Enrich bounded activity candidates before applying Sender: unknown authors
   // must be able to appear after their profiles arrive, even in an empty view.
   // Keep main's bounded optional profile demand, independent of presentation.
+  const activityReactions = reactionFeed.items.filter(
+    (item) =>
+      !muted.has(item.channelId) ||
+      list.channels.some(
+        (channel) =>
+          channel.id === item.channelId && channel.channelType === "dm",
+      ),
+  );
   const candidateIds = [
     ...activityItems.slice(0, 50).map((item) => item.authorId),
-    ...reactionFeed.items
+    ...activityReactions
       .slice(0, 50)
       .flatMap((item) => item.events.map((event) => event.pubkey)),
   ];
@@ -611,7 +633,7 @@ function InboxList({
   const reactionItems =
     !unreadOnly && (activity === "all" || activity === "reactions")
       ? reactionRows(
-          reactionFeed.items,
+          activityReactions,
           (authorId) =>
             senderFilter === "everyone" ||
             senderKind(authorId) ===
@@ -657,8 +679,8 @@ function InboxList({
         selectedShown: shown,
       });
   });
-  const profileKey = [
-    ...new Set([
+  const profileKey = withMentionedIds(
+    [
       ...authorIds,
       ...reactionItems.slice(0, 50).flatMap((item) =>
         rowProfileIds(
@@ -672,8 +694,12 @@ function InboxList({
           list.channels.find((entry) => entry.id === item.channelId),
         ),
       ),
-    ]),
-  ]
+    ],
+    [
+      ...reactionItems.slice(0, 50).map((item) => item.message),
+      ...visible.slice(0, 50).map((item) => item.previewMentions),
+    ],
+  )
     .sort()
     .join(":");
   const profileIds = useMemo(
@@ -893,6 +919,7 @@ function InboxList({
     };
     // Prepare once per click, not once per Retry: later arrivals are a new intent.
     let readChannel: (() => Promise<unknown>) | undefined;
+    let readSteps: readonly (() => Promise<unknown>)[] | undefined;
     const work = async () => {
       if (unread) await session.unread.markUnreadLocal(item.target);
       else if (item.target.kind === "channel") {
@@ -903,7 +930,9 @@ function InboxList({
         await readChannel();
       } else if (item.timeline)
         await session.unread.markTimelineRead(item.channelId, item.messageIds);
-      else
+      else {
+        // One cut for every step and Retry: a newer Mark as unread stops it.
+        readSteps ??= session.unread.prepareReadThrough(item.readThrough);
         while (remaining.length) {
           // Close/Escape retires undispatched steps, not the admitted save.
           // Its genuine storage/access rejection still propagates through run.
@@ -912,12 +941,13 @@ function InboxList({
             throw new Error(
               "This action expired. Close and reopen the conversation.",
             );
-          const step = remaining[0];
-          if (!step) break;
-          await session.unread.markThrough(step.target, step.messageId);
+          const save = readSteps[item.readThrough.length - remaining.length];
+          if (!save) break;
+          await save();
           remaining.shift();
           revision = session.unread.revision();
         }
+      }
     };
     // An interrupted read (Close, Escape, a newer intent) does not continue.
     void run(
@@ -1197,7 +1227,11 @@ function InboxList({
                       }
                     >
                       <ContextMenuTrigger
-                        render={<div className={styles.rowSurface} />}
+                        render={
+                          <div
+                            className={`${styles.rowSurface} ${listRowStyles.unreadActionHost}`}
+                          />
+                        }
                         onKeyDown={(event) => {
                           if (
                             event.key === "ContextMenu" ||
@@ -1215,7 +1249,7 @@ function InboxList({
                         <InboxRowButton
                           item={item}
                           identity={identity}
-                          media={session.media}
+                          session={session}
                           feed={feed}
                           time={relativeTimestamp(item.createdAt)}
                           previewId={`${previewId}-${item.id}`}
@@ -1243,6 +1277,8 @@ function InboxList({
                                     channel,
                                     unread &&
                                       activity !== "mentions" &&
+                                      (item.target.kind === "channel" ||
+                                        !muted.has(item.channelId)) &&
                                       selectedId !== item.id,
                                   )
                             )
@@ -1272,7 +1308,7 @@ function InboxList({
                           }}
                         />
                         {readable && (
-                          <span className={styles.rowAction}>
+                          <span className={listRowStyles.unreadAction}>
                             <IconButton
                               size="sm"
                               variant="ghost"
@@ -1280,7 +1316,12 @@ function InboxList({
                               aria-label={`Mark as read ${sender} in ${context}`}
                               title="Mark as read"
                               onClick={() => markRead(item)}
-                              icon={<CheckIcon size={16} aria-hidden="true" />}
+                              icon={
+                                <EnvelopeOpenIcon
+                                  size={16}
+                                  aria-hidden="true"
+                                />
+                              }
                             />
                           </span>
                         )}
@@ -1303,7 +1344,14 @@ function InboxList({
                             menuUnread ? markRead(item) : mutate(item, true)
                           }
                         >
-                          {menuUnread ? "Mark as read" : "Mark unread"}
+                          <MenuIcon>
+                            {menuUnread ? (
+                              <EnvelopeOpenIcon size={14} />
+                            ) : (
+                              <EnvelopeIcon size={14} />
+                            )}
+                          </MenuIcon>
+                          {menuUnread ? "Mark as read" : "Mark as unread"}
                         </MenuItem>
                       </MenuPopup>
                     </ContextMenuRoot>

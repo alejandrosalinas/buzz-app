@@ -1,3 +1,4 @@
+import type { AgentChoicesSnapshot } from "./choices";
 import { fileStore } from "./state";
 import { localStore, type AgentStore } from "./store";
 
@@ -44,4 +45,25 @@ export function sharedFiles(initial: Record<string, string> = {}) {
         Object.fromEntries([...disk].filter(([key]) => key.startsWith(prefix))),
     );
   return { disk, open };
+}
+
+/** A complete, ready agent selection with these managed agents. */
+export function readyAgentChoices(
+  agents: readonly { pubkey: string; name: string }[],
+): AgentChoicesSnapshot {
+  const identities = agents.map((agent) => ({
+    ...agent,
+    managed: true,
+    managedName: agent.name,
+  }));
+  return {
+    status: "ready",
+    identities,
+    selectable: identities,
+    archives: { status: "ready", archived: [] },
+    templates: { status: "ready", identities, complete: true, pending: false },
+    definitions: [],
+    complete: true,
+    pending: false,
+  };
 }

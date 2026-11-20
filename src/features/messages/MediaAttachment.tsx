@@ -238,6 +238,21 @@ export function MediaAttachment({
       </span>
     );
 
+  // WebKit can emit loadeddata before nonzero dimensions are available.
+  // Invalid geometry must not replace the usable preview fallback.
+  const measureVideo = (element: HTMLVideoElement) => {
+    if (
+      Number.isFinite(element.videoWidth) &&
+      element.videoWidth > 0 &&
+      Number.isFinite(element.videoHeight) &&
+      element.videoHeight > 0
+    )
+      setMeasuredDimensions({
+        width: element.videoWidth,
+        height: element.videoHeight,
+      });
+  };
+
   const videoElement = (
     // biome-ignore lint/a11y/useMediaCaption: signed attachment metadata has no caption track URL.
     <video
@@ -248,20 +263,12 @@ export function MediaAttachment({
       preload={compact ? "metadata" : preload}
       playsInline
       style={previewStyle}
+      // With preload="metadata", WebKit may load no frame until playback, so
+      // the size is taken from metadata too.
+      onLoadedMetadata={(event) => measureVideo(event.currentTarget)}
       onLoadedData={(event) => {
         const element = event.currentTarget;
-        // WebKit can emit loadeddata before nonzero dimensions are available.
-        // Invalid geometry must not replace the usable preview fallback.
-        if (
-          Number.isFinite(element.videoWidth) &&
-          element.videoWidth > 0 &&
-          Number.isFinite(element.videoHeight) &&
-          element.videoHeight > 0
-        )
-          setMeasuredDimensions({
-            width: element.videoWidth,
-            height: element.videoHeight,
-          });
+        measureVideo(element);
         if (!preview && !capturedPreview && element.currentTime === 0) {
           // WebKit often paints no frame at exactly zero. Seeking after actual
           // frame data arrives forces a decodable opening frame.

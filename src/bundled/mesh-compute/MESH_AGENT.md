@@ -36,7 +36,7 @@ instructions.
 
 ## Quick setup
 
-Settings → Shared compute → Helpers creates Thread summarizer, Translator,
+Settings → Shared compute → Tools creates Thread summarizer, Translator,
 Media converter or Custom agent through the existing Agents creation service.
 Chat presets have no tools; Agent presets disclose local shell/files and Buzz
 access before creation. Defaults are created directly; edit names, instructions,

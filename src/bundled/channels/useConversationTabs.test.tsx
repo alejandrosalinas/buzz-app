@@ -2132,6 +2132,7 @@ it("a hidden retained thread tab's rows re-render for new panels, not channel-li
       snapshot: () => undefined,
       subscribe: () => () => {},
       attention: () => ({ unread: false }),
+      threadReadThrough: () => -1,
     },
   } as unknown as RelaySession;
   let available: RegisteredPanel[] = [];

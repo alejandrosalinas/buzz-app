@@ -146,6 +146,20 @@ it("lists pending recommendations under their source without installing anything
   expect(git).not.toHaveBeenCalled();
 });
 
+it("doesn't recommend a manual entry until an installed copy is outdated", () => {
+  const { manager } = harness();
+  const missing = show(
+    manager,
+    ready([entry("missing", { install: "manual" })]),
+  );
+  expect(missing.container).toBeEmptyDOMElement();
+  missing.unmount();
+  show(manager, ready([entry("outdated", { install: "manual" })]), [installed]);
+  expect(
+    screen.getByRole("button", { name: "Review update example.managed" }),
+  ).toBeVisible();
+});
+
 it("reviews at the pinned commit, then installs and enables only after confirmation", async () => {
   const { manager, git, imports } = harness();
   show(manager, ready([entry("missing")]), [], { strict: true });
@@ -1020,4 +1034,32 @@ it("disables Retry and waits to retry while plugin storage is busy", () => {
   );
   expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
   expect(manager.refreshManaged).not.toHaveBeenCalled();
+});
+
+it("offers a manual URL entry's Git-to-URL move as a review in place", async () => {
+  const { manager } = harness();
+  Object.assign(manager.imports, {
+    url: vi.fn(async () =>
+      preview({
+        commit: null,
+        candidates: [{ path: ".", revision: artifact.sha256, manifest }],
+      }),
+    ),
+  });
+  show(
+    manager,
+    ready([{ ...artifact, state: "outdated", install: "manual" }]),
+    [fromGit],
+  );
+  expect(screen.queryByText(/Installed from a different source/)).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Review update example.managed" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    await within(dialog).findByText(
+      /switches this plugin from Git to a packaged download/,
+    ),
+  ).toBeVisible();
+  expect(manager.change).not.toHaveBeenCalled();
 });

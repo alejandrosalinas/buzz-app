@@ -60,6 +60,12 @@ test("reaction plus opens a visible emoji-only picker, restores focus and publis
       const { x, y, width, height } = node.getBoundingClientRect();
       return { x, y, width, height };
     });
+  // Hover reveals the bar in a later render, and only then does its entrance
+  // animation start. Waiting for animations before the bar opens returns at
+  // once and measures a closed or still-animating bar.
+  await expect
+    .poll(() => actions.evaluate((bar) => bar.matches(":popover-open")))
+    .toBe(true);
   await animationsSettled(actions);
   const actionsBefore = await bounds(actions);
   const plusBefore = await bounds(plus);

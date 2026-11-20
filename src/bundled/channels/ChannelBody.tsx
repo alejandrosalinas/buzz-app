@@ -15,6 +15,7 @@ import styles from "./Channels.module.css";
 export const ChannelBody = memo(function ChannelBody({
   cached,
   intro,
+  latestRequest,
   viewer,
   revealMessageId,
   openThreadRootId,
@@ -28,6 +29,7 @@ export const ChannelBody = memo(function ChannelBody({
   onContentReady?(channelId: string): void;
   cached: boolean;
   intro?: ReactNode;
+  latestRequest?: AbortSignal | undefined;
   viewer?: string | undefined;
   navigation?: PageNavigation | undefined;
   revealMessageId?: string | undefined;
@@ -125,6 +127,7 @@ export const ChannelBody = memo(function ChannelBody({
     <ConversationTimeline
       continuityKey={continuityKey}
       intro={intro}
+      latestRequest={latestRequest}
       viewer={viewer}
       window={window}
       launchPending={

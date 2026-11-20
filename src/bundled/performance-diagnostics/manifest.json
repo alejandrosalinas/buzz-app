@@ -1,0 +1,10 @@
+{
+  "id": "buzz.performance-diagnostics",
+  "name": "Performance diagnostics",
+  "apiVersion": 1,
+  "description": "Let agents request short performance snapshots of this app, including aggregate activity across connected communities.",
+  "discovery": {
+    "category": "developer-tools-and-integrations",
+    "tags": ["coding-agents"]
+  }
+}

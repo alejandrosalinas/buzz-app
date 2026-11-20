@@ -24,10 +24,53 @@
   flex: 0 0 auto;
 }
 .item {
+  position: relative;
   display: flex;
+}
+/* A pulled row dims in place, as sidebar rows do; the shared insertion line
+   marks where it lands. */
+.item[data-dragging] {
+  opacity: 0.3;
+}
+.item[data-drop-edge]::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: calc(var(--space-1) / 2 + 1px);
+  border-radius: var(--radius-pill);
+  background: var(--border-accent);
+  pointer-events: none;
+}
+.item[data-drop-edge="before"]::before {
+  top: 0;
+  transform: translateY(-50%);
+}
+.item[data-drop-edge="after"]::before {
+  bottom: 0;
+  transform: translateY(50%);
 }
 .item > button {
   width: 100%;
+}
+.dragOverlay {
+  @apply text-body-sm;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-control);
+  background: var(--surface-popover);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-standard);
+  cursor: grabbing;
+}
+.dragOverlay > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trigger {
   position: relative;

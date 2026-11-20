@@ -9,7 +9,11 @@ import type {
   HistoryPresentation,
   HistorySelection,
 } from "./history-presentation";
-import { recalledHistory, type History } from "./agent-config-history";
+import {
+  incompatibleSettings,
+  recalledHistory,
+  type History,
+} from "./agent-config-history";
 import type { Agents, ConfigHistory } from "./service";
 
 /** One settings disclosure; each track keeps its existing history owner. */
@@ -44,14 +48,18 @@ export function ConfigHistoryRow({
   const [localSelection, select] = useState<HistorySelection>();
   const selected = presentation ? presentation.selected : localSelection;
   const setSelected = presentation?.select ?? select;
+  const incompatible = incompatibleSettings(history);
   const [expanded, setExpanded] = useState<string[]>(() =>
-    selected || presentation?.active ? ["Previous versions"] : [],
+    selected || presentation?.active || incompatible
+      ? ["Previous versions"]
+      : [],
   );
   const selectionId = selected?.id;
   const active = presentation?.active;
   useEffect(() => {
-    if (selectionId || active) setExpanded(["Previous versions"]);
-  }, [selectionId, active]);
+    if (selectionId || active || incompatible)
+      setExpanded(["Previous versions"]);
+  }, [selectionId, active, incompatible]);
   const [counts, setCounts] = useState<
     Partial<Record<"settings" | "instructions", History>>
   >(() =>
@@ -150,6 +158,9 @@ export function ConfigHistoryRow({
                   {...(side === "settings" && history.settings
                     ? { settings: history.settings }
                     : {})}
+                  revertProblem={
+                    side === "settings" ? history.settingsProblem : undefined
+                  }
                   onRevert={(template) => history.revise(side, template)}
                   onHistoryChange={
                     side === "settings" ? settingsChanged : instructionsChanged

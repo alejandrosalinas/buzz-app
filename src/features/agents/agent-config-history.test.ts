@@ -288,6 +288,78 @@ describe("revert", () => {
     expect(template2.tags).toContainEqual(["title", "Old"]);
   });
 
+  it("keeps the head's plugin notes when settings are reverted", () => {
+    const settingsExpected = {
+      ...expected,
+      type: "buzz.agent.settings" as const,
+    };
+    const settings = (id: string, prev: string | undefined, body: object) =>
+      rev(id, prev, {
+        type: "buzz.agent.settings",
+        title: "Agent settings",
+        content: JSON.stringify({ version: 1, settings: {}, ...body }),
+      });
+    const check = { agentType: "goose", schema: {} } as const;
+    const note = (tag: string) => ({ "org.example": { data: 1, tag } });
+    const notesIn = (template: { content: string; tags: string[][] }) => ({
+      notes: JSON.parse(template.content).pluginNotes,
+      tags: template.tags.filter((tag) => tag[0] === "note"),
+    });
+    // The head's notes win over the target's...
+    expect(
+      notesIn(
+        revertTemplate(
+          settingsExpected,
+          settings("r1", "r0", { pluginNotes: note("new") }),
+          settings("r0", undefined, { pluginNotes: note("old") }),
+          check,
+        ),
+      ),
+    ).toEqual({
+      notes: note("new"),
+      tags: [["note", "org.example", "new"]],
+    });
+    // ...and are kept going back to a revision before any note...
+    expect(
+      notesIn(
+        revertTemplate(
+          settingsExpected,
+          settings("r1", "r0", { pluginNotes: note("new") }),
+          settings("r0", undefined, {}),
+          check,
+        ),
+      ).notes,
+    ).toEqual(note("new"));
+    // ...and a head with none brings none back.
+    expect(
+      notesIn(
+        revertTemplate(
+          settingsExpected,
+          settings("r1", "r0", {}),
+          settings("r0", undefined, { pluginNotes: note("old") }),
+          check,
+        ),
+      ),
+    ).toEqual({ notes: undefined, tags: [] });
+    // Restoring deleted settings keeps the notes they had.
+    const deleted = rev("r2", "r1", {
+      op: "delete",
+      content: "",
+      type: "buzz.agent.settings",
+      title: "Agent settings",
+    });
+    expect(
+      notesIn(
+        revertTemplate(
+          settingsExpected,
+          deleted,
+          settings("r1", "r0", { pluginNotes: note("old") }),
+          check,
+        ),
+      ),
+    ).toEqual({ notes: note("old"), tags: [["note", "org.example", "old"]] });
+  });
+
   it("checks settings against the plugin schema before reverting", () => {
     const settingsExpected = {
       ...expected,

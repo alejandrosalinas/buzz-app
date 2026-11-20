@@ -8,6 +8,8 @@ import type {
 import type { BundledPlugin } from "../../src/plugins/manager";
 import { createActivityTab } from "../../src/bundled/builderlab/adapter-type/Activity";
 import type { WorkOutcome } from "../../src/features/agents/local-activity";
+import type { Agents } from "../../src/features/agents/service";
+import type { RelayData } from "../../src/features/relay/service";
 
 // A real curve point: the owner's session derives a NIP-44 key with it to read
 // the agent's memory.
@@ -20,6 +22,8 @@ let identities: AgentIdentity[] = resumable
   : [];
 /** Requests the owner stopped, in order. */
 const stopped: string[] = [];
+const watched: string[] = [];
+let services: { agents: Agents; relay: RelayData } | undefined;
 const pending: {
   id: string;
   handover(): void;
@@ -33,6 +37,11 @@ const latest = (id: string) => {
   return row;
 };
 const controls = {
+  services: () => {
+    if (!services) throw new Error("Local agent fixture is not ready");
+    return services;
+  },
+  watched: () => [...watched],
   outboxStorage: browserOutboxStorage,
   pending: () => pending.map((row) => row.id),
   stopped: () => [...stopped],
@@ -109,6 +118,7 @@ export const localAgentPlugin: BundledPlugin = {
   module: {
     inject: ["agents", "relay", "navigation"],
     apply(ctx) {
+      services = { agents: ctx.agents, relay: ctx.relay };
       ctx.agents.register({
         id: "tester",
         title: "Local tester",
@@ -132,6 +142,12 @@ export const localAgentPlugin: BundledPlugin = {
           },
         ],
         run(delivery) {
+          if (delivery.trigger.type === "catch-up") {
+            watched.push(
+              ...delivery.trigger.events.map(({ event }) => event.content),
+            );
+            return;
+          }
           if (delivery.trigger.type !== "mention")
             throw new Error("Unexpected trigger");
           let handover!: () => void, finish!: (result: WorkOutcome) => void;
@@ -178,6 +194,7 @@ export const localAgentPlugin: BundledPlugin = {
         stopAgents = ctx.agents.subscribe(ensure);
       ensure();
       ctx.effect(() => () => {
+        services = undefined;
         stopRelay();
         stopAgents();
         for (const row of pending) {

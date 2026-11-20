@@ -167,6 +167,8 @@ for (const inThread of [false, true]) {
     ).toBeVisible();
     // A public reply retires the live treatment, not the expanded history.
     await expect(collapse).toBeVisible();
+    // Appending the public reply can still move the focused button.
+    await settle(page, history);
     await expect(collapse).toBeFocused();
     await collapse.click();
     await expect(disclosure).toBeVisible();

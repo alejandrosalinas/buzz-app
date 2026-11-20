@@ -142,7 +142,9 @@ html[data-keyboard-navigation]
   color: var(--text-metadata);
 }
 
-.search-field[data-variant="palette"] [data-search-clear] {
+/* Small controls in the palette field, such as Clear, a field action or a
+   chosen filter, overhang its line rather than make it taller. */
+.search-field[data-variant="palette"] .buzz-button[data-size="sm"] {
   margin-block: calc(-1 * var(--space-half));
 }
 

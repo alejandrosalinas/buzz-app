@@ -27,11 +27,16 @@
   [data-context-menu-present],
   :has(:focus-visible),
   :has([aria-expanded="true"][aria-haspopup="menu"])
-):not(:has([aria-current="page"]))::before {
+):not(:has([aria-current="page"], [data-spring-loaded="on"]))::before {
   background: var(--affordance-panel-hover);
 }
-.menu:has([aria-current="page"])::before {
+/* A spring-loaded file drag selects the row until it opens or blinks off. */
+.menu:has([aria-current="page"], [data-spring-loaded="on"])::before {
   background: var(--surface-sidebar-selected);
+}
+/* Inside a card there is no row fill, so the button keeps the drag's fill. */
+.menu:not([data-navigation-card] *) [data-spring-loaded] {
+  background-color: transparent;
 }
 [data-navigation-card] .menu::before {
   display: none;

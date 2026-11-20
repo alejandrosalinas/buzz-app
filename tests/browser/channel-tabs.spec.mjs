@@ -43,7 +43,7 @@ test("middle-click closes a content tab without selecting it", async ({
   );
   await main
     .locator(`[data-message-id="${link.id}"]`)
-    .getByRole("link", { name: "Open Chat: Beta" })
+    .getByRole("link", { name: "Open Beta" })
     .click();
   const workspace = page.locator("[data-panel-workspace]");
   const beta = workspace.getByRole("tab", { name: "Beta", exact: true });
@@ -102,7 +102,7 @@ test("Open in channel takes a content tab to its conversation with its composer 
   );
   await main
     .locator(`[data-message-id="${link.id}"]`)
-    .getByRole("link", { name: "Open Chat: Beta" })
+    .getByRole("link", { name: "Open Beta" })
     .click();
   await page
     .locator("[data-panel-workspace]")
@@ -145,7 +145,7 @@ test("content-opened tabs restore drafts without offering blank-tab creation", a
   );
   const chip = main
     .locator(`[data-message-id="${link.id}"]`)
-    .getByRole("link", { name: "Open Chat: Beta" });
+    .getByRole("link", { name: "Open Beta" });
   await expect(chip).toBeVisible();
   await main
     .getByRole("textbox", { name: "Message #Alpha", exact: true })
@@ -258,7 +258,7 @@ test("content-opened tabs restore drafts without offering blank-tab creation", a
   await expect(reply).toBeFocused();
   await reply.fill("Alpha reply draft");
   // Shared Beta lists with the viewer's chats.
-  await page.locator('button[data-solo-channel-id="beta"]').click();
+  await page.locator('button[data-solo-destination-id="beta"]').click();
   await expect(workspace).toHaveCount(0);
   await page.locator('button[data-channel-id="alpha"]').click();
   await expect(
@@ -360,9 +360,7 @@ test.describe("crowded content tabs", () => {
         .join(" "),
     );
     const row = main.locator(`[data-message-id="${link.id}"]`);
-    await row
-      .getByRole("link", { name: "Open Chat: Beta", exact: true })
-      .click();
+    await row.getByRole("link", { name: "beta", exact: true }).click();
     const workspace = page.locator("[data-panel-workspace]");
     const list = workspace.getByRole("tablist", { name: "Panel tabs" });
     const tabs = list.getByRole("tab");
@@ -388,9 +386,7 @@ test.describe("crowded content tabs", () => {
       );
     };
     for (const id of ids.slice(2))
-      await row
-        .getByRole("link", { name: `Open Chat: ${id}`, exact: true })
-        .click();
+      await row.getByRole("link", { name: id, exact: true }).click();
     await expect(tabs).toHaveCount(6);
     await settlePanelMotion(page);
     const activeClose = workspace.getByRole("button", {
@@ -548,7 +544,7 @@ test("Canvas opens once beside Thread and retains its channel draft", async ({
   await edit.click();
   await expect(text).toHaveValue("Channel-scoped draft");
   // Leaving a channel keeps its Canvas tab open for the return.
-  await page.locator('button[data-solo-channel-id="beta"]').click();
+  await page.locator('button[data-solo-destination-id="beta"]').click();
   await expect(workspace).toHaveCount(0);
   await page.locator('button[data-channel-id="alpha"]').click();
   await expect(thread).toBeVisible();

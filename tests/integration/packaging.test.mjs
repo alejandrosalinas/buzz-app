@@ -62,18 +62,25 @@ function selected(
   inputs = {},
   ref = "refs/heads/main",
   repository = "block/buzz-app",
+  needs = { source: { result: "success" } },
 ) {
-  return new Function("github", "inputs", "format", `return (${job.if})`)(
-    { ref, repository },
-    inputs,
-    format,
-  );
+  return new Function(
+    "github",
+    "inputs",
+    "format",
+    "needs",
+    "cancelled",
+    `return (${job.if})`,
+  )({ ref, repository }, inputs, format, needs, () => false);
 }
 
 test("previews build main daily and after each stable release, with one version per run", () => {
   const caller = parse(read(".github/workflows/release.yml"));
-  assert.equal(caller.on.schedule.length, 1);
-  assert.match(caller.on.schedule[0].cron, /^[1-9]\d? \d+ \* \* \*$/);
+  // Daily, with Sunday's run on its own cron so only it refreshes caches.
+  const [daily, sunday] = caller.on.schedule.map(({ cron }) => cron);
+  assert.equal(caller.on.schedule.length, 2);
+  assert.match(daily, /^[1-9]\d? \d+ \* \* 1-6$/);
+  assert.equal(sunday, daily.replace(/1-6$/, "0"));
   assert.deepEqual(caller.on.workflow_run, {
     workflows: ["Desktop stable release"],
     types: ["completed"],
@@ -104,7 +111,21 @@ test("previews build main daily and after each stable release, with one version 
   assert.equal(checkout.with.ref, undefined);
   assert.equal(checkout.with["fetch-depth"], 0);
   assert.equal(derive.run, "node scripts/preview-version.mjs HEAD");
-  assert.equal(desktop.needs, "source");
+  // Sunday's purge runs before both rebuilds, which still run if it fails.
+  const { purge_caches, refresh_ci } = caller.jobs;
+  assert.ok(purge_caches.if.includes(`github.event.schedule == '${sunday}'`));
+  assert.deepEqual(desktop.needs, ["source", "purge_caches"]);
+  for (const result of ["success", "failure", "skipped"])
+    assert.equal(
+      selected(desktop, {}, undefined, undefined, {
+        source: { result: "success" },
+        purge_caches: { result },
+      }),
+      true,
+    );
+  assert.equal(refresh_ci.needs, "purge_caches");
+  assert.equal(refresh_ci.uses, "./.github/workflows/ci.yml");
+  assert.ok("workflow_call" in parse(read(".github/workflows/ci.yml")).on);
   assert.equal(
     desktop.with.preview_version,
     `\${{ needs.source.outputs.version }}`,

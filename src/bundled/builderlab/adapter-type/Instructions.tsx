@@ -155,7 +155,7 @@ export function createSettingsTab(
                 />
               )}
               <PreferenceRow
-                title="Sessions"
+                title="Session scope"
                 subtitle="One session per thread"
               />
             </SettingsGroup>

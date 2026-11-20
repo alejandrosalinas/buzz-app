@@ -325,3 +325,21 @@ it("drops a rejected reply restored from the journal when it is dismissed", () =
     [alice.pubkey, carol.pubkey],
   ]);
 });
+
+it("refolds a relayed row when the named agent's verified owner changes", () => {
+  let owner: string | undefined;
+  const view = new MessageProjection(
+    channel,
+    relay.pubkey,
+    createRelayProfiler(),
+    undefined,
+    undefined,
+    (pubkey) => (pubkey === bob.pubkey ? owner : undefined),
+  );
+  const relayed = message(alice, channel, "Notice\n\nText", 10, [
+    ["relayed-from", bob.pubkey],
+  ]);
+  expect(view.reconcile([relayed], [])[0]?.relayedFrom?.verified).toBe(false);
+  owner = alice.pubkey;
+  expect(view.reconcile([relayed], [])[0]?.relayedFrom?.verified).toBe(true);
+});

@@ -17,6 +17,8 @@ export type RequestWork = {
   stoppable?: boolean;
   /** This local request can be asked again once it fails. */
   retryable?: boolean;
+  /** How this local request's turn ran, such as without its gateway. */
+  notice?: string;
   selected: ReturnType<typeof requestActivity>;
   turns: Snapshot["turns"];
   working: boolean;
@@ -24,6 +26,28 @@ export type RequestWork = {
 /** Work that no longer needs a pending activity presentation. Errors remain visible. */
 export function isSettledWork(entry: Pick<RequestWork, "state">): boolean {
   return ["done", "ended", "superseded", "stopped"].includes(entry.state);
+}
+
+// Snapshot record arrays are frozen and replaced on change, and every mounted
+// row asks about the same channels: index each array's agents once.
+const recordAgents = new WeakMap<object, Map<string, string[]>>();
+function channelAgents(records: Snapshot["records"], channelId: string) {
+  if (!Object.isFrozen(records))
+    return records
+      .filter((record) => record.channelIds.includes(channelId))
+      .map((record) => record.agent);
+  let byChannel = recordAgents.get(records);
+  if (!byChannel) {
+    byChannel = new Map();
+    for (const record of records)
+      for (const id of record.channelIds) {
+        const agents = byChannel.get(id);
+        if (!agents) byChannel.set(id, [record.agent]);
+        else if (!agents.includes(record.agent)) agents.push(record.agent);
+      }
+    recordAgents.set(records, byChannel);
+  }
+  return byChannel.get(channelId) ?? [];
 }
 
 /** Only explicit triggering IDs associate work with a message. Typing is not
@@ -39,9 +63,7 @@ export function requestWork(
     (request) => request.channelId === channelId && ids.has(request.messageId),
   );
   const agents = new Set([
-    ...records
-      .filter((record) => record.channelIds.includes(channelId))
-      .map((record) => record.agent),
+    ...channelAgents(records, channelId),
     ...requests.map((request) => request.agent),
     ...snapshot.turns
       .filter(
@@ -78,6 +100,7 @@ export function requestWork(
           ...(chosen.dismissed ? { dismissed: true } : {}),
           ...(chosen.stoppable ? { stoppable: true } : {}),
           ...(chosen.retryable ? { retryable: true } : {}),
+          ...(chosen.notice ? { notice: chosen.notice } : {}),
         },
       ];
     }

@@ -1,0 +1,1 @@
+All replies and delegations — including task assignments to other agents — go to the **same channel where you were tagged**. Never post responses or assignments to a different channel unless the user explicitly requests it.

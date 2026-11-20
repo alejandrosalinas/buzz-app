@@ -74,7 +74,11 @@ test("a remote failure shares its expandable history and preserves its message a
   await expect(toggle).toContainText("Couldn’t finish");
   // The task failed without publishing a reply: retiring live progress must
   // leave a persistent explanation, even beyond the former preview timeout.
-  await page.clock.runFor(120000);
+  // Jump rather than run: with wall time frozen, a timer armed for a wall-clock
+  // deadline (the presence read gate) re-arms with the same delay each time it
+  // fires. That delay is whatever was left at the freeze, so running 120 s of
+  // timers could take tens of thousands of turns and outlast the test.
+  await page.clock.fastForward(120000);
   await expect(toggle).toContainText("Couldn’t finish");
   await expect(
     history.locator('[data-message-activity] [data-state="working"]'),
@@ -183,4 +187,81 @@ test("a remote failure shares its expandable history and preserves its message a
   await expect(toggle).toContainText("Couldn’t finish");
   await toggle.click();
   await expect(group.getByText(failure.content, { exact: true })).toBeVisible();
+});
+
+// Layout: a standalone failure reply nests its disclosure inside the notice
+// wrapper, so only a real layout shows whether Compact keeps its outline inset.
+test("a standalone failure reply keeps its inset in every density", async ({
+  page,
+  app,
+}) => {
+  const key = generateSecretKey();
+  const agent = getPublicKey(key);
+  app.serveProfile(key, { name: "Remote tester", is_agent: true });
+  await page.route("**/agent-library", (route) =>
+    route.fulfill({
+      json: {
+        definitions: [],
+        identities: [{ pubkey: agent, name: "Remote tester" }],
+      },
+    }),
+  );
+  await open(page, app);
+  await expect.poll(() => app.relay.hasRoute("primary", "alpha")).toBe(true);
+  const failure = finalizeEvent(
+    {
+      kind: 9,
+      content: "The selected model could not complete this request.",
+      tags: [
+        ["h", "alpha"],
+        ["buzz:notice", "execution-failure"],
+      ],
+      created_at: Math.floor(Date.now() / 1000),
+    },
+    key,
+  );
+  app.histories.get("primary/alpha").push(failure);
+  app.relay.publish("primary", failure);
+  const history = page.getByRole("region", { name: "Channel message history" });
+  const reply = history.locator(
+    `[data-message-notice="execution-failure"][data-message-id="${failure.id}"]`,
+  );
+  const toggle = reply.getByRole("button", {
+    name: /^(Show|Collapse) activity history:/,
+  });
+  await expect(toggle).toContainText("Couldn’t finish");
+  // The bubble's content keeps an inset inside its outline, collapsed and open.
+  const inset = () =>
+    reply.evaluate((notice) => {
+      const content = notice.getBoundingClientRect();
+      const line = notice
+        .querySelector("[data-activity-summary]")
+        .getBoundingClientRect();
+      const bubble = notice
+        .closest('[class*="messageBubble"]')
+        .getBoundingClientRect();
+      return Math.min(
+        line.left - bubble.left,
+        line.top - bubble.top,
+        bubble.right - content.right,
+        bubble.bottom - content.bottom,
+      );
+    });
+  for (const expanded of [false, true]) {
+    if (expanded) {
+      await toggle.click();
+      await expect(
+        reply.getByText(failure.content, { exact: true }),
+      ).toBeVisible();
+    }
+    for (const density of ["default", "compact"]) {
+      await page.evaluate((density) => {
+        document.documentElement.dataset.messageDensity = density;
+      }, density);
+      expect(
+        await inset(),
+        `${density}, expanded: ${expanded}`,
+      ).toBeGreaterThanOrEqual(4);
+    }
+  }
 });

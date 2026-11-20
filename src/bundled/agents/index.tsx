@@ -18,6 +18,7 @@ import { ExternalConnectionSettings } from "./ExternalConnectionSettings";
 import { externalMcpEnabled } from "../../features/agents/external-connection";
 import { forgetMemoryListingsOnSelection } from "../../features/agents/memory";
 import inlineStyles from "../../shared/InlineReference.module.css";
+import { gatewayRoutes } from "../../features/agents/gateway/route";
 
 export const inject = [
   "pages",
@@ -39,6 +40,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const { relay, navigation: navigator } = ctx;
   const agents = developerMode ? withImportScenario(ctx.agents) : ctx.agents;
   if (isTauri()) {
+    // Gateway readiness probes go out under this plugin's native grant for
+    // the build's gateway origin, which exists only when routing is on.
+    if (gatewayRoutes.configured)
+      ctx.effect(() =>
+        gatewayRoutes.bindRequest((request) => ctx.host.request(request)),
+      );
     const connection = ctx.externalApps;
     ctx.effect(() =>
       connection.bind({

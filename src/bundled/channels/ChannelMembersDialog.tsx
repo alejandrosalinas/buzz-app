@@ -121,6 +121,7 @@ import { ChannelGeneralAccess } from "./ChannelGeneralAccess";
 import { avatarMedia } from "../../shared/avatar-source";
 import { channelIcon, channelText } from "../../features/channels/channel-icon";
 import { writeClipboardText } from "../../shared/clipboard";
+import { messagePersonLink } from "../../features/direct-messages/message-person";
 
 const INVITATION_GROUP_SIZE = 4;
 const MEMBER_PAGE_SIZE = 50;
@@ -435,7 +436,8 @@ const MemberIdentityRow = memo(function MemberIdentityRow({
 });
 
 type MemberNavigation = {
-  onOpenConversation?: ((channelId: string) => boolean) | undefined;
+  /** Leaves Members for a DM, or a New message draft, by link. */
+  onOpenMessage?: ((link: string) => boolean) | undefined;
   canOpenLink?: ((target: string) => boolean) | undefined;
   onOpenLink?:
     | ((target: string, returnFocus?: HTMLElement) => boolean)
@@ -448,7 +450,7 @@ export function ChannelMembersButton({
   channelId,
   canOpenLink,
   onOpenLink,
-  onOpenConversation,
+  onOpenMessage,
   presentation,
   agents,
   communities,
@@ -515,7 +517,7 @@ export function ChannelMembersButton({
           channelId={channelId}
           canOpenLink={canOpenLink}
           onOpenLink={onOpenLink}
-          onOpenConversation={onOpenConversation}
+          onOpenMessage={onOpenMessage}
           navigator={navigator}
           communities={communities}
           signal={signal}
@@ -630,7 +632,7 @@ export function ChannelMembersDialog({
   shareLink,
   canOpenLink,
   onOpenLink,
-  onOpenConversation,
+  onOpenMessage,
   agents,
   communities,
   navigator,
@@ -1863,7 +1865,11 @@ export function ChannelMembersDialog({
           // Without history, or into a DM these people already have: go there.
           if (destination !== channelId) {
             openingDestination.current = true;
-            if (onOpenConversation?.(destination)) {
+            if (
+              onOpenMessage?.(
+                `buzz://channel/${encodeURIComponent(destination)}`,
+              )
+            ) {
               close();
               return;
             }
@@ -1905,7 +1911,7 @@ export function ChannelMembersDialog({
       canAddSoloAgents,
       place,
       dm,
-      onOpenConversation,
+      onOpenMessage,
       close,
       memberActions,
       memberPending,
@@ -1975,7 +1981,7 @@ export function ChannelMembersDialog({
         !signal ||
         signal.aborted ||
         messagePending.current ||
-        !onOpenConversation ||
+        !onOpenMessage ||
         !session.directMessages.available ||
         !session.viewer ||
         key === session.viewer ||
@@ -1989,11 +1995,11 @@ export function ChannelMembersDialog({
       setOpeningMessage(true);
       setMessageError("");
       try {
-        const destination = await session.directMessages.open([key], signal);
+        const destination = await messagePersonLink(session, key, signal);
         if (signal.aborted) return;
         // The destination owns focus; closing Members must not return it to this header.
         openingDestination.current = true;
-        if (onOpenConversation(destination)) close();
+        if (onOpenMessage(destination)) close();
         else {
           openingDestination.current = false;
           setMessageError(
@@ -2017,7 +2023,7 @@ export function ChannelMembersDialog({
     },
     [
       session,
-      onOpenConversation,
+      onOpenMessage,
       close,
       profiles,
       known,
@@ -2099,7 +2105,7 @@ export function ChannelMembersDialog({
           key !== session.viewer &&
           session.viewer &&
           session.directMessages.available &&
-          onOpenConversation
+          onOpenMessage
             ? openMessage
             : undefined
         }

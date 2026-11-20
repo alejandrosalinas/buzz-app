@@ -27,7 +27,7 @@ for (const key of [
   "CLAUDE_PID",
 ])
   delete env[key];
-Object.assign(env, {
+Object.assign(env, CLAUDE_ENV, {
   CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
   CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
   DISABLE_AUTOUPDATER: "1",

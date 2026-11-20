@@ -8,6 +8,7 @@ import type {
   AgentCreateProps,
   Agents,
   AgentUpdateRequest,
+  AgentViewProps,
   RegisteredAgentType,
 } from "../../features/agents/service";
 import { UpdateReview } from "./UpdateReview";
@@ -31,9 +32,35 @@ const kind = (key: string, title: string) => ({
     reply: instructions ?? config.reply,
   }),
   Create,
+  tabs: [
+    {
+      id: "settings",
+      title: "Settings",
+      role: "settings",
+      component: ({ agent, save }: AgentViewProps) => (
+        <button type="button" onClick={() => void save(agent.config)}>
+          Save
+        </button>
+      ),
+    },
+  ],
+  settingsProposal: {
+    compactAt: "unprotected",
+    resolveRecommended: async () => ({
+      harness: "goose",
+      provider: "example",
+      model: "recommended-model",
+      effort: "medium",
+      label: "Recommended model",
+    }),
+  },
 });
 
-function fixture(change: Partial<AgentUpdateRequest>, waiting = false) {
+function fixture(
+  change: Partial<AgentUpdateRequest>,
+  waiting = false,
+  agentState?: Partial<Agent>,
+) {
   const request: AgentUpdateRequest = {
     id: "draft",
     requester: "a".repeat(64),
@@ -62,9 +89,12 @@ function fixture(change: Partial<AgentUpdateRequest>, waiting = false) {
     key: "c".repeat(64),
     pubkey: "c".repeat(64),
     name: "Child",
+    owner: "b".repeat(64),
+    relay: "wss://relay.example",
     picture: "https://example.test/child.png",
     type: "test/echo",
     config: { reply: "Be brief.", model: "large" },
+    ...agentState,
   } as unknown as Agent;
   let snapshot = { running: [agent] };
   const agents = {
@@ -193,4 +223,101 @@ it("discards an unsaved change request when the owner closes its review", async 
     expect(agents.dismissUpdate).toHaveBeenCalledWith("draft"),
   );
   expect(agents.approveUpdate).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    agentState: { type: "test/other" },
+    settings: { model: "medium" },
+    message: "The agent changed harnesses after this proposal",
+  },
+  {
+    agentState: { executionBinding: { provider: "test/remote", config: {} } },
+    settings: { workspace: "/work/task" },
+    message: "The execution adapter manages apps and workspace",
+  },
+  {
+    agentState: { executionBinding: { provider: "test/remote", config: {} } },
+    settings: { model: "local-model" },
+    message: "does not support model or thinking proposals",
+  },
+  {
+    agentState: { protection: { provider: "test/protection", policy: {} } },
+    settings: { apps: true },
+    message: "Protected agents cannot enable Codex apps and plugins",
+  },
+  {
+    agentState: { protection: { provider: "test/protection", policy: {} } },
+    settings: { compactAt: "150000" },
+    message: "Protected agents cannot set an Auto-compact threshold",
+  },
+])(
+  "explains why a proposal can no longer be saved before review",
+  async ({ agentState, message, settings }) => {
+    const user = userEvent.setup();
+    const agents = fixture({ settings }, false, agentState);
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(
+      screen.queryByRole("button", { name: /save/i }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Close$/ }));
+    expect(agents.dismissUpdate).toHaveBeenCalledWith("draft");
+    expect(agents.approveUpdate).not.toHaveBeenCalled();
+  },
+);
+
+it("saves against the agent revision that opened the settings review", async () => {
+  const user = userEvent.setup();
+  const agents = fixture(
+    { name: "Reviewer", settings: { model: "proposed-model" } },
+    false,
+    {
+      configBase: { settings: "opened-settings" },
+    },
+  );
+  await screen.findByDisplayValue("Reviewer");
+  act(() =>
+    agents.connect([
+      {
+        ...agents.agent,
+        config: { reply: "Be brief.", model: "new-model" },
+        configBase: { settings: "new-settings" },
+      },
+    ]),
+  );
+  await user.click(screen.getByRole("button", { name: /^Save$/ }));
+  await waitFor(() =>
+    expect(agents.approveUpdate).toHaveBeenCalledWith(
+      "draft",
+      expect.objectContaining({
+        config: expect.objectContaining({ model: "proposed-model" }),
+      }),
+      agents.agent,
+    ),
+  );
+});
+
+it("hides proposed settings when the owner chooses a different harness", async () => {
+  const user = userEvent.setup();
+  fixture({ settings: { model: "proposed-model" } });
+  const summary = await screen.findByRole("region", {
+    name: "Proposed settings",
+  });
+  expect(summary).toHaveTextContent("proposed-model");
+  await user.click(screen.getByRole("combobox", { name: "Harness" }));
+  await user.click(await screen.findByRole("option", { name: "Other" }));
+  expect(
+    screen.queryByRole("region", { name: "Proposed settings" }),
+  ).toBeNull();
+});
+
+it("keeps the recommended model when the proposal only changes thinking", async () => {
+  fixture({ settings: { effort: "high" } }, false, {
+    config: { model: "", effort: "", preset: "recommended" },
+  });
+  const summary = await screen.findByRole("region", {
+    name: "Proposed settings",
+  });
+  expect(summary).toHaveTextContent("recommended-model");
+  expect(summary).toHaveTextContent("high");
 });

@@ -2,4 +2,4 @@ patchedDependencies:
   '@base-ui/react@1.9.0': patches/@base-ui__react@1.9.0.patch
   '@dnd-kit/core@6.3.1': patches/@dnd-kit__core@6.3.1.patch
   sonner@2.0.8: patches/sonner@2.0.8.patch
-  virtua@0.53.5: patches/virtua@0.53.5.patch
+  virtua@0.54.2: patches/virtua@0.54.2.patch

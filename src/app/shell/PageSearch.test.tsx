@@ -15,10 +15,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PageSearch, type SearchServices } from "./PageSearch";
 import { BestieConversationContext } from "./bestie-context";
 import type { RegisteredPage } from "../../features/pages/service";
-import { createShortcutBindings } from "../../features/shortcuts/preferences";
+import {
+  createShortcutBindings,
+  SHORTCUT_BINDINGS_KEY,
+} from "../../features/shortcuts/preferences";
 import { ShortcutsService } from "../../features/shortcuts/service";
 import { isApplePlatform } from "../../features/shortcuts/format";
 import { createRelaySession } from "../../features/relay/session";
+import type { ChannelList } from "../../features/relay/contracts";
 import type { RelaySnapshot } from "../../features/relay/service";
 import {
   keypair,
@@ -527,7 +531,7 @@ async function bestieSearch() {
   };
 }
 
-it("scopes Command F and Command K's conversation row to the Bestie page's DM", async () => {
+it("scopes Command F to the Bestie page's DM, from outside search and inside it, keeping the typed text", async () => {
   const f = await bestieSearch();
   try {
     f.press("f");
@@ -547,16 +551,22 @@ it("scopes Command F and Command K's conversation row to the Bestie page's DM", 
     );
     f.press("k");
     const search = await screen.findByRole("dialog", { name: "Search Buzz" });
-    fireEvent.click(
-      await within(search).findByRole("option", {
-        name: /Search conversation with Pollen/,
-      }),
-    );
+    const field = within(search).getByRole("combobox", { name: "Search Buzz" });
+    fireEvent.change(field, { target: { value: "deploy" } });
+    expect(
+      within(search).queryByRole("option", { name: /Search conversation/ }),
+    ).toBeNull();
+    f.press("f");
     expect(
       await within(search).findByRole("button", {
         name: "Remove Pollen search scope",
       }),
     ).toBeVisible();
+    expect(
+      within(search).getByRole("combobox", {
+        name: "Search this conversation",
+      }),
+    ).toHaveValue("deploy");
   } finally {
     await f.dispose();
   }
@@ -602,7 +612,7 @@ it("opens nothing with Command F on another page while a Bestie DM exists", asyn
   }
 });
 
-it("does not open a DM that finishes starting after search closed and reopened", async () => {
+it("does not open a DM that finishes opening after search closed and reopened", async () => {
   const root = new Context();
   root.provide("pluginStatus", {
     isActive: () => true,
@@ -619,10 +629,32 @@ it("does not open a DM that finishes starting after search closed and reopened",
   });
   let started!: (channelId: string) => void;
   let attempt!: AbortSignal;
+  // Bob already has a DM, so choosing him waits on its confirmed open.
+  let listed: [ChannelList, ChannelList] | undefined;
   const session = {
     ...owner.session,
     channels: {
       ...owner.session.channels,
+      list: () => {
+        const base = owner.session.channels.list();
+        if (listed?.[0] !== base)
+          listed = [
+            base,
+            {
+              ...base,
+              channels: [
+                ...base.channels,
+                {
+                  id: "bob-dm",
+                  name: "",
+                  channelType: "dm",
+                  participants: [bob.pubkey],
+                },
+              ],
+            },
+          ];
+        return listed[1];
+      },
       // The started DM is known, so only the closed palette stops it.
       get: (id: string) =>
         id === "bob-dm"
@@ -802,12 +834,12 @@ it("ranks pages by match when no community is connected", async () => {
     );
     await user.click(screen.getByRole("button", { name: "Search Buzz" }));
     const input = await screen.findByRole("combobox", { name: "Search Buzz" });
-    // "ses" starts Sessions, appears inside Processes, and only fuzzily
-    // matches Settings.
+    // "ses" starts Sessions and appears inside Processes. Settings only holds
+    // its letters scattered, so it does not match.
     await user.type(input, "ses");
     expect(
       screen.getAllByRole("option").map((option) => option.textContent),
-    ).toEqual(["Sessions", "Processes", "Settings"]);
+    ).toEqual(["Sessions", "Processes"]);
     await user.keyboard("{Enter}");
     expect(select).toHaveBeenCalledExactlyOnceWith("test/sessions");
   } finally {
@@ -1099,9 +1131,9 @@ it("finds and opens saved conversations while the community is unreachable or st
     fireEvent.click(screen.getByRole("button", { name: "Search Buzz" }));
     const dialog = screen.getByRole("dialog", { name: "Search Buzz" });
     const field = within(dialog).getByRole("combobox", { name: "Search Buzz" });
-    // Recent activity lists the saved conversations.
+    // Recents lists the saved conversations.
     const recent = within(dialog).getByRole("group", {
-      name: "Recent activity",
+      name: "Recents",
     });
     expect(
       within(recent)
@@ -1484,6 +1516,8 @@ function memorySearch() {
       expect(screen.queryByRole("dialog", { name: "Search Buzz" })).toBeNull(),
     );
   return {
+    bindings,
+    shortcuts,
     navigate,
     field,
     closed,
@@ -1496,7 +1530,7 @@ function memorySearch() {
     /** The empty view's rows, once the joined channels have loaded. */
     async recentRows() {
       const recent = await screen.findByRole("group", {
-        name: "Recent activity",
+        name: "Recents",
       });
       await waitFor(() =>
         expect(within(recent).getAllByRole("option")).not.toHaveLength(0),
@@ -1567,6 +1601,101 @@ it("keeps its place for under five minutes away, and starts fresh from five", as
     expect(t.field()).toHaveValue("");
   } finally {
     vi.useRealTimers();
+    await t.dispose();
+  }
+});
+
+it("moves through results with the person's own keys, saved, alongside the arrows", async () => {
+  Object.defineProperty(navigator, "platform", {
+    configurable: true,
+    value: "MacIntel",
+  });
+  const t = memorySearch();
+  try {
+    await t.open();
+    const rows = await t.recentRows();
+    const hints = () =>
+      [...document.querySelectorAll(".search-peek-keys kbd")]
+        .slice(0, 2)
+        .map((key) => key.textContent);
+    expect(hints()).toEqual(["↑", "↓"]);
+    act(() => {
+      t.bindings.set("search-previous-result", { key: "k", ctrl: true });
+      t.bindings.set("search-next-result", { key: "j", ctrl: true });
+    });
+    expect(hints()).toEqual(["⌃K", "⌃J"]);
+    expect(
+      JSON.parse(localStorage.getItem(SHORTCUT_BINDINGS_KEY) ?? "null"),
+    ).toEqual({
+      "search-previous-result": { key: "k", ctrl: true },
+      "search-next-result": { key: "j", ctrl: true },
+    });
+    const restored = createShortcutBindings(window);
+    expect(restored.resolve("search-next-result")).toEqual([
+      { key: "j", ctrl: true },
+    ]);
+    restored.dispose();
+    await userEvent.keyboard("{Control>}j{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    await userEvent.keyboard("{Control>}j{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[1]?.id);
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    // Up and Down still move, as a combobox's arrows do.
+    expect(fireEvent.keyDown(t.field(), { key: "ArrowDown" })).toBe(false);
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[1]?.id);
+    expect(fireEvent.keyDown(t.field(), { key: "ArrowUp" })).toBe(false);
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    await userEvent.keyboard("j");
+    expect(t.field()).toHaveValue("j");
+  } finally {
+    localStorage.removeItem(SHORTCUT_BINDINGS_KEY);
+    Reflect.deleteProperty(navigator, "platform");
+    await t.dispose();
+  }
+});
+
+it("lets an app shortcut that runs inside search keep a chord the field's Control keys use", async () => {
+  // Not a Mac, so Mod is Control and a rebind can land on Control+P.
+  Object.defineProperty(navigator, "platform", {
+    configurable: true,
+    value: "Linux x86_64",
+  });
+  const t = memorySearch();
+  const find = vi.fn();
+  const remove = t.shortcuts.registerHost({
+    id: "test-find",
+    title: "Find on screen",
+    binding: { key: "f", mod: true, shift: true },
+    allowInEditable: true,
+    allowInModal: true,
+    run: find,
+  });
+  try {
+    await t.open();
+    const rows = await t.recentRows();
+    // Control+N and Control+P step while no shortcut claims them.
+    await userEvent.keyboard("{Control>}n{/Control}{Control>}n{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[1]?.id);
+    await userEvent.keyboard("{Control>}p{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    // From a row that could step back, the rebound Control+P only finds.
+    await userEvent.keyboard("{Control>}n{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[1]?.id);
+    act(() => t.bindings.set("test-find", { key: "p", mod: true }));
+    expect(fireEvent.keyDown(t.field(), { key: "p", ctrlKey: true })).toBe(
+      false,
+    );
+    expect(find).toHaveBeenCalledOnce();
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[1]?.id);
+    // Search Buzz's own Control+K runs nothing inside search, so it steps.
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(t.field()).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+    expect(find).toHaveBeenCalledOnce();
+  } finally {
+    remove();
+    localStorage.removeItem(SHORTCUT_BINDINGS_KEY);
+    Reflect.deleteProperty(navigator, "platform");
     await t.dispose();
   }
 });

@@ -40,12 +40,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 /** Static UI cases only; lifecycle tests retain their controlled source/effects. */
 function staticPage(snapshot: object) {
-  let Component!: React.ComponentType;
+  let Component!: React.ComponentType<{
+    community?: { id: string; name: string };
+  }>;
   apply({
     relay: { snapshot: () => snapshot, subscribe: () => () => {} },
     effect: () => {},
     settingsCards: {
-      register: (card: { component: React.ComponentType }) => {
+      register: (card: { component: typeof Component }) => {
         Component = card.component;
       },
     },
@@ -335,8 +337,29 @@ it("starts sharing the selected model through the existing community lease", asy
     scope: "https://fixture.example:viewer",
   };
   const Component = staticPage(snapshot);
-  render(<Component />);
-  await screen.findByRole("switch", { name: "Share compute" });
+  render(
+    <Component
+      community={{ id: "https://fixture.example", name: "Example community" }}
+    />,
+  );
+  const shareSwitch = await screen.findByRole("switch", {
+    name: "Share compute",
+  });
+  expect(shareSwitch).toHaveAttribute("aria-checked", "false");
+  expect(
+    screen.getByText(
+      "Members of Example community can run prompts on this machine. Sharing resumes when Buzz reconnects after relaunch.",
+    ),
+  ).toBeVisible();
+  expect(shareSwitch).toHaveAccessibleDescription(
+    "Members of Example community can run prompts on this machine. Sharing resumes when Buzz reconnects after relaunch.",
+  );
+  expect(
+    screen.getByRole("heading", { name: "Shared compute" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText(/Auto picks the best model/),
+  ).not.toBeInTheDocument();
   expect(
     screen.getByRole("switch", { name: "Share compute" }),
   ).not.toHaveAttribute("aria-disabled", "true");

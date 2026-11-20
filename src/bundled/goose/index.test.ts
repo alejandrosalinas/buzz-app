@@ -64,6 +64,36 @@ it("observes saved conversations with the status of open sessions", () => {
   ]);
 });
 
+it.each(["room", ""])(
+  "preserves shared session inventory scope with source %s",
+  (channelId) => {
+    vi.spyOn(GooseRuntime.prototype, "conversations").mockReturnValue([
+      { key: "@community", at: 1, sessions: [] },
+    ]);
+    vi.spyOn(GooseRuntime.prototype, "sessions").mockReturnValue([]);
+    vi.spyOn(GooseRuntime.prototype, "source").mockReturnValue({
+      channelId,
+      community: true,
+    });
+    let type: AgentType | undefined;
+    apply({
+      pluginOwner: { id: "buzz.goose", revision: "r1" },
+      host: { request: vi.fn() },
+      agentProtection: { registerModels: vi.fn() },
+      agents: {
+        register: (registered: AgentType) => {
+          type = registered;
+        },
+        relay: () => undefined,
+      },
+      effect: vi.fn(),
+    } as never);
+    expect(type?.sessions?.list("a".repeat(64))).toEqual([
+      { channelId, community: true, at: 1 },
+    ]);
+  },
+);
+
 it("lists the models of the providers that answer when another's list fails", async () => {
   vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
   vi.spyOn(GooseSetup.prototype, "providers").mockResolvedValue({

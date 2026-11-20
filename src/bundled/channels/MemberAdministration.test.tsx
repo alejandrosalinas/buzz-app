@@ -15,6 +15,11 @@ import userEvent from "@testing-library/user-event";
 import { canonicalPublicKey } from "../../shared/identity/public-key";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
+import type {
+  ChannelList,
+  ChannelSummary,
+} from "../../features/relay/contracts";
+import { newMessageLink } from "../../features/direct-messages/message-person";
 import { keypair, profile, signed } from "../../features/relay/testing";
 import { matchesEvent } from "../../features/relay/projection";
 import type { RelayEvent } from "../../features/relay/events";
@@ -63,10 +68,17 @@ async function setup(
   messageNavigation = true,
   initialReads?: { names?: Promise<void>; roster?: Promise<void> },
   ownership?: "own" | "other" | "invalid",
-  visibility: "private" | "public" = "private",
+  visibility: "private" | "public" | "solo" | "view-only-solo" = "private",
   targetPicture?: string,
   targetProfiled = true,
 ) {
+  const solo = visibility === "solo" || visibility === "view-only-solo";
+  const visibilityFlag =
+    visibility === "solo"
+      ? "private"
+      : visibility === "view-only-solo"
+        ? "public"
+        : visibility;
   const viewer = keypair(),
     relay = keypair(),
     target = keypair(),
@@ -116,7 +128,14 @@ async function setup(
       kind: 39000,
       created_at: tick,
       content: "",
-      tags: [["d", id], ["t", "stream"], [visibility], ["name", "Design"]],
+      tags: [
+        ["d", id],
+        ["t", "stream"],
+        [visibilityFlag],
+        ...(solo ? [["t", "buzz.solo"]] : []),
+        ...(visibility === "view-only-solo" ? [["join_role", "guest"]] : []),
+        ["name", "Design"],
+      ],
     }),
     signed(relay, {
       kind: 39001,
@@ -184,6 +203,7 @@ async function setup(
             memberAdministration: {
               sign: async (template) => signed(viewer, template),
               publish,
+              ...(solo ? { soloMemberRoleUpdates: true as const } : {}),
             },
           }
         : {}),
@@ -203,12 +223,33 @@ async function setup(
     interval: vi.isFakeTimers() ? 50 : 1,
   });
   const onOpenLink = vi.fn(() => true);
-  const onOpenConversation = vi.fn(() => true);
+  const onOpenMessage = vi.fn(() => true);
   const openMessage = vi.fn(
     async (_keys: readonly string[], _signal: AbortSignal) => "dm-1",
   );
+  // The viewer's existing DMs; a test empties it to message someone new.
+  const dms: ChannelSummary[] = [target, owner].map((person) => ({
+    id: person === target ? "dm-1" : `dm-${person.pubkey.slice(0, 8)}`,
+    name: person === target ? "Morgan" : "Owner",
+    channelType: "dm",
+    participants: [person.pubkey],
+  }));
+  let listed: [ChannelList, number, ChannelList] | undefined;
   const presentedSession = {
     ...session,
+    channels: {
+      ...session.channels,
+      list: () => {
+        const base = session.channels.list();
+        if (listed?.[0] !== base || listed[1] !== dms.length)
+          listed = [
+            base,
+            dms.length,
+            { ...base, channels: [...base.channels, ...dms] },
+          ];
+        return listed[2];
+      },
+    },
     ...(presence ? { presence } : {}),
     directMessages: {
       ...session.directMessages,
@@ -223,7 +264,7 @@ async function setup(
         channelId={id}
         canOpenLink={() => true}
         onOpenLink={onOpenLink}
-        onOpenConversation={messageNavigation ? onOpenConversation : undefined}
+        onOpenMessage={messageNavigation ? onOpenMessage : undefined}
       />
     </ToastProvider>
   );
@@ -250,8 +291,9 @@ async function setup(
     write,
     query,
     onOpenLink,
-    onOpenConversation,
+    onOpenMessage,
     openMessage,
+    dms,
     target,
     viewer,
     relay,
@@ -773,6 +815,106 @@ it("keeps resolved rows and focus while refreshing, and reopens warm without a s
   }
 });
 
+it.each([
+  ["owner", true, true],
+  ["owner", false, true],
+  ["admin", true, false],
+] as const)(
+  "Solo %s sees downgrade controls for a current Admin (agent=%s)",
+  async (actor, agent, allowed) => {
+    const t = await setup(
+      actor,
+      "admin",
+      true,
+      undefined,
+      agent,
+      undefined,
+      false,
+      true,
+      undefined,
+      undefined,
+      "solo",
+    );
+    await t.user.click(
+      screen.getByRole("button", { name: /^Actions for Morgan$/ }),
+    );
+    await screen.findByRole("menuitem", { name: "View profile" });
+    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(
+      allowed ? 3 : 0,
+    );
+    expect(
+      screen.queryByRole("menuitem", { name: "Transfer ownership" }),
+    ).not.toBeInTheDocument();
+    if (!allowed) return;
+    await t.user.click(
+      screen.getByRole("menuitemradio", { name: "Viewing only" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Change access to Viewing only?",
+    });
+    expect(t.publish).not.toHaveBeenCalled();
+    await t.user.click(
+      within(dialog).getByRole("button", { name: "Set to viewing only" }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        t.session.memberAdministration.snapshot(id).operation?.status,
+      ).toBe("confirmed"),
+    );
+    expect(t.publish).toHaveBeenCalledOnce();
+    expect(t.publish.mock.calls[0]?.[0]).toMatchObject({
+      kind: 9050,
+      tags: expect.arrayContaining([["expected_role", "admin"]]),
+    });
+  },
+);
+it("offers only a downgrade for a Solo participant with an unattested agent profile", async () => {
+  const t = await setup(
+    "owner",
+    "member",
+    true,
+    undefined,
+    true,
+    undefined,
+    false,
+    true,
+    undefined,
+    undefined,
+    "solo",
+  );
+  await t.user.click(
+    screen.getByRole("button", { name: /^Actions for Morgan$/ }),
+  );
+  await screen.findByRole("menuitemradio", { name: "Viewing only" });
+  expect(
+    screen.getByRole("menuitemradio", { name: "Participating" }),
+  ).toHaveAttribute("aria-checked", "true");
+  expect(
+    screen.queryByRole("menuitemradio", { name: "Admin" }),
+  ).not.toBeInTheDocument();
+});
+it("keeps removal in a View only Solo chat without showing role choices", async () => {
+  const t = await setup(
+    "owner",
+    "admin",
+    true,
+    undefined,
+    false,
+    undefined,
+    false,
+    true,
+    undefined,
+    undefined,
+    "view-only-solo",
+  );
+  await t.user.click(
+    screen.getByRole("button", { name: "Actions for Morgan" }),
+  );
+  expect(
+    await screen.findByRole("menuitem", { name: "Remove from chat" }),
+  ).toBeInTheDocument();
+  expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+});
 it("presents verified roles, protects owners/self, and confirms a separate deliberate role intent", async () => {
   const t = await setup();
   await expectProfileOnly(t.user, "Carl");
@@ -2026,11 +2168,39 @@ it("opens a confirmed human DM once, then hands navigation off without a members
   expect(t.openMessage).toHaveBeenCalledOnce();
   await t.user.keyboard("{Escape}");
   await act(async () => release("dm-1"));
-  expect(t.onOpenConversation).toHaveBeenCalledExactlyOnceWith("dm-1");
+  expect(t.onOpenMessage).toHaveBeenCalledExactlyOnceWith(
+    "buzz://channel/dm-1",
+  );
   await vi.waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
   );
   expect(t.onOpenLink).not.toHaveBeenCalled();
+  expect(t.publish).not.toHaveBeenCalled();
+});
+
+it("opens a draft to someone without a DM, creating nothing until it is sent", async () => {
+  const t = await setup(
+    "member",
+    "member",
+    true,
+    undefined,
+    false,
+    undefined,
+    true,
+  );
+  t.dms.length = 0;
+  await t.user.click(
+    screen.getByRole("button", { name: /^Actions for Morgan$/ }),
+  );
+  await t.user.click(
+    await screen.findByRole("menuitem", { name: "Send message" }),
+  );
+  await vi.waitFor(() =>
+    expect(t.onOpenMessage).toHaveBeenCalledExactlyOnceWith(
+      newMessageLink(t.target.pubkey),
+    ),
+  );
+  expect(t.openMessage).not.toHaveBeenCalled();
   expect(t.publish).not.toHaveBeenCalled();
 });
 
@@ -2048,7 +2218,7 @@ it.each(["read", "navigation"])(
     );
     if (failure === "read")
       t.openMessage.mockRejectedValueOnce(new Error("DM unavailable"));
-    else t.onOpenConversation.mockReturnValueOnce(false);
+    else t.onOpenMessage.mockReturnValueOnce(false);
     const actions = screen.getByRole("button", {
       name: /^Actions for Morgan$/,
     });
@@ -2106,7 +2276,7 @@ it("closing Members aborts the DM waiter and prevents late navigation", async ()
   await t.user.click(screen.getByRole("button", { name: "Close" }));
   expect(signal.aborted).toBe(true);
   await act(async () => release("dm-1"));
-  expect(t.onOpenConversation).not.toHaveBeenCalled();
+  expect(t.onOpenMessage).not.toHaveBeenCalled();
   expect(t.publish).not.toHaveBeenCalled();
 });
 

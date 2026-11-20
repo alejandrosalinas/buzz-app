@@ -1,5 +1,6 @@
 import type { EventTemplate } from "nostr-tools";
 import type { RelayEvent } from "./events.ts";
+import type { ChannelSummary } from "./contracts.ts";
 import {
   exactLifecycleTag,
   lifecycleChannelId,
@@ -29,6 +30,39 @@ export type ChannelDetails = ChannelDetailsDraft &
     version: string;
     canEdit: boolean;
   }>;
+/** What General access shows and whether it offers changes. */
+export type ChannelAccess = Pick<
+  ChannelDetails,
+  "visibility" | "joinRole" | "labels" | "canEdit"
+>;
+
+const editable = (
+  type: string | undefined,
+  archived: boolean,
+  role: string | undefined,
+) =>
+  !!type &&
+  type !== "dm" &&
+  !archived &&
+  (role === "owner" || role === "admin");
+
+/** Access from the live channel summary, which folds the same signed metadata
+ * and roster role. Display only: changes still read fresh details. */
+export function summaryAccess(
+  channel: ChannelSummary,
+): ChannelAccess | undefined {
+  if (!channel.visibility) return;
+  return {
+    visibility: channel.visibility,
+    joinRole: channel.joinRole,
+    labels: channel.labels,
+    canEdit: editable(
+      channel.channelType,
+      !!channel.archived,
+      channel.viewerRole,
+    ),
+  };
+}
 
 /** Missing or contradictory flags are unknown, never implicitly public. */
 export function channelVisibility(
@@ -154,10 +188,11 @@ export function detailsSettings(
     ...(joinRole ? { joinRole } : {}),
     ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
     labels: channelIdentity(metadata).labels,
-    canEdit:
-      authority.channelType !== "dm" &&
-      exactLifecycleTag(metadata, "archived") !== "true" &&
-      (role === "owner" || role === "admin"),
+    canEdit: editable(
+      authority.channelType,
+      exactLifecycleTag(metadata, "archived") === "true",
+      role,
+    ),
   });
   return { details, metadata };
 }

@@ -112,7 +112,7 @@ it("fences remove/re-add, hide and cache invalidation while a snapshot is held",
   h.owner.dispose();
 });
 it.each([false, true])(
-  "keeps the five-second start gate across remount (timeline retained: %s)",
+  "keeps the five-second start gate and prior evidence across remount (timeline retained: %s)",
   async (retainTimeline) => {
     const h = setup();
     try {
@@ -122,11 +122,12 @@ it.each([false, true])(
       expect(h.read).toHaveBeenCalledOnce();
       expect(h.owner.status(key(3))).toBe("online");
       remove();
+      expect(h.owner.status(key(3))).toBe("online");
       h.owner.subscribe(key(3), () => {});
-      expect(h.owner.status(key(3))).toBe("unknown");
+      expect(h.owner.status(key(3))).toBe("online");
       await vi.advanceTimersByTimeAsync(4999);
       expect(h.read).toHaveBeenCalledOnce();
-      expect(h.owner.status(key(3))).toBe("unknown");
+      expect(h.owner.status(key(3))).toBe("online");
       await vi.advanceTimersByTimeAsync(1);
       expect(h.read).toHaveBeenCalledTimes(2);
       expect(h.owner.status(key(3))).toBe("online");
@@ -135,6 +136,55 @@ it.each([false, true])(
     }
   },
 );
+
+it("retains unmounted evidence only within its lease, demand limit and connection", async () => {
+  const h = setup();
+  try {
+    h.read.mockImplementation(async () => null);
+    let remove = h.owner.subscribe(key(3), () => {});
+    h.read.mockImplementationOnce(async () => new Map([[key(3), "away"]]));
+    await vi.advanceTimersByTimeAsync(100);
+    remove();
+    // The read started at 100ms, so its lease ends at 75,100ms.
+    await vi.advanceTimersByTimeAsync(74999);
+    expect(h.owner.status(key(3))).toBe("away");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.owner.status(key(3))).toBe("unknown");
+
+    h.read.mockImplementationOnce(async () => new Map([[key(3), "away"]]));
+    remove = h.owner.subscribe(key(3), () => {});
+    await vi.advanceTimersByTimeAsync(10000);
+    remove();
+    expect(h.owner.status(key(3))).toBe("away");
+    const full = Array.from({ length: 256 }, (_, i) =>
+      h.owner.subscribe(key(1000 + i), () => {}),
+    );
+    const changed = vi.fn();
+    h.owner.subscribe(key(3), changed);
+    expect(h.owner.limited(key(3))).toBe(true);
+    expect(h.owner.status(key(3))).toBe("unknown");
+    expect(changed).toHaveBeenCalled();
+    for (const release of full) release();
+
+    // The viewer's own status changes by publication, so it is not retained.
+    h.read.mockImplementationOnce(async () => new Map([[key(1), "online"]]));
+    remove = h.owner.subscribe(key(1), () => {});
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(h.owner.status(key(1))).toBe("online");
+    remove();
+    expect(h.owner.status(key(1))).toBe("unknown");
+
+    h.read.mockImplementationOnce(async () => new Map([[key(4), "online"]]));
+    remove = h.owner.subscribe(key(4), () => {});
+    await vi.advanceTimersByTimeAsync(10000);
+    remove();
+    expect(h.owner.status(key(4))).toBe("online");
+    h.owner.connected(false);
+    expect(h.owner.status(key(4))).toBe("unknown");
+  } finally {
+    h.owner.dispose();
+  }
+});
 
 it.each(["during", "after", "reconnect"])(
   "paces demand from settlement with first-flight ordering: %s",

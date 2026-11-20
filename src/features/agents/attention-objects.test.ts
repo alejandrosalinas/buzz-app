@@ -138,6 +138,49 @@ describe("checked writes", () => {
     );
   });
 
+  it("lets an internal helper move a watch with its current owner's token", async () => {
+    const start = record();
+    const expected = (await show(start, "watch/asks", now)).expected_state;
+    const next = watch({ interest_id: "other" });
+    const options = { expected, interest: "triage", move: true };
+    const moved = await checkedWrite(start, "watch/asks", next, options, now);
+    expect(moved.attention["watch/asks"]?.value).toEqual(next);
+    await expect(
+      checkedWrite(
+        start,
+        "watch/asks",
+        next,
+        { ...options, interest: "other" },
+        now,
+      ),
+    ).rejects.toThrow(/^wrong-scope:/);
+    await expect(
+      checkedWrite(moved, "watch/asks", next, options, now),
+    ).rejects.toThrow(/^wrong-scope:/);
+    const edited = await write(start, "watch/asks", watch({ name: "Edited" }));
+    await expect(
+      checkedWrite(edited, "watch/asks", next, options, now),
+    ).rejects.toThrow(/^conflict:/);
+    await expect(
+      checkedWrite(
+        start,
+        "watch/asks",
+        watch({ interest_id: "missing" }),
+        options,
+        now,
+      ),
+    ).rejects.toThrow(/^not-found:/);
+    await expect(
+      checkedWrite(
+        start,
+        "watch/asks",
+        timer({ interest_id: "other" }),
+        options,
+        now,
+      ),
+    ).rejects.toThrow(/^invalid-operation:.*type/);
+  });
+
   it("remove an Interest only after its watches", async () => {
     const start = record();
     await expect(write(start, "interest/triage", null)).rejects.toThrow(

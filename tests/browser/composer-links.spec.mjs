@@ -33,7 +33,7 @@ test("editable composer renders links and mentions while preserving source and n
     await expect(
       page.getByRole("region", { name: "Draft preview" }),
     ).toHaveCount(0);
-    await expect(preview.locator('[data-link-kind="github"]')).toHaveCount(2);
+    await expect(preview.locator('[data-link-kind="github"]')).toHaveCount(7);
     await expect(
       preview.locator('.inline-chip[data-kind="person"]'),
     ).toHaveText("@Alex Chen");

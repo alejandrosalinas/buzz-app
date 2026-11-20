@@ -1398,8 +1398,9 @@ it("orders public matches by the shared ranks, best first", async () => {
   const resolve = await h.next(39000);
   const ids = resolve.filters[0]?.["#d"] ?? [];
   resolve.respond(page.filter((event) => ids.includes(tag(event, "d") ?? "")));
-  // Prefix, substring, word runs, then letters merely in order.
-  const order = ["bc-thing", "abc-x", "buzz-community", "lobster-cat"];
+  // Prefix, substring, then word runs. Letters merely in order
+  // (lobster-cat) do not match.
+  const order = ["bc-thing", "abc-x", "buzz-community"];
   expect((await done)?.channels.map(({ name }) => name)).toEqual(order);
   expect(h.channels.matchPublic?.("bc").map(({ name }) => name)).toEqual(order);
   expect(h.pending).toHaveLength(0);

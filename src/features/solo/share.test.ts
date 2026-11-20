@@ -240,6 +240,6 @@ it("refuses a destination whose current membership could not be confirmed", asyn
 
 it("escapes a chat name while retaining its ordinary link", () => {
   expect(soloChatLinkMessage(id, "My [chat]\nname")).toBe(
-    `[Chat: My \\[chat\\] name](buzz://channel/${id})`,
+    `[My \\[chat\\] name](buzz://channel/${id})`,
   );
 });

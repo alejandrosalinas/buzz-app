@@ -126,40 +126,6 @@
   }
 }
 
-/* Mark as read, on unread rows only: revealed on hover or keyboard focus over
-   the date, and always shown without a hover pointer. */
-.rowAction {
-  display: flex;
-  position: absolute;
-  inset-block-start: var(--space-row-gap);
-  inset-inline-end: calc(
-    var(--space-control-inset) +
-    var(--space-row-gap) +
-    var(--space-2)
-  );
-  opacity: 0;
-}
-
-.row:hover .rowAction,
-.row:focus-within .rowAction {
-  opacity: 1;
-}
-
-.row[data-action]:hover [data-inbox-date],
-.row[data-action]:focus-within [data-inbox-date] {
-  opacity: 0;
-}
-
-@media (hover: none), (pointer: coarse) {
-  .rowAction {
-    opacity: 1;
-  }
-
-  .row[data-action] [data-inbox-date] {
-    opacity: 0;
-  }
-}
-
 @media (max-width: 600px) {
   .row {
     padding-bottom: var(--space-3);

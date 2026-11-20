@@ -13,9 +13,10 @@ Build defaults are readable binary data, **never secret storage**.
 | `BUZZ_BUILDERLAB_APPS_DOMAIN` | Shared frontend/native build: exact Apps cookie domain paired with the login origin for native viewer SSO; no runtime override. |
 | `BUZZ_BUILDERLAB_APPS_CONTROL_PLANE` | Shared frontend/native build: HTTPS origin of the Apps control plane for the configured login origin, for deployments the built-in public table does not list; no runtime override. |
 | `BUZZ_BUILD_REPOSITORY_ACCESS` | Native build: default [repository access rules](repository-access.md#default-rules), in `repository-access.json`'s schema. Unset means none. |
-| `BUZZ_DEFAULT_COMMUNITY_URL` | Packaged frontend build: secure relay origin to select once, after identity setup, only when this viewer has no saved community record. Saved choices, including Personal space, always win. Unset in OSS builds. |
+| `BUZZ_DEFAULT_COMMUNITY_URL` | Packaged frontend build: secure relay origin to select once, after identity setup, only when this viewer has no saved community record. Saved choices, including Personal space, always win. Both the frontend and native builds also use the process value to choose a [packaged gateway descriptor](#packaged-gateway-descriptors). Unset in OSS builds. |
 | `BUZZ_BUILD_MANAGED_PLUGINS_URL` | Native build: `https` URL of a version 1 [managed plugin policy](managed-plugins.md#packaged-policy). The desktop app fetches it and keeps the last good copy, used when no `managed-plugins.json` exists. It only recommends. Unset in OSS builds. |
 | `BUZZ_DATABRICKS_HOST` | Frontend build and dev server: `https://` Databricks workspace URL passed as `DATABRICKS_HOST` to every bundled `goose-acp`, which then prefers it to the host in goose's config. Unset in OSS builds. See [Databricks host](#databricks-host). |
+| `BUZZ_AGENT_GATEWAY` | Shared frontend/native build, process environment only: non-secret agent gateway deployment descriptor (version 2: gateway origin, exact community IDs/origins, access check path, context header profile and per-harness upstream bases). Unset, the release default, leaves gateway routing off unless `src/bundled/org-gateways.json` lists the build's `BUZZ_DEFAULT_COMMUNITY_URL`. See [Agent gateway](#agent-gateway) and [Packaged gateway descriptors](#packaged-gateway-descriptors). |
 | `BUZZ_MOBILE_APP_IOS_URL`, `BUZZ_MOBILE_APP_ANDROID_URL` | Frontend build: `https://` store listings for the build's mobile app, shown with QR codes on the mobile Settings card to people whose Builderlab account holds this device's backed-up key. Unset in OSS builds. See [Mobile app links](#mobile-app-links). |
 | `BUZZ_RECOMMENDED_AGENT` | Frontend build and dev server: JSON recommendation with optional `recommendedBy` attribution and candidates ordered best first, behind **Automatic** for new agents. Legacy candidate arrays also work. Unset in OSS builds, which don't offer the choice. See [Recommended agent](#recommended-agent). |
 | `BUZZ_RELAY_URL` | Live development broker's default community, not an agent relay override or a packaged default. |
@@ -88,6 +89,133 @@ configured and ignores a host saved in goose's config. Only the host is set:
 the model, thinking level and sign-in stay goose's own. Leave it unset for OSS
 builds.
 
+## Agent gateway
+
+`BUZZ_AGENT_GATEWAY` describes one agent gateway and the communities whose
+local agent memberships route inference through it. It is a version 2 JSON
+object with these keys (`launcher_client` is optional):
+
+```json
+{
+  "version": 2,
+  "gateway": "https://gateway.example",
+  "communities": [{ "id": "<NIP-11 community UUID>", "origin": "wss://relay.example" }],
+  "access_path": "/v9/access",
+  "launcher_client": "client-a",
+  "headers": {
+    "launcher_client": "x-gw-launcher-client",
+    "launcher_session": "x-gw-launcher-session",
+    "human_pubkey": "x-gw-ctx-human-pubkey",
+    "agent_pubkey": "x-gw-ctx-agent-pubkey",
+    "community_id": "x-gw-ctx-community-id",
+    "channel_id": "x-gw-ctx-channel-id",
+    "message_id": "x-gw-ctx-message-id",
+    "thread_id": "x-gw-ctx-thread-id"
+  },
+  "reserved_prefixes": ["x-gw-ctx-"],
+  "upstreams": { "pi": { "base": "/upstream/pi" } }
+}
+```
+
+- `gateway`: an `https://` origin with no path or credentials.
+- `communities`: 1 to 16 unique entries, each a canonical NIP-11 community
+  UUID and a secure relay origin.
+- `access_path`: the gateway's readiness check, a plain absolute path.
+- `launcher_client`: the launcher name, defaulting to `"buzz"` when omitted.
+  An explicit value must be 1 to 64 letters, digits, `.`, `_` or `-`.
+- `headers`: the header name for each of the eight context roles, including
+  `launcher_client`. Names are lowercase, unique and may not collide
+  with protected headers (hop-by-hop, routing, credential, body protocol and
+  vendor SDK headers).
+- `reserved_prefixes`: up to 4 header prefixes only Buzz may set. Before the
+  context headers are added, every request header matching a profile name or
+  prefix is removed, compared case-insensitively with `_` read as `-`.
+- `upstreams`: an upstream base path per harness, for `claude-code`, `goose`,
+  `codex` or `pi`. A harness with no entry keeps the user's own
+  configuration, without a notice.
+
+The descriptor is public routing data with no credential. Only
+`launcher_client` has a default. Direct Vite and Cargo builds read the
+descriptor from the process environment. The desktop launchers can supply
+that environment from `.env.local` as described below. Both builds validate
+the descriptor against the shared cases in
+`src/features/agents/gateway/descriptor-vectors.json`.
+The native build compiles its canonical form, including the default
+`launcher_client`. An invalid value, including
+a version 1 descriptor, fails the build that rejects it with a fixed message
+that never echoes it. A descriptor that is still invalid at runtime fails
+open: no harness gets an upstream, so turns run unchanged, with no notice.
+A blank or unset value uses the packaged selection below.
+
+### Packaged gateway descriptors
+
+An organization that packages its own build can ship its descriptors in
+`src/bundled/org-gateways.json` instead of setting `BUZZ_AGENT_GATEWAY`,
+beside its [organization plugins](plugin-architecture.md#organization-plugins).
+The file is a list of at most 8 descriptors, each in the shape above, and is
+`[]` in open-source builds. A packager replaces it at build time, for example
+with one descriptor for its production community and one for its staging
+community.
+
+When `BUZZ_AGENT_GATEWAY` is blank, both builds use the entry whose
+`communities` list the build's `BUZZ_DEFAULT_COMMUNITY_URL`, compared as relay
+origins. Direct Vite and Cargo builds read gateway selection inputs from the
+process environment. In a direct Vite build, a relay URL set only in
+`.env.local` or `.env.production` can set the frontend's default community
+without selecting a gateway. The `just desktop` and `just desktop-bundle`
+launchers pass `BUZZ_` settings from repository-root `.env.local` to both
+builds through the process environment. A matching relay URL there can
+select a packaged gateway, and a process value takes precedence.
+
+Packaged selection requires a matching secure relay URL. A local `ws://`
+relay selects no gateway in development. A nonempty invalid default URL
+fails a packaged Vite build. An explicit `BUZZ_AGENT_GATEWAY` overrides
+packaged selection, so a development build can still point at a test gateway.
+Both builds validate every entry and reject duplicate community origins.
+An invalid file fails the build with a fixed message that never echoes it.
+
+Native goose forwarding removes `Authorization` before sending discovery or
+inference requests to the gateway. The gateway must authenticate callers
+separately; Buzz context headers supply attribution, not authentication.
+
+With it set, a local agent membership in a listed community routes through the
+gateway only when the relay's NIP-11 `read_state_snapshot.community_id` is
+exactly the listed ID, the descriptor gives the agent type's declared harness
+an upstream, the gateway's access check succeeds, and the check's `harnesses`
+list names that harness. Any other field in the check's answer is the
+gateway's to enforce and is ignored. A type with no declared harness, no
+upstream, or a harness the gateway doesn't list keeps its existing behavior.
+While an access check is in flight, such as the first one at startup or the
+re-check after the gateway refuses a request, a turn waits for it for up to 5
+seconds; a turn after a failed check waits for its recheck the same way. If
+the check is still unresolved after the wait, the turn fails with a message
+asking the user to try again in a moment; it never falls back while access
+could yet be refused. A check that fails with anything but a 401 or 403 is
+tried once more after a short pause. If the gateway refuses access (a 401 or
+403), the turn fails with a message asking the user to sign in again; it never
+falls back.
+That refusal remains effective while access is checked again, including if
+the recheck hangs or fails with a network or gateway error. Only a successful
+access check or a changed membership context (identity, community or relay
+session) clears it. A 401/403 from discovery or inference applies the same rule.
+When the route is otherwise blocked (network, gateway error, or a community or
+identity problem), the harness runs with the user's own configuration and none
+of the Buzz request context, and the turn is noted "Ran without the agent
+gateway" with the reason: under the request for a mention, and in the
+harness's own turn activity for other turns, which receive it as
+`delivery.gatewayFallback`. The note stays under the request even when a
+later message supersedes it. That choice is made before dispatch; a turn whose
+gateway access is revoked after dispatch fails visibly and is never
+replayed. A type that declares its harness with `mode: "attribution"`, as
+Claude Code does, only adds the gateway's headers where its own checks allow,
+so none of this holds or fails its turns: it takes the route as it stands
+without waiting, and any blocked route, a pending check or a 401/403
+included, runs the turn unattributed with the note "Ran without gateway
+attribution" and the reason. Memberships in other communities and hosted
+agents are unchanged.
+See `src/features/agents/gateway/` for the shared route, session and request
+context contract that harnesses consume.
+
 ## Recommended agent
 
 Packagers can offer a recommended agent setup, which picks a harness, model and
@@ -143,23 +271,51 @@ With it set:
   only for local harnesses: a hosted type such as Builderlab is chosen under
   Custom's Harness and keeps its own model choices.
 - The agent saves only `preset: "recommended"` in its config, with its own
-  model, provider and thinking level cleared. Its harness is never changed for
-  it.
+  model, provider and thinking level cleared.
+- Once per app launch, the copy of Buzz that runs the agent (the one holding
+  it, so two copies never both change it) finds the first candidate that is
+  ready here, checked as for a new agent, once any bundled plugin has given
+  that launch's setup. When that candidate's harness isn't
+  the agent's, up or down the list, the agent moves to it by the usual
+  harness change and stays on Automatic: its instructions and workspace carry
+  over, and its old sessions are retired, so new conversations start fresh on
+  the new harness. So if the harness an Automatic agent uses is signed out or
+  out of date on this computer, the agent moves to the next recommended
+  harness that is ready at the next launch. A check that times out or fails
+  never moves it. It moves at most once per launch, and only on definite
+  answers: when a check ahead of that candidate fails or takes longer than
+  8 seconds, or Codex or Claude Code can't tell (a check that failed other
+  than for not being installed or signed in, or a model list that came back
+  empty), no agent moves that launch (the app log says so once) and the next
+  launch asks again, so a slow start never moves an agent off a harness that
+  is fine. An agent switched to Automatic during a launch moves at the next
+  one. Turns left working when the app last quit keep it on its harness
+  until they are resumed or dismissed. It keeps its harness when nothing
+  recommended is ready here, when it was taken off Automatic during the
+  check, while it is answering (it tries again when the
+  turn ends), while its settings or type are still syncing or changing, when
+  it runs through a plugin execution target, when the new harness can't keep
+  its protection, or when the change would drop or reset a setting of its
+  own, such as a channel-wide session setting. Hosted agents never move. The
+  app log notes each move by harness name only.
 - At run time it uses the first candidate for its own harness whose model is
   still offered, checked the same way once per app launch. If none is, it runs
   on the harness's own default instead of failing, and it asks again at a run
   a minute or more later, so a harness set up or signed in since then is
   picked up. A later build's recommendation reaches it the same way.
 - The agent's **Identity** tab shows the same **AI setup** row. Automatic shows
-  what it runs on, or that it fell back to the harness default; it keeps the agent's harness even when another is
-  recommended first. **Custom** opens the Harness row and the harness's model
+  what it runs on, or that it fell back to the harness default, on its current
+  harness; it moves to the first ready recommended harness at the next
+  launch, as above. **Custom** opens the Harness row and the harness's model
   rows; changing the harness there is the usual harness change. Any model,
   provider or thinking change, on the agent's card or in Settings, takes it
   off Automatic.
 
 On a config channel, the mark syncs with the agent's settings: its
 `buzz.agent.settings` revision (kind 45010) carries `"preset": "recommended"`
-beside `settings`, not inside it, and leaves it out otherwise. The revision also carries a matching `["preset", "recommended"]` tag, so agents on Automatic can be counted from tags alone. Versions without
+beside `settings`, not inside it, and leaves it out otherwise. The revision also carries a matching `["preset", "recommended"]` tag, so agents on Automatic can be counted from tags alone. A bundled plugin's
+note on the agent (`pluginNotes`, see plugin-architecture.md) sits beside it
+too, and a tagged note adds a `["note", pluginId, tag]` tag. Versions without
 this feature ignore it there and keep it when they edit (NIP-AP "Editing"), so
 their strict settings check never rejects it. The synced revision decides on
 every device: one without the mark takes the agent off Recommended, and one
@@ -168,6 +324,16 @@ mark. Synced settings carry the agent's own model settings blank or not at all
 while it is on Recommended. Without a config channel, the mark is kept in the
 agent's local settings. Which harness an agent runs on is the `runtime` tag of
 its kind 30177 record.
+
+A bundled plugin, such as one in an organization's own build, can replace the
+setup for a launch with `ctx.agents.recommend(source)`,
+for example to choose candidates per person or team from the organization's
+own services; see [Plugin architecture](plugin-architecture.md). Its answer
+has this setting's object shape and is checked the same way. Buzz waits for it
+at most five seconds from start-up, and only before creating an agent or
+finding what one runs on. No answer, a failure, an invalid setup, or a late one
+keeps this setting's for that launch, so set `BUZZ_RECOMMENDED_AGENT` too, as
+the fallback.
 
 ## Mobile app links
 

@@ -11,6 +11,7 @@ export async function openVoice(
   ended: (error?: Error) => void,
   instructions: string,
   thinking?: (active: boolean) => void,
+  voice?: string,
 ) {
   signal.throwIfAborted();
   const peer = new RTCPeerConnection();
@@ -25,6 +26,7 @@ export async function openVoice(
   const playout = createPlayout(context, destination, 0.02);
   let capture: AudioWorkletNode | undefined;
   let remote: MediaStreamAudioSourceNode | undefined;
+  let decoder: HTMLAudioElement | undefined;
   let closed = false;
   let closing: Promise<void> | undefined;
   let starting: Promise<unknown> | undefined;
@@ -45,6 +47,8 @@ export async function openVoice(
     cancel(new Error("Voice connection closed"));
     rejectConnected(new Error("Voice connection closed"));
     peer.close();
+    decoder?.pause();
+    if (decoder) decoder.srcObject = null;
     remote?.disconnect();
     if (capture) {
       capture.port.onmessage = null;
@@ -100,7 +104,14 @@ export async function openVoice(
     peer.ontrack = ({ track }) => {
       if (closed || track.kind !== "audio" || !capture) return;
       remote?.disconnect();
-      remote = context.createMediaStreamSource(new MediaStream([track]));
+      const stream = new MediaStream([track]);
+      // Keep WebRTC decoding active even though the worklet, rather than a
+      // media element, consumes the sound. The element itself stays muted.
+      decoder ??= new Audio();
+      decoder.muted = true;
+      decoder.srcObject = stream;
+      void decoder.play().catch(fail);
+      remote = context.createMediaStreamSource(stream);
       remote.connect(capture);
     };
     for (const track of destination.stream.getTracks())
@@ -149,6 +160,7 @@ export async function openVoice(
       outputModality: "audio",
       clientManagedHandoffs: false,
       realtimeStartInstructions: instructions,
+      ...(voice ? { voice } : {}),
     });
     await wait(starting);
     await connected;

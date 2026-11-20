@@ -86,26 +86,18 @@ pixel past the edge. At the physical bottom, 300 ms visibility of the newest
 message's bottom edge also earns catch-up (including a message taller than the
 viewport):
 
-- `activity:<channel>` uses the newest retained verified event timestamp at dwell
-  completion, including replies newer than the visible top-level head. It reads
-  ordinary top-level backlog only. It never acknowledges replies: replies that
-  count (see [Relevant replies](#relevant-replies)) are all attention, and stay
-  unread until read in their thread. Replies outside the viewer's conversations
-  do not count at all, so there is no reply activity to quiet. Mentions,
-  broadcasts and marked messages are not quieted by this mark: a timestamp
-  would also read attention delivered later with an older one (a retried send,
-  a fast clock). Participation discovered later makes a reply relevant again,
-  with its own unread state intact.
-- The same channel catch-up also writes `msg:` marks for the top-level mentions
-  and broadcast replies retained at dwell completion through the bottom row, as
-  in Slack and Discord, so a mention taller than the viewport is still read. One
-  that arrives while the catch-up is saving waits for its own dwell. Messages
-  marked unread keep their intent. These marks stay on this device:
-  frontier-only sync never publishes `msg:` marks, though it still reads them
-  from older clients.
-- `thread-activity:<root>` acknowledges replies through the newest reply only in
-  that thread. A collapsed newest reply, or one outside the bottom viewport in a
+- Channel catch-up moves the channel's main read mark (`<channel>`) to the
+  newest top-level post reached, never to a reply (a broadcast reply included).
+  Everything at or below it is read on every device, replies included. Reaching
+  the live bottom also ends a manual unread on the channel, synced or local,
+  and this device's reminders on the top-level messages it covers, even when
+  the mark does not move. Synced message marks and thread and reply reminders
+  stay unread.
+- Thread catch-up moves the thread's mark (`thread:<root>`) to its newest reply.
+  A collapsed newest reply, or one outside the bottom viewport in a
   branch-ordered thread, cannot earn catch-up; visible rows still read individually.
+- Catch-up no longer writes `activity:<channel>` or `thread-activity:<root>`.
+  Those marks from older clients are still read, as compatibility only.
 - `seen:<channel>` quiets the channel's sidebar row, and reads nothing.
   Opening a channel (`enterChannel`) while the document is visible and focused
   hides everything in the row, including arrivals during that active visit.
@@ -186,10 +178,11 @@ viewport):
   `pending`), a read revision changed since attention left, or evidence that is
   not observed and complete settles it with no divider and reading resumes at
   once. A placed divider never moves.
-- Both keys use verified event timestamps, never wall time. Neither enters generic
-  channel/thread inheritance or remote override baselines. Channel catch-up ends
-  a local manual unread on the channel itself; message and thread manual-unread
-  intent stays. Catch-up uses the same cancellable reading lease.
+- Both keys use verified event timestamps, never wall time, and both are main
+  read marks: a message or thread inherits them like any other read. Channel
+  catch-up ends the channel's manual unread and this device's top-level message
+  reminders it covers; thread catch-up ends the thread's and its replies'.
+  Catch-up uses the same cancellable reading lease.
 - A DM is read whole. Any earned dwell in a DM, on visible rows or at the bottom,
   advances the DM's channel frontier through the newest retained verified message
   (replies included) and ends a local manual unread on the DM. It writes no
@@ -275,6 +268,13 @@ timeline and the thread being read, without reading unopened threads' replies.
 - `markThrough(target, messageId)` is explicit prefix intent through verified
   evidence. It can mark unloaded earlier messages read; do not use it for viewport
   observation. A channel prefix requires a top-level message, not a reply.
+- `markReadThrough(steps)` saves an Activity row's `readThrough` steps in order
+  as one explicit intent. Local manual-unread intent is cut once, at the call: a
+  newer Mark as unread on a later step's target, even one queued behind an
+  earlier step's save, rejects that step and stops the rest.
+  `prepareReadThrough(steps)` takes that cut at its call and returns one save per
+  step, for a caller that checks between steps or retries one (the Activity
+  page); running a step again keeps the preparing call's cut.
 - `markChannelRead(channelId)` captures the greater of invocation-time integer
   seconds and the newest retained verified message timestamp (including replies),
   then atomically advances the explicit channel frontier and clears the channel's
@@ -298,9 +298,27 @@ timeline and the thread being read, without reading unopened threads' replies.
   Mark all as read and the Shift+Escape shortcut (after a confirmation) use it
   for the selected community only, through one shared action and toast copy.
   Escape marks the open conversation through `markChannelRead`.
-- `markUnreadLocal(target)` is durable **on this browser profile/device only**.
-  Automatic reading does not clear it. An explicit mark-through clears that
-  target's local mark. `syncedManualUnread` is `false`.
+- `markUnreadLocal(target)` on a message or thread is durable **on this browser
+  profile/device only**. It saves the read mark that covered it then; any later
+  advance of that mark, automatic or explicit, clears it, and so does catch-up
+  or display of an already-covered message. A reply marked before its thread
+  root loads takes the thread's mark when the root resolves as that baseline.
+  A message marked while a reader shows it is not cleared by that reader's
+  display until its visit measures the row away or ends (unmount, retarget,
+  a hidden window or pane); another pane's visit is independent.
+  A thread marked while its pane presents it, whether or not any row fits
+  fully on screen, keeps its mark through that visit's catch-ups until the
+  visit ends; a later visit's catch-up clears it, and an advance of its mark
+  or an explicit read still clears it at once. Modal isolation (a menu's
+  `aria-hidden`, or a viewer's `inert` on the page's top-level elements) only
+  pauses reading and the same visit resumes; `[hidden]` anywhere, or `[inert]`
+  on the pane or its containers, ends the visit.
+  On a whole channel, after a complete snapshot, it syncs as
+  a version-2 group, and reading the channel clears it on every device; without
+  a complete snapshot, or while a peer group is held back, it stays on this
+  device. A refused clear is not retried: its warning persists, across reloads,
+  until a publication fits again, and the user reads again. `syncedManualUnread`
+  stays `false`: it describes message and thread marks, which never sync.
 - `refresh()` retries evidence/marker observation; `retrySync()` refreshes markers
   and retries pending publication. `ReadMutationResult.durability === "saved"`
   means the local transaction committed, not that the relay accepted it.
@@ -419,8 +437,8 @@ appears as an Inbox item or thread activity, and never queues a conversation
 lookup. This is the rule the [notification pipeline](notifications.md#running-app-behavior)
 already applies. The row stays in evidence, so it is still `latestMessage` and
 the live bottom that catch-up reads through. Unread intent does not change the
-rule: the message has no **Mark read** / **Mark unread** action, and channel or
-thread **Mark unread** leaves it read. The tag is self-declared by the sender. Older clients, mobile and
+rule: the message has no **Mark as read** / **Mark as unread** action, and channel or
+thread **Mark as unread** leaves it read. The tag is self-declared by the sender. Older clients, mobile and
 the relay's read-state and push rules do not apply the exemption yet.
 
 **Follow thread** / **Unfollow thread** in a message's menu records an explicit
@@ -545,16 +563,27 @@ overlay. It never rewinds a synced channel/thread prefix, creates a new manual
 reminder for ordinary unread, or changes the shared `message-force:` hint.
 Ordinary unread restored by Undo remains eligible for normal automatic reading.
 These exact receipts are local-only and do not schedule publication or an empty
-flush. Earlier pending publication still proceeds and can expire the handle.
+flush. Earlier pending publication still proceeds without expiring the handle.
 
-This inverse is deliberately conservative: **any later durable journal write**,
-including an unrelated read, equal-valued peer ingest, publication bookkeeping,
-or another window's startup, expires it. An opaque journal token fences writes
-that do not advance the revision. The bounded before-action receipt snapshot
-lives only in the returned handle; there is no persistent undo history or relay
-protocol change. A failed transaction leaves both receipts and visit overlays
-unchanged and can be retried; duplicate or stale attempts reject. Invalidation
-of the selected messages, access, session, or visit evidence also expires Undo.
+This inverse is conditional and scoped. It restores only the receipt and
+retention entries changed by that action, and only while those entries and the
+selected messages' read scopes still match the action's saved after-state. A
+later read of any selected message or saved local-unread intent expires the
+handle, even if that later read is subsequently undone or selected only authored
+messages. Unrelated channel reads, forced-unread overlays on other messages,
+publication bookkeeping, and unchanged peer receipts carried in an admitted
+coordinate's newer envelope do not expire it on their own. Retention pressure
+can still expire it by moving or removing an inverse entry, exhausting the space
+needed to restore it, or advancing the effective read floor (including the
+30-day window) over a timestamp not already covered when the action was saved.
+A changed owner epoch, journal slot, access, session, or visit also expires it
+rather than overwriting newer state. A new read-state owner rotates the opaque
+journal token; ordinary saves in that owner's session preserve it. The
+bounded before-action receipt delta lives only in the returned handle; there is
+no persistent undo history or relay protocol change. A successful handle is
+one-shot. A failed storage transaction leaves receipts and visit overlays
+unchanged and can be retried with that handle. Invalidation of the selected
+messages or their action validity also expires Undo.
 A queued force-unread intent for any captured ID suppresses the handle if it is
 pending when the result is returned, and rejects an existing handle if it starts
 before the inverse transaction. Overlays are restored only after that transaction
@@ -633,6 +662,7 @@ Consumers must tolerate hosts that do not provide `undo`.
 | Automatic bottom dwell | Ordinary channel activity or that thread’s replies through verified evidence | Channel only (channel bottom, not a thread) |
 | Automatic DM dwell (visible rows or bottom) | DM channel through the newest retained verified message | DM channel only |
 | `markThrough(target, messageId)` | Explicit verified target prefix | That target only |
+| `markReadThrough(steps)` | Each step's explicit verified target prefix, in order | Each step's target, unless marked unread after the call |
 | `markChannelRead(channelId)` | Channel through max(click time, newest retained verified message) | Channel, retained messages, verified same-channel reply roots, and threads whose top-level root is retained |
 | Channel read with no evidence | Click time on frontier-capable hosts; none otherwise | Channel only |
 | Mute/Unmute | None | None |
@@ -767,25 +797,15 @@ can load the unchanged sync journal but discard the optional reserve and floor o
 their next save; community leave on any build deletes both together. No database migration
 or wire-format change is involved.
 
-Optional local-only `peerOverlaps` metadata in the same per-viewer/partition journal
-holds pending marker-generation corrections. Keys, counters, coordinates and event
-versions are validated on load; corrupt entries fail loading rather than silently
-dropping intent. A transaction reads the latest checkpoint, preserving unrelated
-pending data from other windows. A matching or newer committed marker ingest retires
-its checkpoint; partition deletion removes it with the journal. A valid newer marker
-can recover from an undecodable superseded envelope without trusting that envelope.
-Pending failed-ingest generations share the existing acceptance backlog and browser
-storage quota; there is no hard aggregate memory/disk bound. Storage failures stay
-visible and retain the previously committed journal. Old journals still load, but
-old writers discard this unknown field on their next
-save. Restart recovery is therefore not preserved through an old-writer round trip
-or downgrade. No IndexedDB database, object-store or version migration is involved.
+Peer `msg:` and `thread:` override groups no longer sync (NIP-RS Buzz profile: only
+whole-channel groups are synchronized), so the earlier local `peerOverlaps` recovery
+metadata, which protected a peer's single-message unread during automatic reads, is
+retired. Journals that still carry the field load normally; the next save drops it.
 
 Override groups, permanent clear floors, directly associated frontiers and possible
 inherited channel/thread frontiers are protected; capacity failure is visible,
-never floor truncation. Publication of any override-bearing state is deliberately
-blocked in this release. Remote registers can be reduced/displayed, but synchronized
-manual-unread and canonical override compaction are not enabled.
+never floor truncation. Only whole-channel groups publish override state, on the
+version-2 unread record; message and thread override groups stay on this device.
 
 Marker discovery uses the relay's host-bound NIP-11 `read_state_snapshot` descriptor
 when available, independently of request parameters. The exact versioned query

@@ -42,6 +42,8 @@ import { useEffect, useLayoutEffect } from "react";
 import { createRecovery } from "../relay/recovery";
 import type { Contribution } from "../../plugins/contributions";
 import type {
+  ComposerAccessory,
+  ComposerAccessoryProps,
   ComposerCompletion,
   ComposerCompletionProps,
   ComposerTool,
@@ -7879,6 +7881,31 @@ it("renders a leading custom emoji inline without changing trailing text", () =>
   );
 });
 
+it("keeps time fragments literal beside numeric and overlapping emoji", () => {
+  const h = mount();
+  h.setEmoji(
+    ["25", "30", "party"].map((shortcode) => ({
+      shortcode,
+      url: `https://example.org/emoji/${shortcode}.png`,
+    })),
+  );
+  const text = "12:25:30: :25: 10:30:party:";
+  h.fill(text);
+  expect(h.input()).toHaveValue(text);
+  expect(
+    within(h.input())
+      .getAllByRole("img")
+      .map((image) => image.getAttribute("alt")),
+  ).toEqual([":25:", ":party:"]);
+  h.submit();
+  expect(h.messages.send).toHaveBeenCalledExactlyOnceWith(
+    "channel",
+    text,
+    [],
+    [],
+  );
+});
+
 /** The real Emoji provider; the fixture provider above never publishes an exact match. */
 function mountEmojiTypeahead() {
   // jsdom has no canvas; previews fall back to the uncentred glyph.
@@ -8184,19 +8211,34 @@ it.each([
   // A replaced selection reuses the space after it.
   ["ax b", 1, 2, "😀", "a😀 b", 4],
   ["ab", 1, 1, ":party:", "a:party: b", 9],
+  ["5x", 1, 1, ":25:", "5 :25: x", 7],
+  ["5x", 1, 1, ":25::30:", "5 :25::30: x", 11],
+  ["5 x", 1, 1, ":25:", "5 :25: x", 7],
+  ["5xx z", 1, 3, ":25:", "5 :25: z", 7],
+  ["5x", 0, 1, ":25:", ":25: x", 5],
+  ["ab", 1, 1, ":25:", "a:25: b", 6],
   // Other tool text is inserted exactly as given.
   ["ab", 1, 1, "x", "axb", 2],
 ])(
   "spaces emoji a composer tool inserts: %j",
   async (text, start, end, inserted, expected, after) => {
     const h = mount();
-    h.setEmoji([{ shortcode: "party", url: "https://emoji.test/party.png" }]);
+    h.setEmoji(
+      ["party", "25", "30"].map((shortcode) => ({
+        shortcode,
+        url: `https://example.org/emoji/${shortcode}.png`,
+      })),
+    );
     h.fill(text);
     act(() => h.input().setSelectionRange(start, end));
     act(() => {
       expect(h.commands().insertText(inserted)).toBe(true);
     });
     expect(h.input()).toHaveValue(expected);
+    if (inserted.startsWith(":25:"))
+      expect(
+        within(h.input()).getByRole("img", { name: ":25:" }),
+      ).toBeVisible();
     expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([
       after,
       after,
@@ -9101,6 +9143,27 @@ it("seeds from history over a follow-up an earlier release saved as the draft, u
   );
   typed.setRows([own("1", []), own("2", [second.pubkey])]);
   expect(typed.input()).toHaveValue("@Honey ");
+});
+
+it("places the caret after a seed that lands while the composer is unfocused", () => {
+  const viewer = "e".repeat(64);
+  const h = mount({}, undefined, viewer);
+  h.setProfiles(new Map([[first.pubkey, { name: "Honey", isAgent: true }]]));
+  // The composer was focused once, so a later focus request keeps its caret.
+  act(() => h.input().focus());
+  act(() => h.input().blur());
+  h.setRows([
+    editableMessage({
+      id: "1".repeat(64),
+      authorId: viewer,
+      mentions: [first.pubkey],
+    }),
+  ]);
+  expect(h.input()).toHaveValue("@Honey ");
+  expect(h.input()).not.toHaveFocus();
+  h.retarget({ focusRequest: 1 });
+  expect(h.input()).toHaveFocus();
+  expect([h.input().selectionStart, h.input().selectionEnd]).toEqual([7, 7]);
 });
 
 it("does not seed a channel composer until its window is ready", () => {
@@ -12836,54 +12899,32 @@ it("drops the attachments mark while a row-requested edit holds pending items", 
   );
 });
 
-it("stages chat cards above an ordinary caption editor, persists them, and sends both", async () => {
+it("keeps chat links inline with their caption, persists them, and sends them in place", async () => {
   const link = "[Session: PR 45 fixes](buzz://channel/session-id)";
-  writeView("scope", "draft:channel", link);
+  const text = `before ${link} after`;
+  writeView("scope", "draft:channel", text);
   const h = mount();
-  const region = screen.getByRole("region", { name: "Chat attachments" });
-  expect(region).toHaveTextContent("Chat:");
-  expect(h.input()).toHaveValue("");
-  expect(
-    region.compareDocumentPosition(h.input()) &
-      Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
-  await h.user.click(screen.getByRole("button", { name: "First Honey" }));
-  await h.user.type(h.input(), "please review");
-  expect(h.input()).not.toHaveTextContent("Session:");
-  expect(
-    readView<{ chatCards: string[] } | null>("scope", "draft:channel", null)
-      ?.chatCards,
-  ).toEqual([link]);
-  await h.user.click(screen.getByRole("button", { name: "Send message" }));
-  expect(h.messages.send).toHaveBeenCalledWith(
-    "channel",
-    `${link}\n\n@Honey please review`,
-    [first.pubkey],
-    [],
-  );
+  expect(h.input()).toHaveValue(text);
   expect(screen.queryByRole("region", { name: "Chat attachments" })).toBeNull();
+  await h.user.click(screen.getByRole("button", { name: "Send message" }));
+  expect(h.messages.send).toHaveBeenCalledWith("channel", text, [], []);
 });
 
-it("stages pasted chat links, restores them on remount, and removes them without changing the caption", async () => {
+it("keeps pasted chat links editable and restores their position on remount", async () => {
   const link = "[Session: PR 45 fixes](buzz://channel/session-id)";
   const h = mount();
   act(() => h.input().insertText(`${link} Caption`));
-  expect(
-    screen.getByRole("region", { name: "Chat attachments" }),
-  ).toHaveTextContent("PR 45 fixes");
-  expect(h.input()).toHaveValue(" Caption");
+  expect(h.input()).toHaveValue(`${link} Caption`);
   h.unmount();
   const restored = mount();
-  expect(
-    screen.getByRole("region", { name: "Chat attachments" }),
-  ).toHaveTextContent("PR 45 fixes");
-  await restored.user.click(
-    screen.getByRole("button", { name: "Remove chat attachment 1" }),
-  );
-  expect(restored.input()).toHaveValue(" Caption");
-  expect(document.activeElement).toBe(restored.input());
+  expect(restored.input()).toHaveValue(`${link} Caption`);
   expect(screen.queryByRole("region", { name: "Chat attachments" })).toBeNull();
+  act(() => {
+    restored.input().focus();
+    restored.input().setSelectionRange(0, link.length);
+  });
+  await restored.user.keyboard("{Backspace}");
+  expect(restored.input()).toHaveValue(" Caption");
   await restored.user.click(
     screen.getByRole("button", { name: "Send message" }),
   );
@@ -12912,11 +12953,9 @@ it("retains a new card-only followup when a background upload fails", async () =
   const link = "[Session: New work](buzz://channel/session-id)";
   act(() => (h.input() as ComposerInputElement).insertText(link));
   await act(async () => h.uploadCalls[0]?.result.reject(new Error("offline")));
-  expect(
-    screen.getByRole("region", { name: "Chat attachments" }),
-  ).toHaveTextContent("New work");
+  expect(h.input()).toHaveValue(link);
   expect(readView(h.scope, "draft:channel", null)).toMatchObject({
-    chatCards: [link],
+    text: link,
   });
   expect(
     await screen.findByText(
@@ -12933,14 +12972,11 @@ it("restores and sends an older chat-link draft with its selected mention intact
     recipients: [{ ...first, start: 0, end: 6 }],
   });
   const h = mount();
-  expect(h.input()).toHaveValue("@Honey ");
-  expect(
-    screen.getByRole("region", { name: "Chat attachments" }),
-  ).toHaveTextContent("Fix");
+  expect(h.input()).toHaveValue(`@Honey ${link}`);
   await h.user.click(screen.getByRole("button", { name: "Send message" }));
   expect(h.messages.send).toHaveBeenCalledWith(
     "channel",
-    `${link}\n\n@Honey `,
+    `@Honey ${link}`,
     [first.pubkey],
     [],
   );
@@ -12956,9 +12992,8 @@ it("does not publish an unchanged inline session edit, including reverting a cap
   expect(h.messages.edit).not.toHaveBeenCalled();
   expect(h.input()).not.toHaveAccessibleName("Edit message");
   fireEvent.keyDown(h.input(), { key: "ArrowUp" });
-  const caption = h.input().textContent ?? "";
   h.fill("Changed caption");
-  h.fill(caption);
+  h.fill(content);
   h.submit();
   expect(h.messages.edit).not.toHaveBeenCalled();
 });
@@ -12979,12 +13014,11 @@ it("sends staged chat cards in thread replies without share tags", async () => {
 });
 
 it.each(["A ||hidden|| caption", "Use `a || b` here"])(
-  "sends staged cards with an unrecognized caption without a marker: %s",
+  "keeps inline links in prose containing spoiler delimiters: %s",
   async (caption) => {
     const link = "[Session: Work](buzz://channel/session-id)";
-    writeView("scope", "draft:channel", link);
+    writeView("scope", "draft:channel", `${link}\n\n${caption}`);
     const h = mount();
-    await h.user.type(h.input(), caption);
     await h.user.click(screen.getByRole("button", { name: "Send message" }));
     expect(h.messages.send).toHaveBeenCalledWith(
       "channel",
@@ -15241,6 +15275,37 @@ async function mountGifComposer() {
   return { h, enable };
 }
 
+it("re-renders a composer accessory when panel availability changes", () => {
+  function Accessory({ canOpen }: ComposerAccessoryProps) {
+    return (
+      <button type="button" disabled={!canOpen("panel:notes")}>
+        Open notes
+      </button>
+    );
+  }
+  const accessory: Contribution<ComposerAccessory> = {
+    id: "notes",
+    key: "test/notes",
+    pluginId: "test",
+    revision: "1",
+    title: "Notes",
+    component: Accessory,
+  };
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const accessories = [accessory];
+  const extensions = {
+    tools: none,
+    inline: none,
+    accessories: { snapshot: () => accessories, subscribe: () => () => {} },
+  };
+  const h = mount();
+  h.retarget({ extensions, canOpenLink: () => false });
+  expect(h.getByRole("button", { name: "Open notes" })).toBeDisabled();
+  h.retarget({ canOpenLink: () => true });
+  expect(h.getByRole("button", { name: "Open notes" })).toBeEnabled();
+});
+
 it("guards automatic recipient changes using the current draft prose", () => {
   const h = mount();
   const replace = h.commands().replaceRecipientsIfEmpty;
@@ -17132,7 +17197,7 @@ describe("oversized paste feedback", () => {
     );
   });
 
-  it("counts staged chat cards against the paste budget", () => {
+  it("counts restored chat links against the ordinary editor paste budget", () => {
     const link = "[Session: PR 45 fixes](buzz://channel/session-id)";
     writeView("scope", "draft:channel", {
       text: "",
@@ -17140,18 +17205,23 @@ describe("oversized paste feedback", () => {
       chatCards: [link],
     });
     const h = mount();
-    const available = 16000 - link.length - 2;
+    const initial = h.input().value;
+    act(() => {
+      h.input().focus();
+      h.input().setSelectionRange(initial.length, initial.length);
+    });
+    const available = 16000 - initial.length;
     pasteText(h.input(), "x".repeat(available + 1));
-    expect(h.input()).toHaveValue("");
+    expect(h.input()).toHaveValue(initial);
     expect(screen.getByRole("alert")).toHaveTextContent(
       "This paste would make your message too long.",
     );
     pasteText(h.input(), "x".repeat(available));
-    expect(h.input()).toHaveValue("x".repeat(available));
+    expect(h.input()).toHaveValue(initial + "x".repeat(available));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(
-      screen.getByRole("region", { name: "Chat attachments" }),
-    ).toBeVisible();
+      screen.queryByRole("region", { name: "Chat attachments" }),
+    ).toBeNull();
   });
 });
 

@@ -520,7 +520,7 @@ export function SoloDraft({
       // agents read it from the start.
       // A region files its own chats.
       if (setup?.projectId && !region)
-        void session.soloPreferences
+        void session.sidebarPreferences
           .assign(channelId, setup.projectId)
           .catch((reason) =>
             console.warn("Solo chat could not join its workspace", reason),
@@ -632,7 +632,13 @@ export function SoloDraft({
         writeView(scope, `draft:${channelId}`, draft);
         transferAttachmentDraft(
           files,
-          attachmentDraft(session, `${scope}:draft:${channelId}`, channelId),
+          attachmentDraft(
+            session,
+            `${scope}:draft:${channelId}`,
+            channelId,
+            false,
+            [scope, `draft:${channelId}:files`],
+          ),
         );
       }
       if (source) writeView(scope, draftKey, null);
@@ -882,7 +888,7 @@ export function SoloDraft({
         defaultMention={defaultAgent}
         requireMention
         trailingTool={
-          session.soloPreferences ? (
+          session.sidebarPreferences ? (
             <WorkspaceControl
               session={session}
               value={selectedProject}
@@ -892,8 +898,8 @@ export function SoloDraft({
           ) : undefined
         }
         workspace={
-          session.soloPreferences && !busy
-            ? { preferences: session.soloPreferences, choose: chooseProject }
+          session.sidebarPreferences && !busy
+            ? { preferences: session.sidebarPreferences, choose: chooseProject }
             : undefined
         }
         submission={{

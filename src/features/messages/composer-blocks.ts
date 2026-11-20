@@ -25,6 +25,7 @@ import {
   projectComposerDocument,
 } from "./composer-document";
 import type { BlockFormat } from "./composer-dom";
+import type { ComposerMarkdownMode } from "./composer-markdown";
 
 export function activeBlockFormats(state: EditorState): BlockFormat[] {
   const selection =
@@ -378,7 +379,7 @@ export function composerCodeFence(
   return tr.setStoredMarks([]);
 }
 
-/** The typed character that completes a list or quote prefix. */
+/** The typed character that completes a block prefix. */
 export const composerPrefixDelimiters: ReadonlySet<string> = new Set([" "]);
 // A block prefix filling the caret's line up to the typed space, as CommonMark
 // reads it: a bullet marker, one to nine digits with a dot or parenthesis, or a
@@ -387,13 +388,14 @@ export const composerPrefixDelimiters: ReadonlySet<string> = new Set([" "]);
 // and each number with a dot; the sent text renders the same either way.
 // A typed Unicode bullet is a convenience alias, serialized as Markdown `- `.
 const PREFIX = /^(?:([-*+•])|(\d{1,9})[.)]|>) $/;
+const DOCUMENT_HEADING_PREFIX = /^#{1,6} $/;
 // Positions to read before the caret: the widest prefix and its space, plus the
 // character before them, so the cheap check sees whether the line starts there.
 const PREFIX_WINDOW = 12;
 
 /** Typing the space after a lone `- `, `1. ` or `> ` marker turns the caret's
- * line into a list item or quoted paragraph at once, producing the node the
- * toolbar toggle would: prose after the caret on that line becomes the block's
+ * line into a list item or quoted paragraph at once. In documents, one to six
+ * hashes and a space open a heading. Prose after the caret becomes the block's
  * content, and the paragraph's other lines stay where they are. Inside a quote
  * the markers nest a list or a second quote; inside a list item a marker of
  * the item's own list kind, typed as the only text of an item after the first,
@@ -405,6 +407,7 @@ const PREFIX_WINDOW = 12;
 export function composerBlockPrefix(
   state: EditorState,
   typed: string,
+  mode: ComposerMarkdownMode = "chat",
 ): Transaction | undefined {
   const { $from, empty } = state.selection;
   if (!composerPrefixDelimiters.has(typed) || !empty) return;
@@ -417,13 +420,18 @@ export function composerBlockPrefix(
   );
   const newline = window.lastIndexOf("\n");
   if (newline < 0 && offset > PREFIX_WINDOW) return;
-  const match = PREFIX.exec(window.slice(newline + 1));
+  const line = window.slice(newline + 1);
+  const heading =
+    mode === "document" ? DOCUMENT_HEADING_PREFIX.exec(line) : null;
+  const match = heading ?? PREFIX.exec(line);
   if (!match) return;
-  const kind = match[1]
-    ? "bullet_list"
-    : match[2]
-      ? "ordered_list"
-      : "blockquote";
+  const kind = heading
+    ? "heading"
+    : match[1]
+      ? "bullet_list"
+      : match[2]
+        ? "ordered_list"
+        : "blockquote";
   // Nesting converts where the schema can hold the shape the timeline reads
   // from the sent text. A paragraph in the document or in a quote wraps, so
   // `> ` inside a quote nests a second quote as `> > inner` renders. A list
@@ -434,7 +442,9 @@ export function composerBlockPrefix(
   // in a list's first item, or one beside the item's prose stays literal text
   // that still nests once sent: the timeline shows a quote or list inside that
   // item where the composer shows the marker.
-  const sink = $from.node($from.depth - 1).type === schema.nodes.list_item;
+  const sink =
+    kind !== "heading" &&
+    $from.node($from.depth - 1).type === schema.nodes.list_item;
   if (
     sink &&
     ($from.node($from.depth - 2).type !== schema.nodes[kind] ||
@@ -493,17 +503,42 @@ export function composerBlockPrefix(
   } else {
     isolate(tr);
     const command =
-      kind === "blockquote"
-        ? wrapIn(schema.nodes.blockquote)
-        : wrapInList(
-            schema.nodes[kind],
-            kind === "ordered_list" ? { order: Number(match[2]) } : null,
-          );
+      kind === "heading"
+        ? setBlockType(schema.nodes.heading, { level: match[0].length - 1 })
+        : kind === "blockquote"
+          ? wrapIn(schema.nodes.blockquote)
+          : wrapInList(
+              schema.nodes[kind],
+              kind === "ordered_list" ? { order: Number(match[2]) } : null,
+            );
     if (!apply(tr, command)) return;
   }
   // The marker's own marks (an explicit Bold typing mode) continue into the
   // block, as the typed prose already carried them.
   return marks.length ? tr.setStoredMarks(marks) : tr;
+}
+
+/** A caret leaving a code block by an arrow key, past the edge of the block in
+ * that direction, lands in an empty paragraph opened there when no textblock
+ * lies beyond, as Enter on the block's empty last line opens one below it.
+ * Elsewhere the native caret motion already leaves the block. The caller
+ * decides that the caret is at the block's edge in the key's direction. */
+export function composerCodeBlockExit(
+  state: EditorState,
+  forward: boolean,
+): Transaction | undefined {
+  const { $head, empty } = state.selection;
+  if (!empty || !$head.parent.type.spec.code) return;
+  const edge = forward ? $head.after() : $head.before();
+  const $edge = state.doc.resolve(edge);
+  if (Selection.findFrom($edge, forward ? 1 : -1, true)) return;
+  const index = $edge.index();
+  if (!$edge.parent.canReplaceWith(index, index, schema.nodes.paragraph))
+    return;
+  const tr = state.tr.insert(edge, schema.nodes.paragraph.create());
+  return tr
+    .setSelection(TextSelection.create(tr.doc, edge + 1))
+    .setStoredMarks([]);
 }
 
 /** A line break continues the block; an empty last line exits it. The host

@@ -1,7 +1,7 @@
 import { expect, test } from "./playwright-test.mjs";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
-import { createServer } from "./vite-server.mjs";
+import { createServer, warmUp } from "./vite-server.mjs";
 import { watchPageErrors } from "./page-errors.mjs";
 
 // Browser-only boundary: ancestor inertness and overlay hit testing cannot be
@@ -35,6 +35,10 @@ test("window controls stay usable through the launch overlay and identity handof
   });
   try {
     await server.listen();
+    // The fixture mounts the real App, about 1,400 modules on a cold server;
+    // compile them outside the navigation budget, which a busy runner can
+    // otherwise exhaust.
+    await warmUp(server, "/tests/fixtures/window-chrome.tsx");
     await page.setViewportSize({ width: 480, height: 400 });
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}`);
     await expect

@@ -34,12 +34,19 @@ export const wakeLands = (wake: ConversationWake, topLevel: boolean) =>
   !!wake.root || topLevel || wake.topLevel === true;
 
 /** `text` that is not Buzz's own: its lines cannot open the turn's event or
- * steer section, which a turn with a wake in place of its event has none of. */
+ * steer section, which a turn with a wake in place of its event has none of.
+ * Nor can it open or close, anywhere in a line, a base section's wrapper or
+ * the block that updates the base sections. */
 export const unframed = (text: string) =>
-  text.replace(
-    /(?<![^\n])<(buzz-event|new-message-arrived-while-you-were-working)>/g,
-    "<\\$1>",
-  );
+  text
+    .replace(
+      /(?<![^\n])<(buzz-event|new-message-arrived-while-you-were-working)>/g,
+      "<\\$1>",
+    )
+    .replace(
+      /<(\/?)(owner-section|plugin-section|base-section-updates)\b/gi,
+      "<\\$1$2",
+    );
 
 /** The section a wake's turn has in place of `<buzz-event>`. */
 export function wakeSection(wake: ConversationWake) {

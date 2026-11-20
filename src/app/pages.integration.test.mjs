@@ -105,9 +105,9 @@ test("the app runtime exposes ready bundled pages and removes them on disable", 
           "buzz.mesh-compute",
           "buzz.focus",
           "buzz.charts",
-          "buzz.file-viewer",
           "buzz.drafts-and-sent",
           "buzz.changesets",
+          "buzz.performance-diagnostics",
         ].includes(plugin.manifest.id),
         plugin.manifest.id,
       );
@@ -122,6 +122,45 @@ test("the app runtime exposes ready bundled pages and removes them on disable", 
         false,
       );
     }
+    const { respondExternal } = await vite.ssrLoadModule(
+      "/src/buzz-mcp/external.ts",
+    );
+    const performancePlugin = "buzz.performance-diagnostics";
+    const snapshot = "performance_snapshot";
+    const hasSnapshot = () =>
+      services.agents.tools().some(({ name }) => name === snapshot);
+    const callSnapshot = (scopes) =>
+      respondExternal(
+        {},
+        {
+          id: 1,
+          method: "tools/call",
+          params: { name: snapshot, arguments: { duration_ms: 999 } },
+        },
+        () => {},
+        scopes,
+        services.agents.tools,
+      );
+
+    assert.equal(hasSnapshot(), false);
+    assert.match(
+      (await callSnapshot(["agent"])).result.content[0].text,
+      /no tool performance_snapshot/i,
+    );
+    await services.plugins.change("enable", performancePlugin);
+    await vi.waitFor(() => assert.equal(hasSnapshot(), true));
+    const denied = await callSnapshot(["read"]);
+    assert.equal(
+      denied.result._meta["buzz/error"].code,
+      "authorization_required",
+    );
+    assert.match(
+      (await callSnapshot(["agent"])).result.content[0].text,
+      /duration_ms must be an integer from 1000 to 10000/,
+    );
+    await services.plugins.change("disable", performancePlugin);
+    assert.equal(hasSnapshot(), false);
+
     await services.plugins.change("enable", "buzz.reminders");
     await vi.waitFor(() =>
       assert.ok(

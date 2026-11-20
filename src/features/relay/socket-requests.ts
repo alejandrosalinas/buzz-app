@@ -7,6 +7,7 @@ import {
   MAX_EVENT_BYTES as CATALOG_EVENT_BYTES,
 } from "../agents/catalog-envelope.ts";
 import { CANVAS_FRAME_BYTES } from "../channel-templates/canvas-limits.ts";
+import { ARTIFACT_REVISION_KIND } from "./artifact-sync-filter.ts";
 
 /** False means proven non-delivery, not merely a negative or missing OK.
  * `refusal` is the log-safe summary; `reason` is the relay's own bounded text
@@ -42,7 +43,7 @@ export function createSocketPublications(
       const event = eventDto(input);
       if (pending.has(event.id))
         throw new SocketRequestError("Publication already in flight", false);
-      if (pending.size >= 32)
+      if (pending.size >= (event.kind === ARTIFACT_REVISION_KIND ? 30 : 32))
         throw new SocketRequestError("Publication capacity reached", false);
       // NIP-AP catalog and Canvas events may exceed the ordinary frame, up
       // to their own bounds within the relay's default frame limit.
@@ -101,8 +102,18 @@ export function createSocketPublications(
     },
     next() {
       const jobs = [...pending.values()];
-      if (jobs.filter((job) => job.sent).length >= 3) return;
-      return jobs.find((job) => !job.sent);
+      const sent = jobs.filter((job) => job.sent);
+      if (sent.length >= 3) return;
+      // Keep one in-flight slot available for conversation events under artifact load.
+      return (
+        jobs.find(
+          (job) => !job.sent && job.event.kind !== ARTIFACT_REVISION_KIND,
+        ) ??
+        (sent.filter((job) => job.event.kind === ARTIFACT_REVISION_KIND)
+          .length < 2
+          ? jobs.find((job) => !job.sent)
+          : undefined)
+      );
     },
     dispatch(job: Publication, send: (frame: unknown[]) => void) {
       if (pending.get(job.event.id) !== job) return;
@@ -146,7 +157,7 @@ export function createSocketPublications(
           // domain mutation.
           ([30620, 46020].includes(job.event.kind) &&
             /^(conflict|forbidden):/.test(data[3])) ||
-          ([40100, 45010].includes(job.event.kind) &&
+          ([40100, ARTIFACT_REVISION_KIND].includes(job.event.kind) &&
             data[3].startsWith("conflict:"));
         job.finish(
           undefined,

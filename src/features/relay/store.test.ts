@@ -895,6 +895,88 @@ it.each([
     owner.dispose();
   }
 });
+it.each([
+  ["restores", false],
+  ["skips", true],
+] as const)(
+  "%s the saved roster when revalidate is %s",
+  async (_, revalidate) => {
+    const scripted = scriptedTransport(viewer.pubkey, relay.pubkey);
+    const owner = createRelaySession(scripted.transport, {
+      persistence: {
+        read: async () => [],
+        readStartup: async () => ({
+          discovery: {
+            savedAt: Date.now(),
+            relayAuthor: relay.pubkey,
+            events: [
+              roster(relay, "alpha", [viewer.pubkey]),
+              metadata(relay, "alpha", "Alpha"),
+            ],
+          },
+        }),
+        writeStartup: async () => {},
+        readProfiles: async () => [],
+        writeProfiles: async () => {},
+        write: async () => {},
+        remove: async () => {},
+        retain: async () => {},
+        clear: async () => {},
+        close: () => {},
+      },
+      prepared: true,
+      revalidate,
+    });
+    try {
+      await owner.restore();
+      expect(!!owner.session.channels.get?.("alpha")).toBe(!revalidate);
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+it("a revalidating session keeps saving profiles", async () => {
+  const scripted = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const readStartup = vi.fn(async () => undefined);
+  const writeProfiles = vi.fn(async (_: readonly unknown[]) => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const owner = createRelaySession(scripted.transport, {
+    persistence: {
+      read: async () => [],
+      readStartup,
+      writeStartup: async () => {},
+      readProfiles: async () => [],
+      writeProfiles,
+      write: async () => {},
+      remove: async () => {},
+      retain: async () => {},
+      clear: async () => {},
+      close: () => {},
+    },
+    prepared: true,
+    revalidate: true,
+  });
+  try {
+    await owner.restore();
+    await vi.advanceTimersByTimeAsync(1000);
+    writeProfiles.mockClear();
+    const ensuring = owner.session.profiles.ensure(
+      [alice.pubkey],
+      "foreground",
+    );
+    await vi.waitFor(() => expect(scripted.pending).not.toHaveLength(0), {
+      interval: 1,
+    });
+    scripted.next().respond([profile(alice, { name: "Alice" })]);
+    await ensuring;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(writeProfiles).toHaveBeenCalledTimes(1);
+    expect(writeProfiles.mock.calls[0]?.[0]).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    owner.dispose();
+  }
+});
 it("does not rewrite the profile mirror when only cache hits reorder it", async () => {
   const scripted = scriptedTransport(viewer.pubkey, relay.pubkey);
   const writeProfiles = vi.fn(async (_: readonly unknown[]) => {});

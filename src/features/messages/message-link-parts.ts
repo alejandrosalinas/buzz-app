@@ -144,6 +144,36 @@ export function messageLinkParts(
   return parts;
 }
 
+// Only common web TLDs: file names end in country codes too (main.rs, app.py,
+// notes.md, run.sh), and so do words after a missing space (it, no, me). The
+// TLD must be lowercase, so names like ASP.NET stay text.
+const bareHost =
+  /(?<![\p{L}\p{N}_@.\-/:#\\])(?:[a-zA-Z\d](?:[a-zA-Z\d-]*[a-zA-Z\d])?\.)+(?:com|org|net|edu|gov|io|ai|app|dev|xyz|co|gg|tv|info|biz|uk|ca|de|fr|jp|au|nl|eu|ch|se|nz|ie|es|br|kr|cn)(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])(?:[:/?#]\S*)?/gu;
+
+/** Display-only links for scheme-less hosts in prose, such as `example.com/a`.
+ * The destination is HTTPS; the label stays the authored text. */
+export function bareHostParts(content: string): LinkPart[] {
+  const parts: LinkPart[] = [];
+  let offset = 0;
+  const pattern = new RegExp(bareHost);
+  for (
+    let match = pattern.exec(content);
+    match;
+    match = pattern.exec(content)
+  ) {
+    // The scheme form decides where the link ends, as for any bare URL; the
+    // scan resumes there, so a host after CJK punctuation still links.
+    const link = messageLinkParts(`https://${match[0]}`)[1];
+    if (!link?.url || link.label) continue;
+    const text = link.text.slice("https://".length);
+    parts.push({ text: content.slice(offset, match.index) });
+    parts.push({ text, label: text, url: link.url });
+    offset = pattern.lastIndex = match.index + text.length;
+  }
+  parts.push({ text: content.slice(offset) });
+  return parts;
+}
+
 /** Repair pasted escaped/nested wrappers before Markdown, except in literal contexts. */
 export function normalizeWrappedLinks(
   content: string,

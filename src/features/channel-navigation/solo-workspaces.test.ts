@@ -10,7 +10,7 @@ it("projects the existing Solo catalog and writer, preserving uncertainty and fe
   const connectionListeners = new Set<() => void>();
   const store = createSidebarPreferencesStore({
     available: true,
-    groupsOnly: true,
+    writeStar: async () => [],
     read: async () => ({
       sections,
       assignments: { privateChat: "existing" },

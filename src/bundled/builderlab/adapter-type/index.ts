@@ -1,5 +1,5 @@
 import { BuilderlabLogoIcon } from "../../../shared/design-system/icons";
-import { createActivityTab } from "./Activity";
+import { createRemoteActivityTab } from "./RemoteActivityTab";
 import { createSettingsTab } from "./Instructions";
 import { createProfileActions } from "./SignInFooter";
 import {
@@ -167,7 +167,12 @@ export function builderlabType(
         id: "activity",
         title: "Activity",
         role: "activity",
-        component: createActivityTab(relay, openSettings),
+        component: createRemoteActivityTab(
+          relay,
+          client,
+          session,
+          openSettings,
+        ),
       },
     ],
     remote: {

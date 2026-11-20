@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { messageLinkParts } from "./message-link-parts";
+import { bareHostParts, messageLinkParts } from "./message-link-parts";
 
 it("recognizes bare and wrapped Buzz channel, message and thread links", () => {
   const urls = [
@@ -306,4 +306,37 @@ it("recognizes bare, wrapped and labelled plugin page links, and not malformed o
   }
   const malformed = "<buzz://plugin?id=Not.Valid>";
   expect(messageLinkParts(malformed).some((part) => part.url)).toBe(false);
+});
+
+it("links scheme-less hosts under common web TLDs, ending them like bare URLs", () => {
+  for (const [content, ...links] of [
+    ["check example.com", "example.com"],
+    ["see builderlab.xyz.", "builderlab.xyz"],
+    ["try GitHub.com", "GitHub.com"],
+    ["(docs.github.com/en/rest?x=1#top)", "docs.github.com/en/rest?x=1#top"],
+    ["a.co.uk:8443/path, then", "a.co.uk:8443/path"],
+    ["看 example.com/a，foo.io。", "example.com/a", "foo.io"],
+  ] as const) {
+    const parts = bareHostParts(content);
+    expect(parts.filter((part) => part.url)).toEqual(
+      links.map((text) => ({ text, label: text, url: `https://${text}` })),
+    );
+    expect(parts.map((part) => part.text).join("")).toBe(content);
+  }
+});
+
+it("leaves file names, emails, paths and partial hosts as plain text", () => {
+  for (const content of [
+    "edit main.rs, app.py and notes.md",
+    "run package.json or node.js",
+    "mail me@example.com",
+    "open src/example.com or #example.com",
+    "example.comfoo and example.com.zz",
+    "built on ASP.NET and VB.NET, see Example.COM",
+    "localhost:3000",
+  ]) {
+    const parts = bareHostParts(content);
+    expect(parts.some((part) => part.url)).toBe(false);
+    expect(parts.map((part) => part.text).join("")).toBe(content);
+  }
 });

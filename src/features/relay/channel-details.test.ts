@@ -1081,6 +1081,62 @@ it.each([undefined, 600])(
   },
 );
 
+it.each(["away and back", "rejection", "disposal"] as const)(
+  "retires the local Solo rename marker after %s",
+  async (ending) => {
+    const h = harness("owner", true);
+    const details = h.owner.capability;
+    h.set([
+      h.metadata("First prompt", "", "private", "stream", [SOLO_LABEL]),
+      ...h.events().slice(1),
+    ]);
+    const base = await details.load(id);
+    const next = { ...base, name: "Release notes" };
+    let name = base.name;
+    const listeners = new Set<() => void>();
+    const channels = {
+      get: () => ({ id, name }),
+      subscribeList(listener: () => void) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    };
+    const observe = (title: string) => {
+      name = title;
+      for (const listener of listeners) listener();
+    };
+    const marker = () => details.localRename?.(id, next.name);
+    h.publish.mockImplementationOnce(async () => {
+      expect(marker()).toBeDefined();
+      if (ending === "rejection") throw new PublishRejected("Not permitted");
+      h.set([
+        h.metadata(next.name, "", "private", "stream", [
+          SOLO_LABEL,
+          SOLO_NAMED_LABEL,
+        ]),
+        ...h.events().slice(1),
+      ]);
+      observe(next.name);
+    });
+    const save = details.save(base, next, undefined, undefined, channels);
+    if (ending === "rejection") {
+      await expect(save).rejects.toThrow("Not permitted");
+    } else {
+      await save;
+      expect(marker()).toBeDefined();
+      if (ending === "disposal") h.owner.dispose();
+      else {
+        observe(base.name);
+        observe(next.name);
+      }
+    }
+    expect(marker()).toBeUndefined();
+    expect(listeners.size).toBe(0);
+  },
+);
+
 it("refuses chosen-name label overflow before signing and retains the existing label set", async () => {
   const h = harness("owner", true);
   const labels = [

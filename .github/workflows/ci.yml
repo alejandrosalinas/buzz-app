@@ -3,6 +3,8 @@ name: CI
 on:
   # Manual dispatch runs only Windows; automatic checks include macOS recording.
   workflow_dispatch:
+  # Sunday's preview (release.yml) calls this to rebuild main's caches.
+  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -19,6 +21,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  javascript_checks:
+    if: github.event_name != 'workflow_dispatch'
+    name: JavaScript checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Lint and types
+        run: ./bin/pnpm check
+      # check already ran TypeScript; do not repeat pnpm build's typecheck.
+      - name: Frontend build
+        run: ./bin/pnpm exec vite build
+
   javascript:
     if: github.event_name != 'workflow_dispatch'
     name: JavaScript (${{ matrix.shard }}/8)
@@ -37,11 +55,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Lint and types
-        run: ./bin/pnpm check
-      # check already ran TypeScript; do not repeat pnpm build's typecheck.
-      - name: Frontend build
-        run: ./bin/pnpm exec vite build
       - name: Vitest shard
         env:
           # Bound contention between suites that sign and verify large fixtures.
@@ -71,14 +84,14 @@ jobs:
           source bin/activate-hermit
           cd src/bundled/pi/deps
           npm ci --ignore-scripts --no-audit --no-fund
-      - name: Real Pi tools and recovery
+      - name: Real Pi tools, recovery and host
         env:
           PI_DEPS: ${{ github.workspace }}/src/bundled/pi/deps
-        run: ./bin/node scripts/ci-test-report.mjs kind=vitest report=test-results/protection/vitest.json evidence=test-results/protection/timing.json title="Protected Pi" -- ./bin/pnpm exec vitest run src/bundled/pi/protection.live.test.ts --reporter=default --reporter=json --outputFile=test-results/protection/vitest.json
+        run: ./bin/node scripts/ci-test-report.mjs kind=vitest report=test-results/protection/vitest.json evidence=test-results/protection/timing.json title="Protected Pi" -- ./bin/pnpm exec vitest run src/bundled/pi/protection.live.test.ts src/bundled/pi/host.live.test.ts --reporter=default --reporter=json --outputFile=test-results/protection/vitest.json
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: agent-protection
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install exact protected Claude fixture
         run: ./bin/node scripts/install-protected-claude-test.mjs
       - name: Native Claude protection boundary
@@ -102,10 +115,20 @@ jobs:
   native:
     if: github.event_name != 'workflow_dispatch'
     name: Rust and tool integration
-    runs-on: ubuntu-24.04
+    # Use the PR author so a human rerunning a bot PR keeps standard runners.
+    # Fork-owned workflows also retain runners they can access.
+    runs-on: &linux_16core_or_standard >-
+      ${{ fromJSON(
+        github.repository == 'block/buzz-app' &&
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.user.type == 'User' &&
+        '{"group":"buzz-runners","labels":"buzz-ubuntu-x64-16core"}' ||
+        '"ubuntu-24.04"'
+      ) }}
     # A Cargo.lock change rebuilds most crates from a cold cache, and only a
-    # finished main push saves a warm one, so leave room for that cold run.
-    timeout-minutes: 30
+    # finished main push saves a warm one, so leave room for that cold run:
+    # it takes 29 to 33 minutes, against 13 to 18 from a warm cache.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -119,16 +142,28 @@ jobs:
           sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y dbus-daemon libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - name: Install isolated pinned Rust toolchain
+        # rust-cache hashes every installed toolchain. The hosted image's unused
+        # stable compiler must not split caches for our pinned compiler.
+        run: |
+          export RUSTUP_HOME="$RUNNER_TEMP/buzz-rustup"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          ./bin/rustup toolchain install
+          ./bin/rustup default "$(./bin/rustup show active-toolchain | cut -d ' ' -f1)"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: native
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Dependency policy
         run: ./bin/cargo-deny --locked check
       - name: Rust formatting
         run: ./bin/cargo fmt --all --check
       - name: Rust lint
         run: ./bin/cargo clippy --workspace --locked --all-targets -- -D warnings
+      # Stage resources and build the workspace tests once, before running them
+      # and before FI variants change build inputs.
+      - name: Bundled buzz CLI
+        run: ./bin/node scripts/test-buzz-cli.mjs
       # --workspace includes Tauri, unlike the default Cargo member selection.
       - name: All Rust tests and doctests
         run: ./bin/cargo test --workspace --locked
@@ -151,8 +186,6 @@ jobs:
           ./bin/cargo test -p Buzz --lib --locked host_request
       - name: Scheduled agent command identity
         run: ./bin/node scripts/test-agent-command.mjs
-      - name: Bundled buzz CLI
-        run: ./bin/node scripts/test-buzz-cli.mjs
       - name: All Node integration tests
         run: ./bin/node --test tests/integration/*.test.mjs
 
@@ -222,10 +255,6 @@ jobs:
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/browser-classic-scrollbars/ci-report.json
         run: ./bin/node scripts/ci-test-report.mjs kind=playwright report=test-results/browser-classic-scrollbars/ci-report.json evidence=test-results/browser-classic-scrollbars/ci-timing.json title="Browser classic scrollbars" -- ./bin/pnpm test:browser:ci --project chromium-classic-scrollbars --no-deps --reporter=list,json
-      # Exercise the actual perf harness once per case; timing comparisons stay
-      # separate. Keep its Chromium workload serial with the measurements above.
-      - name: Perf suite smoke check
-        run: ./bin/pnpm perf --scenario all --repeat 1 --cpu 4
       # The 100,000-channel broker scale check asserts wall-clock time: about
       # 20 s of single-threaded CPU inside a 30 s budget. A shared Vitest
       # shard's two workers timed it out under load, so it runs alone here on
@@ -246,14 +275,55 @@ jobs:
           path: |
             test-results/browser
             test-results/browser-classic-scrollbars
-            test-results/perf
             test-results/broker-scale
+          retention-days: 7
+
+  perf_smoke:
+    if: github.event_name != 'workflow_dispatch'
+    name: Perf suite smoke check
+    runs-on: ubuntu-24.04
+    # Keep the perf harness isolated from browser measurements and other work.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
+      options: --init --ipc=host
+    defaults:
+      run:
+        shell: bash
+    env:
+      HOME: /root
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Trust this container workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/setup
+        with:
+          browsers: "true"
+          browser-engine: chromium
+      # Exercise every case once, serially, with the existing CPU slowdown.
+      - name: Perf suite smoke check
+        run: ./bin/pnpm perf --scenario all --repeat 1 --cpu 4
+      - name: Perf evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: perf-smoke
+          path: test-results/perf
           retention-days: 7
 
   browser_fixture:
     if: github.event_name != 'workflow_dispatch'
     name: Native browser fixture
-    runs-on: ubuntu-24.04
+    runs-on: &linux_8core_or_standard >-
+      ${{ fromJSON(
+        github.repository == 'block/buzz-app' &&
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.user.type == 'User' &&
+        '{"group":"buzz-runners","labels":"buzz-ubuntu-x64-8core"}' ||
+        '"ubuntu-24.04"'
+      ) }}
     timeout-minutes: 15
     outputs:
       artifact-id: ${{ steps.fixture-upload.outputs.artifact-id }}
@@ -265,7 +335,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: browser-fixture
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build native browser fixture
         timeout-minutes: 8
         run: ./bin/cargo build --locked -p buzzodz-plugins --example fixture-bridge --bin buzzodz --target-dir target/browser-fixture
@@ -293,7 +363,7 @@ jobs:
     # Measurements stay isolated on their own runner, not on our critical path.
     # CI required still requires their success independently of these jobs.
     needs: [browser_fixture]
-    runs-on: ubuntu-24.04
+    runs-on: *linux_8core_or_standard
     # Match package.json's Playwright version and pin immutable browser/OS layers.
     container:
       image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
@@ -513,20 +583,22 @@ jobs:
   required:
     name: ${{ github.event_name == 'workflow_dispatch' && 'Automatic CI (not requested)' || 'CI required' }}
     if: always() && github.event_name != 'workflow_dispatch'
-    needs: [javascript, native, measurements, browser_fixture, browser, media_recorder, agent_protection]
+    needs: [javascript_checks, javascript, native, measurements, perf_smoke, browser_fixture, browser, media_recorder, agent_protection]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require every lane and every shard
         env:
+          JAVASCRIPT_CHECKS: ${{ needs.javascript_checks.result }}
           JAVASCRIPT: ${{ needs.javascript.result }}
           NATIVE: ${{ needs.native.result }}
           MEASUREMENTS: ${{ needs.measurements.result }}
+          PERF_SMOKE: ${{ needs.perf_smoke.result }}
           FIXTURE: ${{ needs.browser_fixture.result }}
           BROWSER: ${{ needs.browser.result }}
           MEDIA_RECORDER: ${{ needs.media_recorder.result }}
           AGENT_PROTECTION: ${{ needs.agent_protection.result }}
         run: |
-          for result in "$JAVASCRIPT" "$NATIVE" "$MEASUREMENTS" "$FIXTURE" "$BROWSER" "$MEDIA_RECORDER" "$AGENT_PROTECTION"; do
+          for result in "$JAVASCRIPT_CHECKS" "$JAVASCRIPT" "$NATIVE" "$MEASUREMENTS" "$PERF_SMOKE" "$FIXTURE" "$BROWSER" "$MEDIA_RECORDER" "$AGENT_PROTECTION"; do
             test "$result" = success || exit 1
           done

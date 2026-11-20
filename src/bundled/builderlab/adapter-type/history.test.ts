@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { npubEncode } from "nostr-tools/nip19";
+import { describe, expect, it, vi } from "vitest";
 import type { TranscriptTurn } from "../../../features/agents/activity-transcript";
 import type { AgentClient, AgentSession } from "../agents/client";
 import type { BuilderlabSession } from "../session";
@@ -90,6 +91,12 @@ it("groups stored messages into the turns that started before them", () => {
         role: 2,
         created: at(2100),
         content: [text("Working on it")],
+      },
+    ],
+    prompts: [
+      {
+        message_id: "m1",
+        events: [{ event_id: mention, sender_label: "Ada" }],
       },
     ],
   });
@@ -193,7 +200,7 @@ const signedIn = {
 function client(overrides: Partial<Record<keyof AgentClient, unknown>> = {}) {
   return {
     list: vi.fn(async () => [{ id: "agent-1", pubkey: "a".repeat(64) }]),
-    sessions: vi.fn(async () => ({ sessions: [session], more: true })),
+    sessions: vi.fn(async () => ({ sessions: [session] })),
     sessionMessages: vi.fn(async () => ({ turns: [], messages: [] })),
     ...overrides,
   } as unknown as AgentClient;
@@ -205,9 +212,14 @@ it("lists the signed-in owner's stored sessions of an agent", async () => {
     status: "loaded",
     agentId: "agent-1",
     sessions: [session],
-    more: true,
+    more: false,
   });
-  expect(reader.sessions).toHaveBeenCalledWith("agent-1", signal);
+  expect(reader.sessions).toHaveBeenCalledExactlyOnceWith(
+    "agent-1",
+    signal,
+    undefined,
+    undefined,
+  );
 });
 
 it("lists nothing for an agent outside the signed-in account", async () => {
@@ -346,71 +358,61 @@ it("keeps tool calls without an id apart", () => {
   ]);
 });
 
-it("joins a prompt to the turn its mention started, even stamped before it", () => {
-  const next = "9".repeat(64);
+it("puts each message in the turn that lists it, even stamped before it", () => {
   const turns = sessionTurns(session, {
     turns: [
-      { turn_id: "t1", mention_event_id: mention, created_at: at(0) },
-      { turn_id: "t2", mention_event_id: next, created_at: at(10_000) },
+      { turn_id: "t1", created_at: at(0), message_ids: ["a"] },
+      { turn_id: "t2", created_at: at(10_000), message_ids: ["p", "b"] },
     ],
     messages: [
       { id: "a", role: 2, created: at(1000), content: [text("one")] },
-      {
-        id: "p",
-        role: 1,
-        created: at(9_500),
-        content: [text(prompt.replace(mention, next))],
-      },
+      { id: "p", role: 1, created: at(9_500), content: [text(prompt)] },
       { id: "b", role: 2, created: at(9_800), content: [text("two")] },
+      { id: "c", role: 2, created: at(10_500), content: [text("three")] },
     ],
   });
   expect(
-    turns.map((turn) => [turn.turnId, turn.items.map((item) => item.type)]),
+    turns.map((turn) => [turn.turnId, turn.items.map((item) => item.id)]),
   ).toEqual([
-    ["t1", ["message"]],
-    ["t2", ["prompt", "message"]],
+    ["t1", ["a:0"]],
+    ["t2", ["p:0", "b:0", "c:0"]],
   ]);
 });
 
-it("names every sender of a batched prompt, without their keys", () => {
+it("names every sender of a batched prompt the server read", () => {
   const ada = "a".repeat(64);
   const bob = "b".repeat(64);
-  const event = (id: string, from: string, content: string) =>
-    [
-      '<buzz-event type="@mention">',
-      `Event ID: ${id}`,
-      "Channel: alpha",
-      `From: ${from}`,
-      `Content: ${content}`,
-      "</buzz-event>",
-    ].join("\n");
-  const batched = [
-    event(
-      "1".repeat(64),
-      `Ada (npub: npub1ada, hex: ${ada}). This sender is your owner.`,
-      "first",
-    ),
-    event(
-      mention,
-      `Bob (username: bob, npub: npub1bob, hex: ${bob}). This sender is not verified as your owner.`,
-      "second",
-    ),
-  ].join("\n\n");
+  const carol = "c".repeat(64);
   const read = (name?: (pubkey: string) => string | undefined) =>
     sessionTurns(
       session,
       {
-        turns: [{ turn_id: "t", mention_event_id: mention, created_at: at(0) }],
+        turns: [{ turn_id: "t", created_at: at(0), message_ids: ["p"] }],
         messages: [
-          { id: "p", role: 1, created: at(1), content: [text(batched)] },
+          { id: "p", role: 1, created: at(1), content: [text(prompt)] },
+        ],
+        prompts: [
+          {
+            message_id: "p",
+            events: [
+              { event_id: "1", sender_pubkey: ada, sender_label: "Ada" },
+              { event_id: "2", sender_pubkey: bob, sender_label: "Bob" },
+              { event_id: "3", sender_pubkey: carol },
+              { event_id: "4" },
+              { event_id: "5", sender_pubkey: "npub1forged" },
+            ],
+          },
         ],
       },
       name,
     )[0]?.items[0];
-  expect(read()).toMatchObject({ author: "Ada, Bob" });
+  expect(read()).toMatchObject({
+    author: `Ada, Bob, ${npubEncode(carol)}`,
+  });
+  expect(read()).not.toHaveProperty("authorPubkey");
   expect(
     read((pubkey) => (pubkey === bob ? "Bob B." : undefined)),
-  ).toMatchObject({ author: "Ada, Bob B." });
+  ).toMatchObject({ author: `Ada, Bob B., ${npubEncode(carol)}` });
 });
 
 it("reads a session whose removal state is unspecified", async () => {
@@ -432,25 +434,129 @@ it("reads a session whose removal state is unspecified", async () => {
   expect(await read("SESSION_REMOVAL_STATE_REMOVED")).toBeUndefined();
 });
 
-it("drops any owner note after a sender's keys", () => {
+it("names a single sender by key, and no sender the server did not read", () => {
   const hex = "c".repeat(64);
-  const [turn] = sessionTurns(session, {
-    turns: [{ turn_id: "t", mention_event_id: mention, created_at: at(0) }],
-    messages: [
+  const read = (prompts?: unknown) =>
+    sessionTurns(session, {
+      turns: [{ turn_id: "t", created_at: at(0) }],
+      messages: [{ id: "p", role: 1, created: at(1), content: [text(prompt)] }],
+      prompts,
+    })[0]?.items[0];
+  expect(
+    read([
       {
-        id: "p",
-        role: 1,
-        created: at(1),
-        content: [
-          text(
-            prompt.replace(
-              "From: Ada. This sender is your owner.",
-              `From: Ada (npub: npub1ada, hex: ${hex}). This sender was checked against the owner list.`,
-            ),
-          ),
-        ],
+        message_id: "p",
+        events: [{ sender_pubkey: hex, sender_label: "Ada" }],
       },
-    ],
+    ]),
+  ).toMatchObject({ author: "Ada", authorPubkey: hex });
+  const unread = read();
+  expect(unread).toMatchObject({ type: "prompt", text: "fix <this> & ship" });
+  expect(unread).not.toHaveProperty("author");
+});
+
+it("shows a sender's label as the server sent it, already unescaped", () => {
+  const label = (sender_label: string) =>
+    sessionTurns(session, {
+      turns: [{ turn_id: "t", created_at: at(0) }],
+      messages: [{ id: "p", role: 1, created: at(1), content: [text(prompt)] }],
+      prompts: [{ message_id: "p", events: [{ sender_label }] }],
+    })[0]?.items[0];
+  expect(label("R&D <ops>")).toMatchObject({ author: "R&D <ops>" });
+  expect(label("A &amp; B")).toMatchObject({ author: "A &amp; B" });
+});
+
+it("names an exact event record's sender when the server read none", () => {
+  const ada = "a".repeat(64);
+  const record = (pubkey: string) =>
+    [
+      "<buzz-event>",
+      JSON.stringify({ id: mention, pubkey, content: "fix it" }),
+      `Request: ${JSON.stringify("fix it")}`,
+      "</buzz-event>",
+    ].join("\n");
+  const read = (raw: string, name?: (pubkey: string) => string | undefined) =>
+    sessionTurns(
+      session,
+      {
+        turns: [{ turn_id: "t", created_at: at(0) }],
+        messages: [{ id: "p", role: 1, created: at(1), content: [text(raw)] }],
+      },
+      name,
+    )[0]?.items[0];
+  expect(read(record(ada), () => "Ada")).toMatchObject({
+    text: "fix it",
+    author: "Ada",
+    authorPubkey: ada,
   });
-  expect(turn?.items[0]).toMatchObject({ author: "Ada" });
+  expect(read(record(ada))).toMatchObject({ author: npubEncode(ada) });
+  expect(read(record("npub1forged"))).not.toHaveProperty("author");
+});
+
+describe("paging stored sessions", () => {
+  const rows = (count: number, from = 0) =>
+    Array.from({ length: count }, (_, index) => ({
+      ...session,
+      sessionId: `s${from + index}`,
+    }));
+  const pages = (...sent: { sessions: AgentSession[]; cursor?: string }[]) => {
+    const sessions = vi.fn();
+    for (const page of sent) sessions.mockResolvedValueOnce(page);
+    return client({ sessions });
+  };
+  const cursors = (reader: AgentClient) =>
+    vi.mocked(reader.sessions).mock.calls.map((call) => call[3]);
+
+  it("reads past a short page until enough are listed", async () => {
+    const reader = pages(
+      { sessions: rows(10), cursor: "p2" },
+      { sessions: rows(25, 10), cursor: "p3" },
+    );
+    const list = await listSessions(reader, signedIn, "a".repeat(64), signal);
+    expect(list).toMatchObject({ status: "loaded", more: true });
+    expect(list.status === "loaded" && list.sessions).toHaveLength(35);
+    expect(cursors(reader)).toEqual([undefined, "p2"]);
+  });
+
+  it("reads past an empty page, and stops when no cursor remains", async () => {
+    const reader = pages({ sessions: [], cursor: "p2" }, { sessions: rows(3) });
+    expect(
+      await listSessions(reader, signedIn, "a".repeat(64), signal),
+    ).toEqual({
+      status: "loaded",
+      agentId: "agent-1",
+      sessions: rows(3),
+      more: false,
+    });
+    expect(cursors(reader)).toEqual([undefined, "p2"]);
+  });
+
+  it("keeps a session sent on two pages once, counting it once", async () => {
+    const moved = { ...session, sessionId: "s5", updatedAt: 1 };
+    const reader = pages(
+      { sessions: rows(20), cursor: "p2" },
+      // 30 rows, but 29 sessions: one more page is read.
+      { sessions: [moved, ...rows(9, 20)], cursor: "p3" },
+      { sessions: rows(10, 29), cursor: "p4" },
+    );
+    const list = await listSessions(reader, signedIn, "a".repeat(64), signal);
+    if (list.status !== "loaded") throw new Error("not loaded");
+    const ids = list.sessions.map((row) => row.sessionId);
+    expect(ids).toEqual(rows(39).map((row) => row.sessionId));
+    expect(list.sessions[5]).toEqual(rows(20)[5]);
+    expect(cursors(reader)).toEqual([undefined, "p2", "p3"]);
+  });
+
+  it("stops after five pages while a cursor remains", async () => {
+    const reader = pages(
+      ...Array.from({ length: 6 }, (_, index) => ({
+        sessions: rows(1, index),
+        cursor: `p${index + 2}`,
+      })),
+    );
+    const list = await listSessions(reader, signedIn, "a".repeat(64), signal);
+    expect(list).toMatchObject({ status: "loaded", more: true });
+    expect(list.status === "loaded" && list.sessions).toHaveLength(5);
+    expect(cursors(reader)).toEqual([undefined, "p2", "p3", "p4", "p5"]);
+  });
 });

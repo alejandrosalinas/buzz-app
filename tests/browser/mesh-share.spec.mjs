@@ -105,7 +105,7 @@ test("sharing page presents the ladder and supports share/stop at desktop and na
 // Browser-only boundary: real helper-page wiring, keyboard activation and responsive
 // geometry. Creation uses a synthetic service; no host signing claim. Preset
 // payloads, failures and duplicate prevention are covered by MeshHelpers.test.tsx.
-test("main Shared compute helpers disclose authority and create a preset directly", async ({
+test("main Shared compute tools disclose authority and create a preset directly", async ({
   page,
 }, testInfo) => {
   const server = await createServer({
@@ -120,7 +120,7 @@ test("main Shared compute helpers disclose authority and create a preset directl
     await page.goto(
       `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/mesh-share.html`,
     );
-    const helpers = page.getByRole("region", { name: "Helpers", exact: true });
+    const helpers = page.getByRole("region", { name: "Tools", exact: true });
     for (const name of [
       "Media converter",
       "Thread summarizer",

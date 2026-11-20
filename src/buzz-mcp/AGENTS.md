@@ -24,9 +24,10 @@ deliberately.
   `src/features/solo/default-agent.ts`.
 - `session-tools.ts`: what a session lists, each tool's `load` (`always` or
   `search`), and the server instructions that cover the whole tool set.
-- `prompt.md`: the posting conventions every agent gets after the shared base
-  prompt, `src/features/agent-harness/base_prompt.md`. A turn a mention or DM
-  starts also gets `mention_prompt.md` beside it. All of them name tools.
+- `prompt.ts`: the product help line and the turn instructions the tools'
+  routing depends on. How to post is in sections of the shared base prompt,
+  `src/features/agent-harness/sections/`. A turn a mention or DM starts also
+  gets `src/features/agent-harness/mention_prompt.md`. All of them name tools.
 
 ## Interface
 
@@ -45,7 +46,8 @@ mode.
    use `load: "search"` for tools that don't need to load up front.
 3. **Don't bloat descriptions or schemas.** A description says what the tool
    does and anything the model can't guess. Routing, etiquette and workflow
-   guidance go in the server instructions or `prompt.md`, not in every tool.
+   guidance go in the server instructions or the base prompt's sections, not
+   in every tool.
    Describe an argument only when its name and type don't make its meaning
    clear.
 4. **Mark writes accurately** with MCP tool annotations where possible.

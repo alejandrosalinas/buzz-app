@@ -1121,6 +1121,8 @@ test.each([
 test("lost publication receipt stays unknown; reconnect never automatically republishes", async () => {
   const h = await harness();
   let traffic;
+  // Draw no reconnect spread when the authenticated connection drops.
+  const random = vi.spyOn(Math, "random").mockReturnValue(0);
   try {
     browserFetch(h.base);
     const transport = await connectBrokerTransport(h.base);
@@ -1143,6 +1145,7 @@ test("lost publication receipt stays unknown; reconnect never automatically repu
     expect(h.publications).toHaveLength(1);
     expect(h.upstream.some((url) => url.endsWith("/events"))).toBe(false);
   } finally {
+    random.mockRestore();
     traffic?.dispose();
     vi.unstubAllGlobals();
     await h.close();
@@ -1153,6 +1156,8 @@ test("a reconnect's continuous channel replays cross the real HTTP boundary", as
   const h = await harness(0, undefined, { holdAuth: true });
   let traffic;
   const clock = vi.spyOn(Date, "now");
+  // Draw no reconnect spread when the authenticated connection drops.
+  const random = vi.spyOn(Math, "random").mockReturnValue(0);
   try {
     const now = Date.now();
     clock.mockReturnValue(now - 20 * 60_000);
@@ -1188,6 +1193,7 @@ test("a reconnect's continuous channel replays cross the real HTTP boundary", as
       ]),
     );
   } finally {
+    random.mockRestore();
     clock.mockRestore();
     traffic?.dispose();
     vi.unstubAllGlobals();

@@ -1,6 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "rebaseWhen": "conflicted",
+  "postUpdateOptions": ["pnpmDedupe"],
   "packageRules": [
     {
       "description": "Tauri 2 requires the GTK 0.18 native-link and type family.",
@@ -47,10 +49,16 @@
       "allowedVersions": "<0.41"
     },
     {
+      "description": "mdast-util-to-markdown 2.2 drops the attentionEncodeSurroundingInfo state the composer's strikethrough serializer sets.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["mdast-util-to-markdown"],
+      "allowedVersions": "<2.2"
+    },
+    {
       "description": "Upgrade virtua only with a reviewed port of its WebKit scroll patch.",
       "matchManagers": ["npm"],
       "matchPackageNames": ["virtua"],
-      "allowedVersions": "0.53.5"
+      "allowedVersions": "0.54.2"
     },
     {
       "description": "Biome minor releases change formatting and lint results across the tree, so each gets its own PR.",

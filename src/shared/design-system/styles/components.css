@@ -538,6 +538,28 @@
   .buzz-split-button[data-variant="outline"] > .buzz-button:last-of-type {
     margin-inline-start: -1px;
   }
+  /* Ghost splits sit among icon buttons: same corners, one shared hover
+     fill so the two halves read as one control, and a narrow caret half. */
+  .buzz-split-button[data-variant="ghost"] {
+    gap: 0;
+  }
+  .buzz-split-button[data-variant="ghost"] > :where(.buzz-button) {
+    border-radius: var(--radius-icon-button);
+  }
+  /* Low specificity so the hovered or pressed half stays a step stronger. */
+  :where(
+    .buzz-split-button[data-variant="ghost"]:is(
+      :hover,
+      :has([aria-expanded="true"])
+    )
+  ) > .buzz-button:not([data-disabled]) {
+    background: var(--interaction-fill);
+  }
+  .buzz-split-button[data-variant="ghost"]
+    > .buzz-button[aria-haspopup="menu"] {
+    width: auto;
+    padding-inline: var(--space-half);
+  }
   /* The focused half's ring stays above its neighbour. */
   .buzz-split-button > .buzz-button:focus-visible,
   :where(.buzz-dialog) .buzz-split-button > .buzz-button:focus {

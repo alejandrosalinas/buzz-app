@@ -65,7 +65,7 @@ test("feed width survives the Virtua overflow toggle", {
       paragraphWidth: paragraph.getBoundingClientRect().width,
     });
     const before = read();
-    // Mirror patches/virtua@0.53.5.patch interruptMomentum() and its restore.
+    // Mirror patches/virtua@0.54.2.patch interruptMomentum() and its restore.
     const style = element.style;
     const property = "overflow-y";
     const value = style.getPropertyValue(property);

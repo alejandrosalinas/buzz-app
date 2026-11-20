@@ -462,3 +462,18 @@ it.skipIf(process.platform !== "darwin")(
     );
   },
 );
+
+it("reports whether the env sets Claude's custom headers, never their value", async () => {
+  const { home } = await disk([]);
+  const check = (env: Record<string, string>) =>
+    run("bash", ["-c", script, "claude.sh", "inherited-headers"], {
+      env: { PATH: process.env.PATH ?? "", HOME: home, ...env },
+    }) as Promise<{ stdout: string; stderr: string }>;
+  const secret = "x-secret: value";
+  const set = await check({ ANTHROPIC_CUSTOM_HEADERS: secret });
+  expect(set).toEqual({ stdout: "set\n", stderr: "" });
+  await expect(check({})).resolves.toMatchObject({ stdout: "unset\n" });
+  await expect(check({ ANTHROPIC_CUSTOM_HEADERS: "" })).resolves.toMatchObject({
+    stdout: "unset\n",
+  });
+});

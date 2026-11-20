@@ -64,6 +64,7 @@ test("settings share a centered, bounded column and keep controls contained acro
   await expect(
     identity.getByRole("button", { name: "More options", exact: true }),
   ).toBeFocused();
+  await page.getByRole("dialog", { name: "Identity wasn’t copied" }).hover();
   await page
     .getByRole("dialog", { name: "Identity wasn’t copied" })
     .getByRole("button", { name: "Dismiss notification" })

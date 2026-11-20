@@ -216,7 +216,7 @@
     flex: none;
     flex-direction: column;
     align-items: center;
-    padding: var(--space-2) var(--space-2) var(--space-panel-gap);
+    padding: var(--space-2) var(--space-1h) var(--space-panel-gap);
     min-height: 0;
   }
   .shell-dock-pages {
@@ -294,6 +294,10 @@
   .shell-pages {
     @apply flex min-w-0 flex-col gap-1;
   }
+  /* Page navigation can sit in a clipping sidebar. Keep its focus ring inside each row. */
+  html[data-keyboard-navigation] .shell-pages .navigation-item:focus-visible {
+    outline-offset: -2px;
+  }
   /* Matches ChannelSidebarRow's icon box and centers larger avatars around the
      same icon slot without moving the label column. */
   .shell-page-icon {
@@ -345,7 +349,7 @@
   }
   .shell-body {
     @apply relative flex min-h-0 min-w-0 flex-1;
-    padding-inline: var(--space-panel-gap);
+    padding-inline: calc(var(--space-panel-gap) - var(--space-half));
     padding-bottom: var(--space-panel-gap);
   }
   .shell-side-dock ~ .shell-body {
@@ -358,7 +362,8 @@
   }
   .shell-dialog-frame {
     position: absolute;
-    inset: 0 var(--space-panel-gap) var(--space-panel-gap);
+    inset: 0 calc(var(--space-panel-gap) - var(--space-half))
+      var(--space-panel-gap);
     pointer-events: none;
   }
   .shell-dialog-frame > * {
@@ -371,7 +376,8 @@
       position: fixed;
       /* Fixed positioning creates a stacking context; raise it with the dialog. */
       z-index: var(--layer-dialog);
-      inset: var(--size-topbar) var(--space-panel-gap) var(--space-panel-gap);
+      inset: var(--size-topbar) calc(var(--space-panel-gap) - var(--space-half))
+        var(--space-panel-gap);
     }
   }
   .shell-content {
@@ -645,4 +651,44 @@
   .shell-navigation[hidden] {
     display: none;
   }
+}
+
+body:has(.shell-header-mac) .buzz-toast-viewport {
+  --buzz-toast-top-offset: calc(var(--space-3) - var(--space-2));
+}
+
+/* Keep window controls and the workspace header usable during recovery. */
+body:has(.shell-header:not(.shell-header-mac)) .buzz-toast-viewport {
+  --buzz-toast-top-offset: calc(
+    var(--buzz-toast-top-clearance, 0px) +
+    var(--size-panel-header) +
+    var(--space-2)
+  );
+}
+
+/* Integrated window chrome: align the card with the content divider. */
+body:has(.shell-header[data-integrated-window-controls]) .buzz-toast-viewport {
+  --buzz-toast-top-offset: calc(
+    var(--buzz-toast-top-clearance, 0px) +
+    var(--size-panel-header) -
+    var(--space-2)
+  );
+}
+
+/* A file drag resting on a navigation target gives it the sidebar's selected
+   fill and ink, as Finder selects a spring-loaded folder. spring-loaded-drag.ts
+   sets "on", and "off" in the gaps of the blink before the target opens; both
+   apply at once, with no fade. Unlayered so it beats the layered row and
+   button fills. A row whose fill is painted by an element around its button
+   paints that element instead and clears this fill, as the channel sidebar row
+   does. */
+[data-spring-loaded] {
+  transition: none;
+}
+[data-spring-loaded="on"] {
+  --navigation-item-text: var(--text-sidebar-selected);
+  --text-subtle: var(--text-sidebar-selected);
+  --text-metadata: var(--text-sidebar-selected);
+  background-color: var(--surface-sidebar-selected);
+  color: var(--text-sidebar-selected);
 }

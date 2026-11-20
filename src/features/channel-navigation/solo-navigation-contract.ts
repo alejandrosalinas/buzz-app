@@ -146,7 +146,7 @@ export type SoloWorkspaceProps = Readonly<{
   selected?: boolean;
   onSelect?(): void;
   onNewTask?(): void;
-  /** Reveal a moved or externally opened child; selection alone does not expand. */
+  /** @deprecated Legacy no-op. Use the workspace disclosure to open it. */
   reveal?: string;
   dropTarget?: boolean;
   children?: ReactNode;

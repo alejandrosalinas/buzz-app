@@ -403,13 +403,14 @@ for (const nested of [false, true])
             await expect.poll(() => status(page)).toBe("opened");
             await expect(row).toBeFocused();
             await expect(row).toBeInViewport();
+            // The held read may still bring the parent: nothing calls it gone.
             if (nested)
               await expect(
                 thread(page).getByText(
                   "Earlier reply unavailable in loaded history.",
                   { exact: true },
                 ),
-              ).toBeVisible();
+              ).toHaveCount(0);
             originalRow = await row.elementHandle();
             if (moveFocus) await close.focus();
           } finally {

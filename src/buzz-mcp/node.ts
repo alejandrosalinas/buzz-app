@@ -45,23 +45,23 @@ const SHOWN_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 /** The relay's own key, as its NIP-11 document at `relay` advertises it in
  * `self` (the operator-contact `pubkey` is not one): what relay-signed records,
  * such as channel rosters, are checked against.
- * `undefined` when it cannot be learned; the tools that need it then refuse. */
+ * `undefined` when the document advertises none; rejects when the document
+ * cannot be read or its key is unusable, so a caller can tell an outage from a
+ * relay without a key. */
 export async function relayAuthority(relay: string) {
-  try {
-    const response = await fetch(httpBase(relay), {
-      headers: { Accept: "application/nostr+json" },
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) return undefined;
-    const nip11 = (await response.json()) as { self?: unknown } | null;
-    const author = nip11?.self;
-    return typeof author === "string" && /^[0-9a-f]{64}$/.test(author)
-      ? author
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const response = await fetch(httpBase(relay), {
+    headers: { Accept: "application/nostr+json" },
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok)
+    throw new Error(`The relay answered ${response.status} for its key.`);
+  const nip11 = (await response.json()) as { self?: unknown } | null;
+  const author = nip11?.self;
+  if (author === undefined || author === null) return undefined;
+  if (typeof author === "string" && /^[0-9a-f]{64}$/.test(author))
+    return author;
+  throw new Error("The relay advertises an unusable key.");
 }
 
 /** `relayAuthority` that asks again until the relay answers with a key, then
@@ -70,8 +70,10 @@ export function relayAuthorityLookup(relay: string) {
   let known: string | undefined;
   return async () => {
     if (known) return known;
-    // An overlapping lookup may have learned the key while this one failed.
-    const found = await relayAuthority(relay);
+    const found = await relayAuthority(relay).catch((error: unknown) => {
+      if (known) return known;
+      throw error;
+    });
     known ??= found;
     return known;
   };

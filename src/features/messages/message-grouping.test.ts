@@ -67,6 +67,18 @@ it("keeps thread shares separate from adjacent authored messages", () => {
   expect(continuesMessageGroup(shared, first)).toBe(false);
 });
 
+it("keeps a verified relayed message out of its signer's group", () => {
+  const relayed = (verified: boolean) => ({
+    ...first,
+    id: "relayed",
+    relayedFrom: { agent: "agent", verified },
+  });
+  expect(continuesMessageGroup(first, relayed(true))).toBe(false);
+  expect(continuesMessageGroup(relayed(true), first)).toBe(false);
+  // Unverified, it is the signer's ordinary message.
+  expect(continuesMessageGroup(first, relayed(false))).toBe(true);
+});
+
 it("keeps automation bylines on every row, even for a common signer and owner", () => {
   const workflow = { ...first, workflowOwnerId: "owner" };
   expect(continuesMessageGroup(first, workflow)).toBe(false);

@@ -229,6 +229,7 @@ it("clears one draft's text and files, and keeps both when storage can't forget 
   saved(`draft:team:thread:${root}`, { text: "Thread caption" });
   attach("draft:team");
   attach(`draft:team:thread:${root}`);
+  writeView(scope, "draft:team:files", [{ name: "notes.txt" }]);
 
   const remove = vi
     .spyOn(Storage.prototype, "removeItem")
@@ -241,6 +242,7 @@ it("clears one draft's text and files, and keeps both when storage can't forget 
   clearDraft(files, "draft:team");
   expect(count("draft:team")).toBe(0);
   expect(viewRevision(scope, "draft:team")).toBeNull();
+  expect(viewRevision(scope, "draft:team:files")).toBeNull();
   expect(count(`draft:team:thread:${root}`)).toBe(1);
   expect(viewRevision(scope, `draft:team:thread:${root}`)).not.toBeNull();
 });

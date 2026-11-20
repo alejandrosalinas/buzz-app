@@ -352,7 +352,7 @@ test("profiles primary actions through production broker and built app", async (
   await page.getByText("Diagnostics", { exact: true }).click();
   await page
     .getByRole("button", {
-      name: "Mark read through loaded messages",
+      name: "Mark as read through loaded messages",
       exact: true,
     })
     .click();

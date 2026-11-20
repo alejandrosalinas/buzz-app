@@ -1,6 +1,7 @@
 import {
   cloneElement,
   useEffect,
+  useLayoutEffect,
   useState,
   useSyncExternalStore,
   type HTMLAttributes,
@@ -9,6 +10,10 @@ import {
 import type { RelaySession } from "../relay/session";
 import { useReactionName } from "../messages/use-reaction-name";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
+import {
+  useReadyImage,
+  type ReadyImage,
+} from "../../shared/design-system/useReadyImage";
 import styles from "./Status.module.css";
 
 /** An emoji's `:name:`. A custom code names itself; Unicode names load with the
@@ -88,18 +93,27 @@ export function StatusEmoji({
     </span>
   );
   if (source)
-    return named(
-      <img
-        className={styles.emoji}
-        src={source}
-        alt={decorative ? "" : value}
-        aria-hidden={decorative || undefined}
-        width={20}
-        height={20}
-        draggable={false}
-        referrerPolicy="no-referrer"
-        onError={() => setFailed((list) => [...list, source])}
-      />,
+    return (
+      <StatusImage
+        key={source}
+        source={source}
+        onFailed={() => setFailed((list) => [...list, source])}
+      >
+        {(image) =>
+          named(
+            <img
+              {...image}
+              className={styles.emoji}
+              alt={decorative ? "" : value}
+              aria-hidden={decorative || undefined}
+              width={20}
+              height={20}
+              draggable={false}
+              referrerPolicy="no-referrer"
+            />,
+          )
+        }
+      </StatusImage>
     );
   if (!code)
     return value ? named(glyph(value)) : fallback ? glyph(fallback) : null;
@@ -120,4 +134,21 @@ export function StatusEmoji({
       {value}
     </span>
   );
+}
+
+function StatusImage({
+  source,
+  onFailed,
+  children,
+}: {
+  source: string;
+  onFailed: () => void;
+  children: (image: ReadyImage["image"]) => ReactElement;
+}) {
+  const ready = useReadyImage(source, "eager");
+  // Switch to the next source, or the glyph, before the empty frame paints.
+  useLayoutEffect(() => {
+    if (ready.status === "failed") onFailed();
+  }, [ready.status, onFailed]);
+  return ready.status === "failed" ? null : children(ready.image);
 }

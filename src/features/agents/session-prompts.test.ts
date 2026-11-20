@@ -52,6 +52,25 @@ it("keeps every session's first save, each text once", async () => {
   expect(sessionPrompts(storage, "pi", AGENT).get("one")).toBeUndefined();
 });
 
+it("adds what a kept session was sent later, and nothing to one that is not kept", async () => {
+  const prompts = sessionPrompts(memory(), "codex", AGENT);
+  const first = { label: "base", text: "the first prompt" };
+  const later = { label: "base-section-updates later", text: "## Progress" };
+  await prompts.add("one", later);
+  expect(prompts.get("one")).toBeUndefined();
+  await prompts.save("one", [first], { at: 1, title: "One" });
+  await prompts.add("one", later);
+  await prompts.add("one", { label: "empty", text: "" });
+  expect(prompts.get("one")).toEqual([first, later]);
+  expect(prompts.sessions()).toEqual([{ id: "one", at: 1, title: "One" }]);
+  // Nor a piece that takes the session over the budget alone.
+  await prompts.add("one", {
+    label: "base-section-updates huge",
+    text: "x".repeat(PROMPTS_BUDGET),
+  });
+  expect(prompts.get("one")).toEqual([first, later]);
+});
+
 it("keeps when each session started and its title, alongside ones saved without", async () => {
   const prompts = sessionPrompts(memory(), "goose", AGENT);
   await prompts.save("old", [{ label: "", text: "a" }]);

@@ -269,6 +269,8 @@ export type WriteOptions = Readonly<{
   /** A timer rearm: its deadline is set from `armed_at` even when that is
    * unchanged, keeping the occurrences used. */
   rearm?: boolean;
+  /** Internal helpers may transfer a watch atomically, scoped to its current Interest. */
+  move?: boolean;
 }>;
 
 /** The record after one checked write: replaces (or with `null` removes) the
@@ -277,7 +279,7 @@ export async function checkedWrite(
   record: AgentRecord,
   slug: string,
   value: AttentionValue | null,
-  { expected, interest, rearm }: WriteOptions,
+  { expected, interest, rearm, move }: WriteOptions,
   now: number,
 ): Promise<AgentRecord> {
   const parsed = parseSlug(slug);
@@ -337,7 +339,8 @@ export async function checkedWrite(
     value &&
     prior.type !== "interest" &&
     value.type !== "interest" &&
-    prior.interest_id !== value.interest_id
+    prior.interest_id !== value.interest_id &&
+    !move
   )
     throw new AttentionError(
       "invalid-operation",

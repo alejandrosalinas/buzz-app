@@ -76,9 +76,30 @@ const relay = {
   snapshot: () => connection,
   subscribe: () => () => {},
 } as unknown as RelayData;
+// A recorded cost on three of the last seven days, so the Cost row shows its
+// sparkline, total and Open Usage at the panel's widths.
+const DAY = 86_400_000;
+const request = (ago: number, usd: number) => ({
+  at: Date.now() - ago * DAY,
+  model: "claude-sonnet-5-5",
+  tokens: {},
+  cost: { usd, source: "recorded" },
+});
+const sessions = [
+  {
+    id: "week",
+    revision: "week",
+    gaps: [],
+    startedAt: Date.now() - 5 * DAY,
+    lastAt: Date.now(),
+    observations: [request(5, 1.25), request(2, 0.4), request(0, 2.1)],
+  },
+];
 const agents = {
   save: async () => {},
-  types: () => [{ key: "claude-code", adopt: () => ({}) }],
+  types: () => [
+    { key: "claude-code", adopt: () => ({}), usage: async () => sessions },
+  ],
   // Both are on this device, so neither is asked about as remote.
   find: (pubkey: string) =>
     [ADA, BEA].includes(pubkey) ? { pubkey, place: "here" } : undefined,
@@ -103,7 +124,15 @@ const agent = {
     ),
   },
 } as unknown as Agent;
-const tab = (former ? formerBestieTab : bestieTab)(relay, agents);
+const navigation = { open: async () => {} };
+// Usage is on, so the row offers Open Usage too.
+const settingsCards = { has: () => true, subscribe: () => () => {} };
+const tab = (former ? formerBestieTab : bestieTab)(
+  relay,
+  agents,
+  navigation,
+  settingsCards,
+);
 const Tab = tab.component;
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");

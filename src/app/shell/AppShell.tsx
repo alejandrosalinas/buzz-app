@@ -1,3 +1,4 @@
+import { useToastClearance } from "../../shared/design-system/ui/Toast";
 import { ActivityNavigationProvider } from "./ActivityNavigation";
 import { PageNavigation } from "./PageNavigation";
 import {
@@ -146,6 +147,7 @@ function AppShellContent({
   children: ReactNode;
 }) {
   const header = useRef<HTMLElement>(null);
+  useToastClearance(header);
   const historyRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -264,18 +266,21 @@ function AppShellContent({
   // sidebar subtree instead of re-rendering every row on each click.
   const navigation = useMemo(() => {
     // Sidebars retain their documented app-link and creation slots.
+    const sidebarPages = orderPages(
+      pages.filter((page) => pagePlacement(page) === "sidebar"),
+    );
     const content = sidebar
       ? sidebar(
-          <nav aria-label="Pages" className="shell-pages">
-            <PageNavigation
-              pages={orderPages(
-                pages.filter((page) => pagePlacement(page) === "sidebar"),
-              )}
-              selected={selected}
-              onSelect={onSelect}
-              previews
-            />
-          </nav>,
+          sidebarPages.length > 0 && (
+            <nav aria-label="Pages" className="shell-pages">
+              <PageNavigation
+                pages={sidebarPages}
+                selected={selected}
+                onSelect={onSelect}
+                previews
+              />
+            </nav>
+          ),
           creationInNavigation ? <div ref={setCreationContainer} /> : null,
         )
       : null;
@@ -306,6 +311,9 @@ function AppShellContent({
       </a>
       <header
         ref={header}
+        data-integrated-window-controls={
+          hasIntegratedWindowControls() || undefined
+        }
         data-buzz-window-drag={
           macDesktop || hasIntegratedWindowControls() || undefined
         }

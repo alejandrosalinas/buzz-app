@@ -44,28 +44,40 @@ export function useFileDrop(
     const zone =
       form?.closest<HTMLElement>("[data-attachment-drop-zone]") ?? form;
     if (!zone) return;
-    let depth = 0;
+    // The node under the drag tells a real leave from a child boundary. A zone
+    // that mounts under a drag already in progress never sees it enter, so
+    // dragover records the node too.
+    let under: EventTarget | null = null;
     const files = (event: DragEvent) =>
       event.dataTransfer?.types.includes("Files");
     const owns = (event: DragEvent) =>
       event.target instanceof Element &&
       (event.target.closest("[data-attachment-drop-zone]") ?? form) === zone;
     const reset = () => {
-      depth = 0;
+      under = null;
       setDragging(false);
     };
     const enter = (event: DragEvent) => {
-      if (!files(event) || !owns(event)) return;
+      if (!files(event)) return;
+      // Entering a nested zone hands the drag to that zone.
+      if (!owns(event)) {
+        under = null;
+        return;
+      }
       event.preventDefault();
-      depth++;
+      under = event.target;
       setDragging(enabled);
     };
     const leave = (event: DragEvent) => {
       if (!files(event) || !owns(event)) return;
-      if (--depth <= 0) reset();
+      // Entering a child reports the child first, then this leave of its parent.
+      // No node here means the drag has just entered a nested zone, which
+      // cleared it: this leave of our own node hands the drag to that zone.
+      if (!under || under === event.target) reset();
     };
     const over = (event: DragEvent) => {
       if (!files(event) || !owns(event)) return;
+      under = event.target;
       setDragging(enabled);
       event.preventDefault();
       if (event.dataTransfer)

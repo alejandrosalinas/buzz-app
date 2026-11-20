@@ -22,13 +22,16 @@ export type RecommendedPickState<T extends RecommendedHarness> =
       note: string | undefined;
     }>;
 
-/** The first candidate one of `types` can run here now, found once. */
+/** The first candidate one of `types` can run here now, found once, and
+ * again each time `asked` changes, such as after a harness was set up. The
+ * last answer stands until the next one arrives. */
 export function useRecommendedPick<T extends RecommendedHarness>(
   types: readonly T[],
   enabled = true,
+  asked = 0,
 ): RecommendedPickState<T> {
   const [found, setFound] = useState<RecommendedPick<T> | null>();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Read once, as its view opens.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Read as its view opens and when asked again.
   useEffect(() => {
     if (!enabled) return;
     let current = true;
@@ -38,7 +41,7 @@ export function useRecommendedPick<T extends RecommendedHarness>(
     return () => {
       current = false;
     };
-  }, []);
+  }, [asked]);
   if (!enabled) return { status: "off" };
   if (found === undefined) return { status: "checking" };
   return found

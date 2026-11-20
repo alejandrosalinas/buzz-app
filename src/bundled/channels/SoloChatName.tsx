@@ -14,11 +14,15 @@ export function SoloChatName({
   session,
   id,
   title,
+  className,
+  onAbandon,
   close,
 }: {
   session: RelaySession;
   id: string;
   title: string;
+  className?: string | undefined;
+  onAbandon?: (() => void) | undefined;
   close(focus: boolean): void;
 }) {
   const present = useIsPresent();
@@ -28,6 +32,8 @@ export function SoloChatName({
   const active = useRef(true);
   const saving = useRef(false);
   const selectedInitialName = useRef(false);
+  const abandon = useRef(onAbandon);
+  abandon.current = onAbandon;
   useEffect(() => {
     active.current = true;
     return () => {
@@ -37,6 +43,14 @@ export function SoloChatName({
   useLayoutEffect(() => {
     input.current?.focus();
     input.current?.select();
+    const editor = form.current;
+    return () => {
+      if (!active.current || !editor?.contains(document.activeElement)) return;
+      queueMicrotask(() => {
+        if (!editor.isConnected && document.activeElement === document.body)
+          abandon.current?.();
+      });
+    };
   }, []);
   useEffect(() => {
     if (!name.base || selectedInitialName.current) return;
@@ -78,7 +92,9 @@ export function SoloChatName({
   return (
     <form
       ref={form}
-      className={styles.nameEditor}
+      className={
+        className ? `${styles.nameEditor} ${className}` : styles.nameEditor
+      }
       aria-label={`Rename ${title}`}
       aria-busy={(!name.base && !name.error) || name.busy}
       onSubmit={(event) => {

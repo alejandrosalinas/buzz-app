@@ -322,6 +322,8 @@ it("a report notice expiring behind the image viewer keeps the row pinned for th
   await act(() => vi.advanceTimersByTimeAsync(0));
   expect(notice()).not.toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(5000));
+  expect(notice()?.closest("[inert]")).toBeTruthy();
+  await act(() => vi.advanceTimersByTimeAsync(200));
   expect(notice()).toBeNull();
   // The notice's deferred release has run; the viewer's hold must remain.
   await act(() => vi.runOnlyPendingTimersAsync());

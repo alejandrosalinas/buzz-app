@@ -4,6 +4,14 @@ import type { JsonValue, OpenTarget } from "../navigation/targets";
 import { splitPartition } from "../relay/partition";
 import { regionLabels } from "../solo/region-labels";
 import type { SoloDraftStart } from "./solo-navigation-contract";
+import { newMessage } from "./new-message-route";
+
+export {
+  type MessageIntent,
+  newMessage,
+  newMessageTarget,
+  nextMessageIntent,
+} from "./new-message-route";
 
 /** An unsent Solo conversation: nothing exists on the relay until its first send. */
 export type SoloDraft = Readonly<{
@@ -92,7 +100,7 @@ export function soloDraft(
 
 export function isChannelRoute(params: JsonValue) {
   return (
-    params === "new-message" ||
+    newMessage(params) !== undefined ||
     params === "empty" ||
     soloDraft(params) !== undefined
   );

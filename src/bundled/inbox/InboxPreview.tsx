@@ -24,11 +24,17 @@ import {
 import { communityRefusalTitle } from "../../features/federated-identity/CommunitySignIn";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
-import { ArrowRightIcon, ChecksIcon } from "../../shared/design-system/icons";
+import {
+  ArrowRightIcon,
+  ChecksIcon,
+  EnvelopeOpenIcon,
+} from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
+import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { Switch } from "../../shared/design-system/ui/Switch";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { readView, writeView } from "../../shared/view-state";
 import {
   hasUnread,
@@ -37,7 +43,11 @@ import {
   rowIdentity,
   rowProfileIds,
 } from "./InboxRow";
+import { withMentionedIds } from "../../features/messages/PreviewText";
+import { activityConversation, useActivityMutes } from "./useActivityMutes";
 import { inboxTarget } from "./route";
+import type { InboxItem } from "../../features/relay/inbox";
+import listRowStyles from "../../features/messages/MessageListRow.module.css";
 import styles from "./InboxPreview.module.css";
 
 /** Rows the card renders and enriches; the Activity page holds the rest. */
@@ -58,6 +68,16 @@ const shortAge = (createdAt: number, now = Date.now()) => {
     day: "numeric",
   });
 };
+
+/** The row's explicit read, as Activity's Mark as read saves it. */
+async function readRow(session: RelaySession, item: InboxItem) {
+  if (item.target.kind === "channel")
+    await session.unread.prepareChannelRead(item.channelId)();
+  else if (item.timeline)
+    await session.unread.markTimelineRead(item.channelId, item.messageIds);
+  // One intent across its steps: a newer Mark as unread stops the rest.
+  else await session.unread.markReadThrough(item.readThrough);
+}
 
 /** Recent activity, shown while the pointer rests on the sidebar's Activity row. */
 export function InboxPreview({
@@ -112,6 +132,7 @@ function InboxPreviewCard({
   navigator: Navigation;
 }) {
   const list = useChannelList(session.channels);
+  const muted = useActivityMutes(session);
   const inbox = useSyncExternalStore(
     session.unread.subscribeInbox,
     session.unread.inbox,
@@ -161,16 +182,26 @@ function InboxPreviewCard({
   }, [session, list.status, list.asOf, refreshAfterRoster]);
   const channelOf = (channelId: string) =>
     list.channels.find((channel) => channel.id === channelId);
-  const recent = [...inbox.items].sort(
-    (a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id),
-  );
+  const recent = inbox.items
+    .map((item) => activityConversation(item, muted))
+    .filter((item) => item !== undefined)
+    .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
   const unread = recent.filter(hasUnread);
   const rows = [
     ...(unreadOnly ? unread : recent).map((item) => ({
       kind: "conversation" as const,
       item,
     })),
-    ...(!unreadOnly ? reactionRows(reactions.items) : []).map((item) => ({
+    ...(!unreadOnly
+      ? reactionRows(
+          reactions.items.filter(
+            (item) =>
+              !muted.has(item.channelId) ||
+              channelOf(item.channelId)?.channelType === "dm",
+          ),
+        )
+      : []
+    ).map((item) => ({
       kind: "reaction" as const,
       item,
     })),
@@ -181,19 +212,20 @@ function InboxPreviewCard({
         a.item.id.localeCompare(b.item.id),
     )
     .slice(0, maxRows);
-  const profileKey = [
-    ...new Set(
-      rows.flatMap((row) => [
-        ...(row.kind === "reaction"
-          ? row.item.events.map((event) => event.pubkey)
-          : [row.item.authorId]),
-        ...rowProfileIds(
-          row.kind === "reaction" ? {} : row.item,
-          channelOf(row.item.channelId),
-        ),
-      ]),
+  const profileKey = withMentionedIds(
+    rows.flatMap((row) => [
+      ...(row.kind === "reaction"
+        ? row.item.events.map((event) => event.pubkey)
+        : [row.item.authorId]),
+      ...rowProfileIds(
+        row.kind === "reaction" ? {} : row.item,
+        channelOf(row.item.channelId),
+      ),
+    ]),
+    rows.map((row) =>
+      row.kind === "reaction" ? row.item.message : row.item.previewMentions,
     ),
-  ]
+  )
     .sort()
     .join(":");
   const profileIds = useMemo(
@@ -243,6 +275,56 @@ function InboxPreviewCard({
     await session.unread.retrySync();
   };
   const unreadOnlyControl = useRef<HTMLElement>(null);
+  const notify = useToastNotification();
+  const listRef = useRef<HTMLUListElement>(null);
+  const [reading, setReading] = useState<ReadonlySet<string>>(new Set());
+  const canRead = sync.capability === "frontier-sync";
+  /** Mark as read keeps focus in the card when its action leaves: on its
+   * row, which stays read, or when Unread only drops the row, on a neighbor. */
+  const previewRows = () => [
+    ...(listRef.current?.querySelectorAll<HTMLElement>("[data-preview-row]") ??
+      []),
+  ];
+  const markRead = async (item: InboxItem) => {
+    if (reading.has(item.id)) return;
+    const before = previewRows();
+    const held = before.some(
+      (row) =>
+        row.dataset.previewRow === item.id &&
+        row.contains(document.activeElement),
+    );
+    const order = before.map((row) => row.dataset.previewRow);
+    const index = order.indexOf(item.id);
+    setReading((current) => new Set(current).add(item.id));
+    try {
+      await readRow(session, item);
+    } catch {
+      notify("Couldn't mark as read", "error");
+    } finally {
+      setReading((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    }
+    if (!held) return;
+    requestAnimationFrame(() => {
+      // Only focus the action took with it when it left: a failed read keeps
+      // its action, and focus elsewhere stays where the user put it. When
+      // Unread only empties the list, Unread only takes focus.
+      const focused = document.activeElement;
+      if (focused && focused !== document.body) return;
+      const rows = previewRows();
+      const row = [item.id, order[index + 1], order[index - 1]]
+        .map((id) =>
+          rows
+            .find((entry) => entry.dataset.previewRow === id)
+            ?.querySelector<HTMLElement>("button"),
+        )
+        .find(Boolean);
+      (row ?? unreadOnlyControl.current)?.focus({ preventScroll: true });
+    });
+  };
   const retryFocus = useRef(false);
   const retryButton = useCallback((button: HTMLButtonElement | null) => {
     if (!button) return;
@@ -266,7 +348,7 @@ function InboxPreviewCard({
   let threads = 0;
   for (const item of unread) {
     if (channelOf(item.channelId)?.channelType === "dm") dms++;
-    else if (item.mention && hasUnread(item.mention)) mentions++;
+    else if (item.mentioned && hasUnread(item.mention ?? item)) mentions++;
     else if (item.thread) threads++;
   }
   const kinds = [
@@ -318,11 +400,24 @@ function InboxPreviewCard({
         </div>
       )}
       {rows.length ? (
-        <ul className={styles.list} aria-label="Recent activity">
+        <ul ref={listRef} className={styles.list} aria-label="Recent activity">
           {rows.map((row) => {
             const item = row.item;
+            const identity =
+              row.kind === "conversation"
+                ? rowIdentity(
+                    row.item,
+                    channelOf(item.channelId),
+                    profiles,
+                    name,
+                  )
+                : undefined;
             return (
-              <li key={item.id}>
+              <li
+                key={item.id}
+                className={listRowStyles.unreadActionHost}
+                data-preview-row={item.id}
+              >
                 {row.kind === "reaction" ? (
                   <ReactionRowButton
                     item={row.item}
@@ -334,19 +429,33 @@ function InboxPreviewCard({
                     onClick={() => open(row)}
                   />
                 ) : (
-                  <InboxRowButton
-                    item={row.item}
-                    identity={rowIdentity(
-                      row.item,
-                      channelOf(item.channelId),
-                      profiles,
-                      name,
-                    )}
-                    media={session.media}
-                    feed={feed}
-                    time={shortAge(item.createdAt)}
-                    onClick={() => open(row)}
-                  />
+                  identity && (
+                    <>
+                      <InboxRowButton
+                        item={row.item}
+                        identity={identity}
+                        session={session}
+                        feed={feed}
+                        time={shortAge(item.createdAt)}
+                        onClick={() => open(row)}
+                      />
+                      {canRead && hasUnread(row.item) && (
+                        <span className={listRowStyles.unreadAction}>
+                          <IconButton
+                            size="sm"
+                            variant="ghost"
+                            loading={reading.has(item.id)}
+                            aria-label={`Mark as read ${identity.sender} in ${identity.context}`}
+                            title="Mark as read"
+                            onClick={() => void markRead(row.item)}
+                            icon={
+                              <EnvelopeOpenIcon size={16} aria-hidden="true" />
+                            }
+                          />
+                        </span>
+                      )}
+                    </>
+                  )
                 )}
               </li>
             );

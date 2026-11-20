@@ -16,7 +16,7 @@ import {
 import type { LiveCallbacks } from "./live";
 import type { ReadFilter } from "./events";
 import type { HeadPersistence, SavedHead } from "./persistence";
-import { rowProfileIds } from "./membership";
+import { diffPreview, rowProfileIds } from "./membership";
 
 const relay = keypair(),
   viewer = keypair(),
@@ -84,6 +84,15 @@ it("admits only recognized, channel-scoped relay-authored membership payloads", 
       }),
     ]),
   ).toEqual([]);
+});
+
+it.each([
+  [{}, "Diff: patch"],
+  [{ filePath: "a.ts" }, "Diff: a.ts"],
+  [{ description: "Greet" }, "Diff: patch — Greet"],
+  [{ filePath: "a.ts", description: "Greet" }, "Diff: a.ts — Greet"],
+])("summarises a diff with %j as %s", (fields, summary) => {
+  expect(diffPreview({ ...fields, truncated: false })).toBe(summary);
 });
 
 /** Take the pending read `match` selects, in whatever order the store issued it. */

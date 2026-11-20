@@ -417,3 +417,24 @@ function processes(list: (params: Record<string, unknown>) => unknown) {
     };
   };
 }
+
+it("keeps a rootless community wake as the usage origin before later channel work", () => {
+  const wake = message(
+    1,
+    "user",
+    `<context>\n${JSON.stringify({ agent, session_scope: "community" })}\n</context>\ncheck`,
+  );
+  const initial = [instructions(), wake, record(1000, 100, 0, 10)];
+  const first = rolloutUsage("shared", initial.join("\n"), [], sol);
+  expect(first?.observations).toHaveLength(1);
+  expect(first?.channelId).toBeUndefined();
+  const later = rolloutUsage(
+    "shared",
+    [...initial, prompt, record(2000, 100, 0, 10)].join("\n"),
+    [],
+    sol,
+  );
+  expect(later?.observations).toHaveLength(2);
+  expect(later?.channelId).toBeUndefined();
+  expect(later?.root).toBeUndefined();
+});

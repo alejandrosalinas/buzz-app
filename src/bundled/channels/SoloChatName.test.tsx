@@ -15,6 +15,7 @@ afterEach(cleanup);
 function setup(overrides: Partial<ChannelDetailsCapability> = {}) {
   const save = vi.fn(async () => {});
   const close = vi.fn();
+  const channels = { subscribeList: () => () => {} };
   const details: ChannelDetailsCapability = {
     available: true,
     load: vi.fn(async () => ({
@@ -36,7 +37,9 @@ function setup(overrides: Partial<ChannelDetailsCapability> = {}) {
   render(
     <>
       <SoloChatName
-        session={{ channelDetails: details } as RelaySession}
+        session={
+          { channels, channelDetails: details } as unknown as RelaySession
+        }
         id="chat"
         title="Plan"
         close={close}
@@ -44,7 +47,7 @@ function setup(overrides: Partial<ChannelDetailsCapability> = {}) {
       <button type="button">Elsewhere</button>
     </>,
   );
-  return { save, close, details, user: userEvent.setup() };
+  return { save, close, details, channels, user: userEvent.setup() };
 }
 
 it.each(["", "Plan"])(
@@ -78,6 +81,8 @@ it("saves on click-away without taking focus back from the destination", async (
       labels: ["buzz.solo"],
     }),
     expect.any(AbortSignal),
+    undefined,
+    f.channels,
   );
   expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
 });

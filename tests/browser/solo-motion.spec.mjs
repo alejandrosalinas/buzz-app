@@ -27,15 +27,17 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
 }) => {
   await page.goto(app.origin);
   await newChat(page);
-  const sidebar = page.getByRole("navigation", { name: "Solo conversations" });
-  const rows = sidebar.locator("button[data-solo-channel-id]:not([inert] *)");
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const rows = sidebar.locator(
+    "button[data-solo-destination-id]:not([inert] *)",
+  );
   await expect(rows).toHaveCount(5);
   const original = await rows.evaluateAll((rows) =>
-    rows.map((row) => row.dataset.soloChannelId),
+    rows.map((row) => row.dataset.soloDestinationId),
   );
   const nearby = original[1];
   const distant = original.at(-1);
-  const row = sidebar.locator(`[data-solo-channel-id="${nearby}"]`);
+  const row = sidebar.locator(`[data-solo-destination-id="${nearby}"]`);
   await row.focus();
   const control = await row.evaluateHandle((element) => {
     const animate = Element.prototype.animate;
@@ -44,7 +46,7 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
     Element.prototype.animate = function (...args) {
       const animation = animate.apply(this, args);
       if (
-        this.firstElementChild?.hasAttribute("data-solo-menu-id") &&
+        this.firstElementChild?.hasAttribute("data-channel-sidebar-row") &&
         animation.effect.getKeyframes().some((frame) => "transform" in frame)
       ) {
         animations.push(animation);
@@ -60,12 +62,17 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
   });
   try {
     app.activity({ channel: nearby, kind: 45003, age: 2 });
-    await expect(rows.first()).toHaveAttribute("data-solo-channel-id", nearby);
+    await expect(rows.first()).toHaveAttribute(
+      "data-solo-destination-id",
+      nearby,
+    );
     await expect
       .poll(() => control.evaluate(({ animations }) => animations.length))
       .toBeGreaterThan(0);
     const geometry = await row.evaluate((element) => {
-      const wrapper = element.closest("[data-solo-menu-id]").parentElement;
+      const wrapper = element.closest(
+        "[data-channel-sidebar-row]",
+      ).parentElement;
       const transform = new DOMMatrixReadOnly(
         getComputedStyle(wrapper).transform,
       );
@@ -89,10 +96,12 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
         if (animation.playState === "paused") animation.finish();
     });
     await expect(sidebar.locator("[data-moving]")).toHaveCount(0);
-    const far = sidebar.locator(`[data-solo-channel-id="${distant}"]`);
+    const far = sidebar.locator(`[data-solo-destination-id="${distant}"]`);
     await far.focus();
     await far.evaluate((element) => {
-      const wrapper = element.closest("[data-solo-menu-id]").parentElement;
+      const wrapper = element.closest(
+        "[data-channel-sidebar-row]",
+      ).parentElement;
       window.soloMotion = { element, frames: [], done: false };
       const sample = () => {
         const state = window.soloMotion;
@@ -108,9 +117,12 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
       sample();
     });
     app.activity({ channel: distant, kind: 45003, age: 1 });
-    await expect(rows.first()).toHaveAttribute("data-solo-channel-id", distant);
+    await expect(rows.first()).toHaveAttribute(
+      "data-solo-destination-id",
+      distant,
+    );
     await expect(
-      sidebar.locator(`[data-solo-menu-id="${distant}"]`).locator(".."),
+      far.locator("xpath=ancestor::*[@data-channel-sidebar-row]/.."),
     ).toHaveCSS("opacity", "1");
     const result = await far.evaluate((element) => {
       const state = window.soloMotion;
@@ -137,12 +149,12 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
       ({ animations }) => animations.length,
     );
     const immediate = sidebar.locator(
-      `[data-solo-channel-id="${original[0]}"]`,
+      `[data-solo-destination-id="${original[0]}"]`,
     );
     await immediate.focus();
     app.activity({ channel: original[0], kind: 45003 });
     await expect(rows.first()).toHaveAttribute(
-      "data-solo-channel-id",
+      "data-solo-destination-id",
       original[0],
     );
     expect(await control.evaluate(({ animations }) => animations.length)).toBe(
@@ -151,7 +163,7 @@ test("slides nearby activity, fades distant activity and honors live reduced mot
     await expect(sidebar.locator("[data-moving]")).toHaveCount(0);
     await expect(immediate).toBeFocused();
     await expect(
-      sidebar.locator(`[data-solo-menu-id="${original[0]}"]`).locator(".."),
+      immediate.locator("xpath=ancestor::*[@data-channel-sidebar-row]/.."),
     ).toHaveCSS("opacity", "1");
   } finally {
     await control.evaluate(({ animate, animations }) => {

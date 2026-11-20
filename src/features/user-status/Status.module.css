@@ -135,6 +135,9 @@
   width: 100%;
   min-width: 0;
   overflow: hidden;
+  /* Emoji ink can rise above the line box; keep room inside the clip and mask. */
+  padding-block: var(--space-1);
+  margin-block: calc(-1 * var(--space-1));
   text-align: start;
 }
 .tickerTrack {

@@ -1,10 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useLayoutEffect,
-  useEffectEvent,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import {
   NavigationCard,
   NavigationItem,
@@ -58,10 +52,6 @@ export function RegionWorkspace(props: SoloWorkspaceProps) {
   const workspace = parts?.workspaces.find(
     (item) => item.id === (props.id ?? ""),
   );
-  const reveal = useEffectEvent(() => workspace?.toggle(true));
-  useLayoutEffect(() => {
-    if (props.reveal) reveal();
-  }, [props.reveal]);
   if (!workspace || !props.id) return null;
   const title = props.id ? workspace.name : "Unfiled";
   const disclosure = (

@@ -28,10 +28,11 @@ export {
  * when a session first needs it, and again after it exits. Its own process,
  * so its environment carries only this agent's Buzz credential. */
 export class AgentProcess {
-  private ready: Promise<GooseProcess> | undefined;
-  /** The process `ready` started, kept until it exits, even when its start
-   * failed. */
-  private process: GooseProcess | undefined;
+  /** The start new sessions use. */
+  private current: Start | undefined;
+  /** Every start whose process has not exited, even when its start failed
+   * or a newer one replaced it, so `shutdown` stops each. */
+  private readonly starts = new Set<Start>();
   constructor(
     private readonly host: GooseHost,
     /** Starts a session's MCP server for its agent's tools. */
@@ -41,79 +42,123 @@ export class AgentProcess {
     private readonly agent: () =>
       | Readonly<{ pubkey: string; relay: string }>
       | undefined = () => undefined,
+    /** The context size, in tokens, its sessions compact at. */
+    private readonly compactAt: () => number | undefined = () => undefined,
   ) {}
 
   /** The running process. One that failed to start is started again on the
-   * next call once it has exited. */
-  get(): Promise<GooseProcess> {
+   * next call once it has exited. One started with another compaction limit
+   * is left to its sessions, which stop it once none needs it, or stopped
+   * first when `drained` says none does, so it holds no process slot. */
+  get(
+    drained: (process: GooseProcess) => boolean = () => false,
+  ): Promise<GooseProcess> {
     this.protection?.assertAvailable();
-    if (this.ready) return this.ready;
+    const limit = this.compactAt();
+    if (this.current && limit === this.current.limit) return this.current.ready;
+    const previous = this.current;
+    const old = previous?.process;
+    const stopped =
+      old && drained(old)
+        ? old
+            .kill()
+            .then(() => old.exited)
+            .catch(() => undefined)
+        : undefined;
     const agent = this.agent();
-    const ready = (async () => {
-      const bridge =
-        this.protection &&
-        (await nativeProtectionBridge(this.serve, this.protection));
-      try {
-        const goose = await GooseProcess.start(
-          (id, options) =>
-            this.protection
-              ? this.protection.spawn(options ?? {})
-              : this.host.spawn(id, options),
-          {
-            cwd: await this.host.resolveDirectory("~"),
-            serve: this.serve,
-            onProcess: (goose) => (this.process = goose),
-            ...(agent && {
-              agent: { pubkey: agent.pubkey, relay: agent.relay },
-            }),
-            ...(bridge && {
-              protected: true,
-              env: {
-                ...bridge.env,
-                BASH_ENV: null,
-                ENV: null,
-                DYLD_INSERT_LIBRARIES: null,
-                DYLD_LIBRARY_PATH: null,
-                DYLD_FRAMEWORK_PATH: null,
-                LD_PRELOAD: null,
-                LD_LIBRARY_PATH: null,
+    const start: Start = {
+      limit,
+      previous,
+      ready: (async () => {
+        await stopped;
+        const bridge =
+          this.protection &&
+          (await nativeProtectionBridge(this.serve, this.protection));
+        try {
+          const goose = await GooseProcess.start(
+            (id, options) =>
+              this.protection
+                ? this.protection.spawn(options ?? {})
+                : this.host.spawn(id, options),
+            {
+              ...(limit && { compactAt: limit }),
+              cwd: await this.host.resolveDirectory("~"),
+              serve: this.serve,
+              onProcess: (goose) => {
+                start.process = goose;
               },
-            }),
-          },
-        );
-        void goose.exited.finally(() => bridge?.close());
-        return goose;
-      } catch (error) {
-        await bridge?.close();
-        throw error;
-      }
-    })();
-    const forget = () => {
-      if (this.ready !== ready) return;
-      this.ready = undefined;
-      this.process = undefined;
+              ...(agent && {
+                agent: { pubkey: agent.pubkey, relay: agent.relay },
+              }),
+              ...(bridge && {
+                protected: true,
+                env: {
+                  ...bridge.env,
+                  BASH_ENV: null,
+                  ENV: null,
+                  DYLD_INSERT_LIBRARIES: null,
+                  DYLD_LIBRARY_PATH: null,
+                  DYLD_FRAMEWORK_PATH: null,
+                  LD_PRELOAD: null,
+                  LD_LIBRARY_PATH: null,
+                },
+              }),
+            },
+          );
+          void goose.exited.finally(() => bridge?.close());
+          return goose;
+        } catch (error) {
+          await bridge?.close();
+          throw error;
+        }
+      })(),
     };
-    // `process` is still this start's: only `forget` lets another begin.
-    void ready.then(
-      (goose) => goose.exited.then(forget),
-      () => (this.process ? this.process.exited.then(forget) : forget()),
+    const forget = () => {
+      this.starts.delete(start);
+      if (this.current !== start) return;
+      // One that failed leaves the latest it replaced still running current,
+      // so the next start retires it once drained.
+      let kept = start.previous;
+      while (kept && !this.starts.has(kept)) kept = kept.previous;
+      this.current = kept;
+    };
+    void start.ready.then(
+      (goose) => {
+        delete start.previous;
+        return goose.exited.then(forget);
+      },
+      () => (start.process ? start.process.exited.then(forget) : forget()),
     );
-    this.ready = ready;
-    return ready;
+    this.starts.add(start);
+    this.current = start;
+    return start.ready;
   }
   /** Stops it, failing every session in it. */
   stop() {
     void this.shutdown().catch(() => undefined);
   }
-  /** Stops it and resolves once it has exited, whether or not its start
-   * succeeded. It stays here until then, so a failed stop is repeated. */
+  /** Stops every process it started and resolves once each has exited,
+   * whether or not its start succeeded. Each stays here until then, so a
+   * failed stop is repeated. */
   async shutdown() {
-    await this.ready?.catch(() => undefined);
-    const goose = this.process;
-    await goose?.kill();
-    await goose?.exited;
+    await Promise.all(
+      [...this.starts].map(async (start) => {
+        await start.ready.catch(() => undefined);
+        await start.process?.kill();
+        await start.process?.exited;
+      }),
+    );
   }
 }
+
+/** One start of `goose-acp`, the token limit goose read at it, and its
+ * process once spawned. Until it succeeds, it keeps the start it replaced. */
+type Start = {
+  ready: Promise<GooseProcess>;
+  limit: number | undefined;
+  previous?: Start | undefined;
+  process?: GooseProcess;
+};
 
 export type SessionsOptions = Omit<AcpSessionsOptions, "label">;
 

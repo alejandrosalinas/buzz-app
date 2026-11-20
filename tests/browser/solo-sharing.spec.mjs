@@ -15,7 +15,7 @@ test.use({
   historyCounts: { alpha: 2, beta: 2 },
 });
 
-test("a Solo chat link card opens the same authorized conversation in the channel side pane", async ({
+test("an inline Solo chat link opens the same authorized conversation in the channel side pane", async ({
   page,
   app,
 }) => {
@@ -55,26 +55,23 @@ test("a Solo chat link card opens the same authorized conversation in the channe
   const link = app.append(
     "primary",
     "alpha",
-    "[Session · beta](buzz://channel/beta)\n\nPlease review this chat.",
+    `Please review [${title}](buzz://channel/beta) with me.`,
   );
   const row = destination.locator(`[data-message-id="${link.id}"]`);
   const chip = row.getByRole("link", {
-    name: `Open Chat: ${title}`,
+    name: title,
     exact: true,
   });
   await expect(chip).toBeVisible();
   await expect(row.locator('[data-stack-previous="true"]')).toHaveCount(1);
-  const captionGap = () =>
-    row.evaluate((element) => {
-      const cards = element.querySelector("[data-solo-cards]");
-      const caption = element.querySelector('[class*="messageBubble"]');
-      return (
-        caption.getBoundingClientRect().top -
-        cards.getBoundingClientRect().bottom
-      );
-    });
-  await expect.poll(captionGap).toBe(2);
-  await expect(chip.locator("svg.tabler-icon-message-circle")).toBeVisible();
+  await expect(row.locator("[data-solo-cards]")).toHaveCount(0);
+  await expect(row.locator('[class*="messageBubble"]')).toContainText(
+    `Please review ${title} with me.`,
+  );
+  await expect(
+    chip.locator("[data-link-kind=chat] .tabler-icon-message-circle"),
+  ).toBeVisible();
+  await expect(chip.locator("svg.tabler-icon-chevron-right")).toHaveCount(0);
   await chip.click();
   const panel = page.locator("[data-panel-workspace]");
   await expect(panel.getByRole("tab", { name: title })).toHaveAttribute(
@@ -454,7 +451,7 @@ test.describe("View only channel share", () => {
       ({ event }) => event.kind === 9,
     );
     expect(links[0].event.content).toBe(
-      `[Chat: Beta](buzz://channel/${sharedChatId})`,
+      `[Beta](buzz://channel/${sharedChatId})`,
     );
     expect(links[0].event.tags).toContainEqual(["h", "alpha"]);
     expect(links[0].event.tags.filter(([key]) => key === "p")).toHaveLength(0);

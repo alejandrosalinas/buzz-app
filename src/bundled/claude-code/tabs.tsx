@@ -1,13 +1,18 @@
+import { sessionScope } from "../../features/agent-harness/session-scope";
 import { ModelDiscoveryRecovery } from "../../features/agents/ModelDiscoveryRecovery";
 import activityStyles from "../../features/agents/ActivityLayout.module.css";
 import { formatItemTimestamp } from "../../shared/datetime";
 import { useClockFormat } from "../../shared/clock-preference";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { SettingsGroup } from "../../shared/design-system/ui/SettingsGroup";
-import { AgentSaveButton } from "../../features/agents/AgentSaveButton";
+import {
+  AgentSaveButton,
+  ClearModelOverrides,
+} from "../../features/agents/AgentSaveButton";
 import { ProviderDialogActions } from "../../features/agents/ProviderDialogActions";
 // Claude's provider controls, New agent choices, and agent settings.
 import {
+  Fragment,
   type ReactNode,
   useEffect,
   useRef,
@@ -24,6 +29,8 @@ import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { Accordion } from "../../shared/design-system/ui/Accordion";
 import { ModelPicker } from "../../features/agents/ModelPicker";
 import { AISettings, runsOnDetails } from "../../features/agents/AISettings";
+import { CompactionField } from "../../features/agents/Compaction";
+import { withCompactAt } from "../../features/agents/compact-at";
 import {
   candidatesFor,
   followRecommended,
@@ -75,8 +82,10 @@ import {
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-const label = ({ channelId, name, root }: SavedConversation) =>
-  `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
+const label = ({ channelId, name, root, community }: SavedConversation) =>
+  community
+    ? "Community session"
+    : `${name || channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
 const CONVERSATION_LIMIT = 30;
 
 const options = (choices: readonly (readonly [string, string])[]) => [
@@ -177,6 +186,7 @@ const thinkingOptions = (
 const SCOPES = options([
   ["thread", "One session per thread"],
   ["channel", "One session per channel"],
+  ["community", "One session per community"],
 ]);
 
 /** A model field's stand-in while Claude cannot run. `inline` asks for
@@ -703,11 +713,13 @@ export function createTabs({
    * setup beside Harness, and so does the agent. */
   function CreateConfiguration({
     harnessControl,
+    rowsOnly,
     onReadyChange,
     agent,
     ...props
   }: AgentCreateProps<Config> & {
     harnessControl: ReactNode;
+    rowsOnly?: boolean;
     onReadyChange?: (ready: boolean) => void;
   }) {
     const { state, resolving, signedOut } = useCredentials(agent);
@@ -715,8 +727,9 @@ export function createTabs({
     // installed waits for the download, as it did with the Model row alone.
     const ready = !!state.status && !signedOut && !resolving;
     useEffect(() => onReadyChange?.(ready), [onReadyChange, ready]);
+    const Group = rowsOnly ? Fragment : SettingsGroup;
     return (
-      <SettingsGroup>
+      <Group>
         {harnessControl}
         <PreferenceRow
           title="Model"
@@ -739,7 +752,7 @@ export function createTabs({
           title="Thinking"
           trailing={<CreateThinking {...(agent && { agent })} {...props} />}
         />
-      </SettingsGroup>
+      </Group>
     );
   }
 
@@ -1055,8 +1068,16 @@ export function createTabs({
     } = useOpenedSession(
       conversations,
       conversation,
-      (place, signal) => runtime.find(agent.key, place, workspace, signal),
+      (place, signal) =>
+        runtime.find(
+          agent.key,
+          place,
+          workspace,
+          signal,
+          readConfig(agent.config).scope === "community",
+        ),
       (channelId) => runtime.channelLabel(agent.key, channelId),
+      readConfig(agent.config).scope,
     );
     // Newest first, the opened conversation's channel above the rest.
     const recent = conversations
@@ -1204,8 +1225,32 @@ export function createTabs({
       // A Custom agent's save drops a mark left from before, which a later
       // blank synced model would otherwise turn back on.
       const config = onRecommended(next) ? next : offRecommended(next);
-      submitted(config);
       try {
+        if (
+          settingsHost?.proposedModelOrEffort &&
+          (config.model || config.effort)
+        ) {
+          const models = remote ? [] : await setup.catalog();
+          const id = config.model || providerDefaults.model || "default";
+          if (
+            !models.some(
+              (model) => model.value === id || model.resolvedModel === id,
+            )
+          )
+            throw new Error(
+              "Choose an available Claude model or clear the model and thinking overrides.",
+            );
+          if (
+            config.effort &&
+            !createEffortsFor(id, models).some(
+              (level) => level.id === config.effort,
+            )
+          )
+            throw new Error(
+              "Choose a thinking level this Claude model supports or use Default.",
+            );
+        }
+        submitted(config);
         // This draft incorporates the current props; revise that exact snapshot.
         // The host routes staged provider changes through pendingSave instead.
         await save(config, { base: agent.configBase ?? {} });
@@ -1239,9 +1284,15 @@ export function createTabs({
         return `${model} · ${config.effort ? effortLabel(config.effort) : "Automatic"} thinking`;
       }
       if (group === "scope")
-        return config.scope === "channel"
-          ? "One session per channel"
-          : "One session per thread";
+        return config.scope === "community"
+          ? "One session per community"
+          : config.scope === "channel"
+            ? "One session per channel"
+            : "One session per thread";
+      if (group === "compactAt")
+        return config.compactAt
+          ? `${Number(config.compactAt) / 1000}K tokens`
+          : "Harness default";
       return config[group];
     };
     const conflict = (group: SettingGroup) =>
@@ -1412,7 +1463,16 @@ export function createTabs({
                   {modelControl}
                 </>
               )}
+              <CompactionField
+                value={agent.protection ? "" : draft.compactAt}
+                {...(agent.protection && {
+                  description: "Protected agents never compact automatically.",
+                })}
+                disabled={saving || !!agent.protection}
+                onChange={(value) => setDraft(withCompactAt(draft, value))}
+              />
             </SettingsGroup>
+            {conflict("compactAt")}
             <div className="grid gap-2">
               {conflict("instructions")}
               <AgentInstructions
@@ -1449,20 +1509,30 @@ export function createTabs({
             <div className="grid gap-2">
               {conflict("scope")}
               <Select
-                label="Sessions"
+                label="Session scope"
+                description="Choose how your agent uses sessions to keep context."
                 variant="preference"
                 value={draft.scope}
                 groups={SCOPES}
                 onValueChange={(value) =>
                   setDraft({
                     ...draft,
-                    scope: value === "channel" ? "channel" : "thread",
+                    scope: sessionScope(value),
                   })
                 }
               />
             </div>
           </>
         )}
+        {settingsHost?.proposedModelOrEffort &&
+          (draft.model || draft.effort) && (
+            <ClearModelOverrides
+              disabled={saving}
+              onClick={() =>
+                setDraft(offRecommended({ ...draft, model: "", effort: "" }))
+              }
+            />
+          )}
         <AgentSaveButton
           form={form}
           saving={saving}

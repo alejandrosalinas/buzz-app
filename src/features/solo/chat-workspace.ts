@@ -37,7 +37,7 @@ export function useRegionWorkspace(
   session: RelaySession,
   channelId: string | undefined,
 ): SoloChatWorkspace | undefined {
-  // Solo navigation publishes on every channel-list change. Without a chat
+  // Solo navigation publishes whenever a region's chats change. Without a chat
   // there is nothing to file, so skip the subscription and its renders.
   const reader = channelId ? soloNavigationFor(session) : undefined;
   // The result depends only on the binding, the chat's owning source and that

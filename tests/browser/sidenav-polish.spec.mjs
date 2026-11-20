@@ -59,7 +59,7 @@ test("sidebar scrollbar stays close to the divider without clipping its native t
     };
   });
   expect(geometry).toEqual({
-    rightInset: 2,
+    rightInset: 0,
     clipped: false,
     paddingTop: 8,
   });
@@ -118,8 +118,9 @@ test("compact sidenav keeps its geometry across persistent page navigation", asy
     });
     expect(visual.scrollbarWidth).toBe(visual.offsetWidth - visual.clientWidth);
     expect(visual.leftContentInset).toBe(0);
-    expect(visual.rightContentInset).toBe(0);
-    expect(visual.fillInset).toBe(10);
+    const unusedGutter = Math.max(0, 6 - visual.scrollbarWidth);
+    expect(visual.rightContentInset).toBe(unusedGutter);
+    expect(visual.fillInset).toBe(4 + unusedGutter);
     expect(Number.parseFloat(visual.radius)).toBeGreaterThan(0);
     expect(visual.overflow).toBe("visible");
   };
@@ -871,7 +872,7 @@ test("non-ready sidebar keeps Retry reachable while dock pages remain available"
 });
 
 // Pixel positions across two sidebar states need a real layout engine.
-test("Personal space preserves scope control and global-row geometry", async ({
+test("Personal space preserves the global sidebar row geometry", async ({
   page,
   app,
 }) => {
@@ -884,16 +885,19 @@ test("Personal space preserves scope control and global-row geometry", async ({
   const geometry = () =>
     sidebar.evaluate((frame) => {
       const bounds = frame.getBoundingClientRect();
-      const scope = frame.querySelector('[aria-label="Navigation scope"]');
       const rows = frame
         .querySelector('[aria-label="Pages"]')
         .querySelectorAll('[data-variant="row"]');
-      return [scope, ...rows].map((element) => {
+      // In a community, page rows sit under the orderable Plugins heading,
+      // so compare their tops relative to the first row.
+      const first = rows[0].getBoundingClientRect().top;
+      return [...rows].map((element) => {
         const box = element.getBoundingClientRect();
         return {
           left: box.left - bounds.left,
-          top: box.top - bounds.top,
+          top: box.top - first,
           width: box.width,
+          height: box.height,
         };
       });
     });

@@ -94,6 +94,23 @@ describe("GooseProcess", () => {
     },
   );
 
+  it.each([
+    [undefined, undefined],
+    [200000, "200000"],
+  ])("starts goose compacting by %s tokens", async (compactAt, limit) => {
+    const fake = fakeSpawn();
+    const goose = await GooseProcess.start(fake.spawn, {
+      cwd: "/work",
+      ...(compactAt && { compactAt }),
+    });
+    try {
+      expect(fake.geese[0]?.env.GOOSE_AUTO_COMPACT_TOKEN_LIMIT).toBe(limit);
+    } finally {
+      await goose.kill();
+      await goose.exited;
+    }
+  });
+
   it("starts goose-acp without the app's Buzz identity or goose choice", async () => {
     const { process } = await start();
     expect(process.options.cwd).toBe("/work");

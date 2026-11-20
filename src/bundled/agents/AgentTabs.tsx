@@ -2,6 +2,7 @@ import {
   useEffect,
   useEffectEvent,
   useId,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -53,8 +54,14 @@ export function AgentTabs(props: {
   const split = props.type?.tabs?.some(
     (section) => section.role === "settings" && section.splitSettings,
   );
+  const historyPanel = useRef<HTMLDivElement>(null);
+  const [focusHistory, setFocusHistory] = useState(false);
+  const [draft, reportDraft] = useAgentSaveReports();
+  const openVersionHistory = () => choose("agent:management", true);
   const supplied = agentSections({
     ...props,
+    openVersionHistory,
+    versionHistoryDisabled: draft.saving,
     ...(split ? { settingsSection: "identity" as const } : {}),
   });
   const identity = supplied.find(
@@ -79,25 +86,43 @@ export function AgentTabs(props: {
         ? "agent:activity"
         : (sections[0]?.value ?? ""),
   );
-  const [draft, reportDraft] = useAgentSaveReports();
   // Hosts that replace or close the whole pane ask with the same total.
   useAgentSaveState(
     draft.dirty || Boolean(props.settingsHost.pendingSave),
     draft.saving,
   );
-  const [pendingTab, setPendingTab] = useState<string>();
+  // Focus intent travels with the navigation it belongs to.
+  const [pendingTab, setPendingTab] = useState<{
+    value: string;
+    focus: boolean;
+  }>();
   const panelPrefix = useId();
   const selected =
     sections.find((section) => section.value === tab) ?? sections[0];
-  const choose = (value: string) => {
-    if (value === selected?.value || draft.saving) return;
-    if (draft.dirty || props.settingsHost.pendingSave) setPendingTab(value);
-    else setTab(value);
+  const choose = (value: string, focus = false) => {
+    if (value === selected?.value) return setFocusHistory(focus);
+    if (draft.saving) return;
+    if (draft.dirty || props.settingsHost.pendingSave)
+      setPendingTab({ value, focus });
+    else {
+      setTab(value);
+      setFocusHistory(focus);
+    }
   };
   const requestSettings = useEffectEvent(() => choose("agent:management"));
   useEffect(() => {
     if (props.showSettings) requestSettings();
   }, [props.showSettings]);
+  useEffect(() => {
+    if (focusHistory && selected?.value === "agent:management") {
+      historyPanel.current
+        ?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Previous versions"]',
+        )
+        ?.focus();
+      setFocusHistory(false);
+    }
+  }, [focusHistory, selected?.value]);
   const settingsSelected =
     selected?.value === "agent:settings" ||
     selected?.value === "agent:management";
@@ -105,6 +130,8 @@ export function AgentTabs(props: {
   const settings = split
     ? agentSections({
         ...props,
+        openVersionHistory,
+        versionHistoryDisabled: draft.saving,
         settingsSection:
           selected?.value === "agent:management" ? "runtime" : "identity",
         settingsContent: props.settingsContent,
@@ -130,7 +157,7 @@ export function AgentTabs(props: {
     <AgentSaveState value={reportDraft}>
       <Tabs
         value={selected?.value ?? ""}
-        onValueChange={choose}
+        onValueChange={(value) => choose(value)}
         items={sections.map(({ value, label }) => ({
           value,
           label,
@@ -142,6 +169,9 @@ export function AgentTabs(props: {
       />
       {settings && settingsSelected && (
         <div
+          ref={
+            selected?.value === "agent:management" ? historyPanel : undefined
+          }
           key={settingsValue}
           role="tabpanel"
           id={panelId(settingsValue)}
@@ -160,6 +190,9 @@ export function AgentTabs(props: {
         )
         .map((section) => (
           <div
+            ref={
+              section.value === "agent:management" ? historyPanel : undefined
+            }
             role="tabpanel"
             id={panelId(section.value)}
             aria-labelledby={`${panelId(section.value)}-tab`}
@@ -174,7 +207,8 @@ export function AgentTabs(props: {
           onKeep={() => setPendingTab(undefined)}
           onDiscard={() => {
             props.onDiscard?.();
-            setTab(pendingTab);
+            setTab(pendingTab.value);
+            setFocusHistory(pendingTab.focus);
             setPendingTab(undefined);
           }}
         />

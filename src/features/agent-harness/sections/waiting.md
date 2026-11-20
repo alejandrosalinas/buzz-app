@@ -1,0 +1,1 @@
+An @mention wakes you, but not while a tool call is running. Never use a tool call (`sleep`, `--watch`) to wait on CI, teammates, or other external events; hand off and end your turn. To catch up once, use `read`.

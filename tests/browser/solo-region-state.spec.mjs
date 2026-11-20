@@ -1,5 +1,4 @@
 import { test, expect } from "./fixture.mjs";
-import { pauseClock } from "./clock.mjs";
 import { setPluginEnabled } from "./plugin-settings.mjs";
 import {
   closeSettings,
@@ -81,11 +80,11 @@ test.describe("disabled plugin chat fallback", () => {
       await window.fixtureSoloRegion.classify(id);
     }, alpha);
 
-    const sidebar = page.getByRole("navigation", {
-      name: "Solo conversations",
-    });
-    const ordinary = sidebar.locator(`[data-solo-channel-id="${alpha}"]`);
-    const region = sidebar.locator(`[data-solo-destination-id="${alpha}"]`);
+    const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+    const ordinary = sidebar.locator(`[data-channel-id="${alpha}"]`);
+    const region = sidebar.locator(
+      `[data-solo-destination-root="${alpha}"] [data-solo-destination-id="${alpha}"]`,
+    );
     await expect(ordinary).toHaveCount(0);
     await expect(region).toHaveCount(1);
     await sidebar.getByRole("button", { name: "Alpha", exact: true }).click();
@@ -120,36 +119,38 @@ test.describe("disabled plugin chat fallback", () => {
       messageId,
     );
 
-    // Pointer hit testing reaches the filing guard even for an ordinary-looking row.
-    const workspace = sidebar.getByRole("button", {
-      name: "Work",
-      exact: true,
-    });
+    // The fallback row remains selectable while its plugin owns its filing.
+    await ordinary.click({ button: "right" });
+    const actions = page.getByRole("menu", { name: "Actions for Alpha" });
+    await expect(actions).toBeVisible();
+    await expect(
+      actions.getByRole("menuitem", { name: "Move to…", exact: true }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(actions).toBeHidden();
+
+    const workspace = sidebar.locator(
+      '[data-sidebar-section="group:fixture-workspace"] summary',
+    );
     await expect(workspace).toBeVisible();
+    const writes = app.report.sidebarPublications.length;
+    await ordinary.hover();
     const from = await ordinary.boundingBox();
     const to = await workspace.boundingBox();
+    if (!from || !to) throw new Error("Workspace drag target is missing");
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
     await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
       steps: 8,
     });
-    await expect(sidebar.locator("[data-drop-target]")).toHaveCount(1);
-    await pauseClock(page);
-    try {
-      await page.mouse.up();
-      // dnd-kit retires its document capture click blocker after pointer-up.
-      await page.clock.runFor(50);
-    } finally {
-      await page.clock.resume();
-    }
-    await expect(sidebar.getByRole("alert")).toContainText(
-      "This chat is managed by",
-    );
     await expect(sidebar.locator("[data-channel-dragging]")).toHaveCount(0);
+    await expect(sidebar.locator("[data-drop-target]")).toHaveCount(0);
+    await page.mouse.up();
+    expect(app.report.sidebarPublications).toHaveLength(writes);
     await expect(
       sidebar
-        .locator('[data-solo-project="fixture-workspace"]')
-        .locator(`[data-solo-channel-id="${alpha}"]`),
+        .locator('[data-sidebar-section="group:fixture-workspace"]')
+        .locator(`[data-solo-destination-id="${alpha}"]`),
     ).toHaveCount(0);
 
     await newChat(page);

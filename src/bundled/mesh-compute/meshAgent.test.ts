@@ -508,7 +508,7 @@ describe("Mesh agent runtime", () => {
 
   it("gives Buzz access automatic response delivery guidance", () => {
     const tools = instructions(meshAgentConfig({ prompt: "be brief" }));
-    expect(tools).not.toContain("## Posting Conventions");
+    expect(tools).not.toContain("## Audience");
     expect(tools).toContain("final prose response is automatically delivered");
     expect(tools).not.toContain("Engineering Discipline");
     expect(tools).not.toContain("pass `final: true`");

@@ -7,8 +7,16 @@ import {
   approvedCanvas,
   type CanvasHead,
 } from "../channel-templates/canvas-approval";
-import { workspaceDirectories } from "../solo/workspace";
+import {
+  agentCanvas,
+  ownerWorktreeRules,
+  workspaceDirectories,
+} from "../solo/workspace";
 import { unframed } from "./plugin-wake";
+
+/** A Canvas the owner's side approved. `agent`: one of the owner's attested
+ * agents wrote it, not the owner. */
+export type OwnerCanvas = Readonly<{ content: string; agent?: true }>;
 
 export type Project = Readonly<{
   /** The prompt section; empty when the Canvas is. */
@@ -21,18 +29,45 @@ export type Project = Readonly<{
  * one it was handed before. */
 export const NO_PROJECT: Project = Object.freeze({
   section:
-    "<workspace-canvas>\nThis Solo chat has no workspace Canvas from its owner now. Disregard any earlier workspace Canvas, its instructions and its folders.\n</workspace-canvas>",
+    "<workspace-canvas>\nThis conversation has no workspace Canvas from its owner now. Disregard any earlier workspace Canvas, its instructions and its folders.\n</workspace-canvas>",
   directories: [],
 });
 
-export function project(canvas: string | undefined): Project {
-  if (!canvas?.trim()) return NO_PROJECT;
-  const directories = workspaceDirectories(canvas);
-  const folders = directories.length
-    ? ` This chat's work happens in these folders, not your own workspace: ${directories.map((folder) => `\`${folder}\``).join(", ")}. \`cd\` into the one you need; your workspace keeps your notes.`
-    : "";
+/** A shared session retains an unread Canvas only for the same source. */
+export class ProjectSource {
+  private source: string | undefined;
+  private project: Project = NO_PROJECT;
+  preview(source: string | undefined, project: Project | undefined): Project {
+    return project ?? (source === this.source ? this.project : NO_PROJECT);
+  }
+  resolve(source: string | undefined, project: Project | undefined): Project {
+    this.project = this.preview(source, project);
+    this.source = source;
+    return this.project;
+  }
+}
+
+/** `ownFolder`: the conversation works in a folder of its own, so the
+ * Canvas's folders are for reading, unless its owner wrote worktree rules
+ * for them by hand. The section states the rule for the folders it lists;
+ * the base prompt's working location rule points here. */
+export function project(
+  canvas: OwnerCanvas | undefined,
+  ownFolder = false,
+): Project {
+  const content = canvas?.content;
+  if (!content?.trim()) return NO_PROJECT;
+  // Only the owner's own hand edit is the owner's rule for the chat.
+  const ownerWrote = !canvas?.agent;
+  const directories = workspaceDirectories(content);
+  const list = directories.map((folder) => `\`${folder}\``).join(", ");
+  const folders = !directories.length
+    ? ""
+    : ownFolder
+      ? ` These folders hold code that is relevant to this chat: ${list}.${ownerWrote && ownerWorktreeRules(content) ? "" : " They are for reading."}`
+      : ` This chat's work happens in these folders, not your own workspace: ${list}. To change files there, follow this Canvas's rule for them, or your working location rule when it gives none; your workspace keeps your notes.`;
   return {
-    section: `<workspace-canvas>\nThis Solo chat's Canvas as of this message: its standing instructions for this chat, which the owner's messages override. It replaces any earlier workspace Canvas.${folders}\n\n${unframed(canvas.trim())}\n</workspace-canvas>`,
+    section: `<workspace-canvas>\nThis Solo chat's Canvas as of this message: its standing instructions for this chat, which the owner's messages override. It replaces any earlier workspace Canvas.${folders}\n\n${unframed(agentCanvas(content, ownFolder, ownerWrote).trim())}\n</workspace-canvas>`,
     directories,
   };
 }
@@ -40,10 +75,11 @@ export function project(canvas: string | undefined): Project {
 /** How long a turn waits for its chat's Canvas. */
 export const CANVAS_TIMEOUT_MS = 4_000;
 
-/** The channel's Canvas text when `owner`, or an agent they attest, approved its
- * current head; undefined when it has none or someone else wrote it. A chat
- * the owner's device is still `starting` answers with the Canvas it starts
- * with, before the relay has it. */
+/** The channel's Canvas when `owner`, or an agent they attest, approved its
+ * current head, with which of them wrote it; undefined when it has none or
+ * someone else wrote it. A chat the owner's device is still `starting`
+ * answers with the Canvas it starts with, before the relay has it: the
+ * owner's own. */
 export async function ownerCanvas(
   canvas:
     | Readonly<{
@@ -54,12 +90,16 @@ export async function ownerCanvas(
   owner: string,
   channelId: string,
   starting?: string,
-): Promise<string | undefined> {
-  if (starting !== undefined) return starting || undefined;
+): Promise<OwnerCanvas | undefined> {
+  if (starting !== undefined)
+    return starting ? { content: starting } : undefined;
   if (!canvas?.available) return undefined;
   const head = await canvas.read(channelId);
   if (!head) return undefined;
-  if (await approvedCanvas(head, owner)) return head.content;
+  if (await approvedCanvas(head, owner))
+    return head.pubkey === owner
+      ? { content: head.content }
+      : { content: head.content, agent: true };
   console.warn(
     "Ignoring a Canvas its owner's side has not approved",
     channelId,
@@ -67,16 +107,16 @@ export async function ownerCanvas(
   return undefined;
 }
 
-/** The chat's project from `read`, or undefined when it could not be read in
+/** The chat's Canvas from `read`, or undefined when it could not be read in
  * time or there is no reader: the caller keeps what it knew. */
-export async function readProject(
-  read: (() => Promise<string | undefined>) | undefined,
-): Promise<Project | undefined> {
+export async function readCanvas(
+  read: (() => Promise<OwnerCanvas | undefined>) | undefined,
+): Promise<{ text: OwnerCanvas | undefined } | undefined> {
   if (!read) return undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return project(
-      await Promise.race([
+    return {
+      text: await Promise.race([
         read(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
@@ -85,11 +125,20 @@ export async function readProject(
           );
         }),
       ]),
-    );
+    };
   } catch (error) {
     console.warn("Could not read the chat's Canvas", error);
     return undefined;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The chat's project from `read`, or undefined as for `readCanvas`. */
+export async function readProject(
+  read: (() => Promise<OwnerCanvas | undefined>) | undefined,
+  ownFolder = false,
+): Promise<Project | undefined> {
+  const canvas = await readCanvas(read);
+  return canvas && project(canvas.text, ownFolder);
 }

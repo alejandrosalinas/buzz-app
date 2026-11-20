@@ -27,7 +27,9 @@ provides Compact session and Start a new session when idle, and Interrupt while
 working. There are no special chat commands.
 
 Thread scope is the default; channel scope shares a session across threads.
-DMs, huddle rooms and the owner's Solo chat each share one conversation. Workspace or tool-schema
+Community scope uses one session across all of the agent's conversations in its
+community, including DMs, Solo chats, huddles and unaddressed Attention turns.
+Other scopes keep DMs, huddle rooms and Solo chats as separate conversations. Workspace or tool-schema
 changes start a fresh session, as does a missing saved thread. Bindings persist
 locally per community and agent. Switching communities does not stop work;
 removing an agent, leaving its community or disabling the plugin does.
@@ -109,11 +111,16 @@ Mentions wait for installation; a failed first download is retried on the next m
 ```sh
 bin/pnpm exec vitest run src/bundled/codex
 bin/node src/bundled/codex/isolation-live.mjs
+bin/node src/bundled/codex/resume-live.mjs
 bin/node src/bundled/codex/live.mjs
 ```
 
 The isolation check uses disposable homes, synthetic sign-in and a loopback model;
-it makes no external model or relay requests. The opt-in live check uses the
+it makes no external model or relay requests. The resume check works the same
+way and prints which developer instructions a resumed thread runs on: with
+Codex 0.169.0, always the ones the thread started with. So Buzz sends a
+resumed thread its current instructions and changed base sections with each
+turn. The opt-in live check uses the
 installed Codex account with a disposable workspace and simulated relay. It sends
 no Buzz messages. Set `BUZZ_CODEX_TEST_MODEL` to override its model.
 

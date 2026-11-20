@@ -43,7 +43,7 @@ function mount(
   initialYaml = fixtureYaml,
   owner = fixtureViewer,
   save = true,
-  identity: Partial<Pick<RelaySession, "profiles" | "names">> = {},
+  identity: Partial<Pick<RelaySession, "profiles" | "names" | "media">> = {},
 ) {
   const fixture = createWorkflowFixture(identity.profiles);
   fixture.definitions.update({
@@ -94,8 +94,42 @@ function detailPane() {
   return within(screen.getByRole("region", { name: "Workflow details" }));
 }
 
-it("shows the owner's identity in the row and detail and follows profile updates", async () => {
+const savedDate = new Date(
+  fixtureDefinition.createdAt * 1000,
+).toLocaleDateString();
+
+/** The owner line of a card or of the detail hero reads avatar, name, then
+ * date, with no separator between them. The avatar is decorative, so the name
+ * is exposed once. "Owner" is spoken but never shown: the only text reading it
+ * is visually hidden, directly before the name. Returns the avatar. */
+function ownerAvatar(scope: HTMLElement, name: string) {
+  const date = within(scope).getByText(savedDate);
+  const line = date.parentElement as HTMLElement;
+  const label = within(line).getByText(name);
+  const avatar = line.querySelector("[data-avatar-shape]") as HTMLElement;
+  expect(avatar).toHaveAttribute("aria-hidden", "true");
+  expect(
+    avatar.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    label.compareDocumentPosition(date) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  // getByText fails on a second match, so no other text in the line says it.
+  const spoken = within(line).getByText(/Owner/);
+  expect(spoken).toHaveClass("sr-only");
+  expect(spoken.textContent).toBe("Owner: ");
+  expect(spoken.nextElementSibling).toBe(label);
+  expect(line).not.toHaveTextContent("·");
+  return avatar;
+}
+
+it("shows the owner's avatar, name and date in the row and detail and follows profile updates", async () => {
   const owner = keypair();
+  const keyLabel = formatPublicKey(owner.pubkey) as string;
+  const picture = "data:image/png;base64,AAAA";
+  const card = () =>
+    screen.getByRole("button", { name: /^Open Message helper:/ });
+  const detail = () => screen.getByRole("region", { name: "Workflow details" });
   let releaseRead: (events: readonly RelayEvent[]) => void = () => {};
   const pendingRead = new Promise<readonly RelayEvent[]>((resolve) => {
     releaseRead = resolve;
@@ -135,30 +169,44 @@ it("shows the owner's identity in the row and detail and follows profile updates
       screen.getByRole("radio", { name: "All channel workflows" }),
     );
     await waitFor(() => expect(read).toHaveBeenCalledOnce());
-    await waitFor(() =>
-      expect(
-        screen.getByText(`Owner: ${formatPublicKey(owner.pubkey)}`),
-      ).toBeVisible(),
+    await waitFor(() => expect(screen.getByText(keyLabel)).toBeVisible());
+    // No profile yet: the shortened key beside the default avatar.
+    expect(ownerAvatar(card(), keyLabel).querySelector("img")).toBeNull();
+    await act(async () =>
+      releaseRead([profile(owner, { name: "Salman", picture })]),
     );
-    await act(async () => releaseRead([profile(owner, { name: "Salman" })]));
-    expect(screen.getByText("Owner: Salman")).toBeVisible();
-    fireEvent.click(
-      screen.getByRole("button", { name: /^Open Message helper:/ }),
+    expect(ownerAvatar(card(), "Salman").querySelector("img")).toHaveAttribute(
+      "src",
+      picture,
     );
-    expect(detailPane().getByText("Owner: Salman")).toBeVisible();
+    fireEvent.click(card());
+    expect(
+      ownerAvatar(detail(), "Salman").querySelector("img"),
+    ).toHaveAttribute("src", picture);
+    expect(ownerAvatar(detail(), "Salman")).toHaveAttribute(
+      "data-avatar-shape",
+      "circle",
+    );
     act(() =>
       profiles.accept([
-        profile(owner, { name: "Updated name" }, 1_700_000_001),
+        profile(owner, { name: "Updated name", is_agent: true }, 1_700_000_001),
       ]),
     );
-    expect(detailPane().getByText("Owner: Updated name")).toBeVisible();
-    expect(screen.queryByText("Owner: Salman")).toBeNull();
+    // The hero is an inset surface, so its default avatar is panel-colored.
+    const updated = ownerAvatar(detail(), "Updated name");
+    expect(updated).toHaveAttribute("data-avatar-shape", "squircle");
+    expect(updated).toHaveAttribute("data-fallback-surface", "panel");
+    expect(ownerAvatar(card(), "Updated name")).toHaveAttribute(
+      "data-fallback-surface",
+      "subtle",
+    );
+    expect(screen.queryByText("Salman")).toBeNull();
     act(() => {
       alias = "Local owner alias";
       renamed();
     });
-    expect(screen.getAllByText("Owner: Local owner alias")).toHaveLength(2);
-    expect(screen.queryByText("Owner: Updated name")).toBeNull();
+    expect(screen.getAllByText("Local owner alias")).toHaveLength(2);
+    expect(screen.queryByText("Updated name")).toBeNull();
   } finally {
     await act(async () => releaseRead([]));
     cleanup();
@@ -168,10 +216,50 @@ it("shows the owner's identity in the row and detail and follows profile updates
   }
 });
 
+it("loads a remote owner picture through the session's media path, never the raw URL", async () => {
+  const owner = keypair();
+  const picture = "https://example.org/a.png";
+  const resolved = `media:small:${picture}`;
+  const profiles = createProfileDirectory({
+    read: async () => [profile(owner, { name: "Salman", picture })],
+  });
+  const card = () =>
+    screen.getByRole("button", { name: /^Open Message helper:/ });
+  try {
+    mount(fixtureYaml, owner.pubkey, true, {
+      profiles: profiles.queries,
+      media: (url, size) => `media:${size}:${url}`,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Owner: My workflows" }),
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: "All channel workflows" }),
+    );
+    await waitFor(() =>
+      expect(
+        ownerAvatar(card(), "Salman").querySelector("img"),
+      ).toHaveAttribute("src", resolved),
+    );
+    fireEvent.click(card());
+    expect(
+      ownerAvatar(
+        screen.getByRole("region", { name: "Workflow details" }),
+        "Salman",
+      ).querySelector("img"),
+    ).toHaveAttribute("src", resolved);
+    expect(document.querySelector(`img[src="${picture}"]`)).toBeNull();
+  } finally {
+    cleanup();
+    profiles.dispose();
+  }
+});
+
 it.each(["{}", "malformed JSON"])(
   "uses an abbreviated public key for a nameless profile: %s",
   async (content) => {
     const owner = keypair();
+    const keyLabel = formatPublicKey(owner.pubkey) as string;
     const namesake = keypair();
     const profiles = createProfileDirectory({
       read: async () => [signed(owner, { kind: 0, content, tags: [] })],
@@ -213,20 +301,12 @@ it.each(["{}", "malformed JSON"])(
           profiles.queries.snapshot().get(owner.pubkey)?.nameIsFallback,
         ).toBe(true),
       );
-      await waitFor(() =>
-        expect(
-          screen.getByText(`Owner: ${formatPublicKey(owner.pubkey)}`),
-        ).toBeVisible(),
-      );
+      await waitFor(() => expect(screen.getByText(keyLabel)).toBeVisible());
       fireEvent.click(
         screen.getByRole("button", { name: /^Open Message helper:/ }),
       );
-      expect(
-        detailPane().getByText(`Owner: ${formatPublicKey(owner.pubkey)}`),
-      ).toBeVisible();
-      expect(
-        screen.queryByText(`Owner: ${owner.pubkey.slice(0, 10)}`),
-      ).toBeNull();
+      expect(detailPane().getByText(keyLabel)).toBeVisible();
+      expect(screen.queryByText(owner.pubkey.slice(0, 10))).toBeNull();
     } finally {
       cleanup();
       names.dispose();
@@ -266,7 +346,7 @@ it("hydrates distinct displayed workflow owners in one batched profile query", a
       screen.getByRole("radio", { name: "All channel workflows" }),
     );
     await waitFor(() =>
-      expect(screen.getAllByText(/^Owner: Owner \d$/)).toHaveLength(4),
+      expect(screen.getAllByText(/^Owner \d$/)).toHaveLength(4),
     );
     expect(read).toHaveBeenCalledOnce();
   } finally {
@@ -294,9 +374,9 @@ it("lengthens fallback key suffixes when visible owners share one", async () => 
   );
   fireEvent.click(screen.getByRole("button", { name: "Owner: My workflows" }));
   fireEvent.click(screen.getByRole("radio", { name: "All channel workflows" }));
-  expect(await screen.findByText("Owner: npub…rcaj")).toBeVisible();
-  expect(screen.getByText("Owner: npub…vcaj")).toBeVisible();
-  expect(screen.queryByText("Owner: npub…caj")).toBeNull();
+  expect(await screen.findByText("npub…rcaj")).toBeVisible();
+  expect(screen.getByText("npub…vcaj")).toBeVisible();
+  expect(screen.queryByText("npub…caj")).toBeNull();
 });
 
 it("delivers a late webhook secret on the landing page after confirmed navigation", async () => {
@@ -895,7 +975,9 @@ it("confirms on the grid without mounting detail, cancels safely, and removes on
   await act(async () => {
     fixture.finish("succeeded");
   });
-  expect(screen.queryByText("Deleting workflow…")).toBeNull();
+  expect(
+    screen.queryByRole("dialog", { name: "Deleting workflow…" }),
+  ).toBeNull();
   expect(
     screen.queryByRole("button", { name: /^Open Message helper:/ }),
   ).toBeNull();
@@ -1051,7 +1133,9 @@ it.each(["unknown", "succeeded"] as const)(
       fixture.finish("succeeded");
     });
     await waitFor(() =>
-      expect(screen.queryByText(/^Couldn't confirm deletion/)).toBeNull(),
+      expect(
+        screen.queryByRole("dialog", { name: /^Couldn't confirm deletion/ }),
+      ).toBeNull(),
     );
   },
 );
@@ -1067,7 +1151,9 @@ it("purges deletion recovery on access loss", async () => {
   ).toBeVisible();
   act(() => fixture.revoke());
   await waitFor(() =>
-    expect(screen.queryByText(/^Couldn't confirm deletion/)).toBeNull(),
+    expect(
+      screen.queryByRole("dialog", { name: /^Couldn't confirm deletion/ }),
+    ).toBeNull(),
   );
   expect(
     screen.queryByRole("button", { name: /^Open Message helper:/ }),
@@ -1132,7 +1218,9 @@ it("resumes a paused read from the deletion toast and never republishes", async 
       screen.queryByRole("button", { name: /^Open Message helper:/ }),
     ).toBeNull(),
   );
-  expect(screen.queryByText(/^Couldn't confirm deletion/)).toBeNull();
+  expect(
+    screen.queryByRole("dialog", { name: /^Couldn't confirm deletion/ }),
+  ).toBeNull();
   expect(fixture.calls.delete).toBe(1);
 });
 

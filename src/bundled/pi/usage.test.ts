@@ -224,3 +224,38 @@ it("reads every page of the conversations used since `since`, newest first", asy
   expect(sessions[1]?.observations).toHaveLength(2);
   expect(sessions[0]?.revision).toMatch(/^[0-9a-f]{64}$/);
 });
+
+it("keeps a community usage origin when Activity moves to another source", () => {
+  const first = record(1, "first");
+  const shared = {
+    ...first,
+    model: (first.model ?? []).map((message) => ({
+      ...message,
+      content: String(message.content).replace(
+        "Session scope: thread",
+        "Session scope: community",
+      ),
+    })),
+  };
+  const result = conversationUsage([shared, answer(2, usage(0.1))], {
+    conversation: 2,
+    channelId: "other",
+  });
+  expect(result?.channelId).toBe("chan");
+  expect(result?.root).toBeUndefined();
+});
+
+it("leaves a wake-first community usage origin absent after later channel work", () => {
+  const first: PiEntry = {
+    id: 1,
+    kind: "pi.user",
+    model: [{ role: "user", content: "check", timestamp: 1000 }],
+  };
+  expect(
+    conversationUsage([first, answer(2, usage(0.1))], {
+      conversation: 2,
+      channelId: "latest",
+      community: true,
+    })?.channelId,
+  ).toBeUndefined();
+});

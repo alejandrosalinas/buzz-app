@@ -120,7 +120,7 @@ export type MentionModelChoice = Models &
     loading?: boolean;
     failed?: boolean;
     /** Its type offers immediate controls for sessions of this scope. */
-    session?: "thread" | "channel";
+    session?: "thread" | "channel" | "community";
     /** On Automatic (Recommended): only its session controls are offered. */
     automatic?: true;
   }>;

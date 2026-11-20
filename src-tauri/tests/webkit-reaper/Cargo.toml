@@ -1,0 +1,25 @@
+[package]
+name = "buzz-webkit-reaper-test"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# AppKit needs the process's main thread, not a libtest worker.
+[[bin]]
+name = "buzz-webkit-reaper-test"
+path = "src/main.rs"
+test = false
+bench = false
+
+[build-dependencies]
+cc = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "=2.12.4", features = ["test"] }
+libc = "0.2"
+block2 = "=0.6.2"
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSTimer", "block2"] }
+objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore"] }
+tempfile = "3"

@@ -1,3 +1,4 @@
+import { animationsSettled } from "./animations.mjs";
 import { setPluginEnabled } from "./plugin-settings.mjs";
 import {
   closeSettings,
@@ -1066,10 +1067,19 @@ test("Settings loads and publishes the selected community profile", async ({
     }),
   ).toBeFocused();
   await expect(save()).toHaveCount(0);
-  await expect(
-    page.getByRole("dialog", { name: "Profile updated" }),
-  ).toBeVisible();
+  const updated = page.getByRole("dialog", { name: "Profile updated" });
+  await expect(updated).toBeVisible();
   await expect(reopenedName).toHaveValue("Updated community profile");
+  // The notice lands over Close Settings, and a pointer resting on it holds
+  // its expiry. Dismiss it so the click below cannot arrive as it slides in.
+  const toast = page.locator("[data-sonner-toast]").filter({ has: updated });
+  await expect(toast).toHaveAttribute("data-mounted", "true");
+  await animationsSettled(toast, { subtree: true });
+  await toast.hover();
+  await updated
+    .getByRole("button", { name: "Dismiss notification", exact: true })
+    .click();
+  await expect(updated).toHaveCount(0);
   // The account avatar is behind the modal; check it from the workspace. The
   // pointer left on Close can briefly open a tooltip for the control beneath it.
   await closeSettings(page);

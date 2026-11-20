@@ -9,6 +9,32 @@ import {
 import type { LifecycleNoun } from "./ChannelLifecycleDialog";
 import { useLifecycleOffer, type LifecycleSession } from "./useLifecycleOffer";
 
+/** The archived footer uses the same live permissions as Settings. */
+export function ChannelUnarchiveButton({
+  channel,
+  session,
+  unarchive,
+}: {
+  channel: ChannelSummary;
+  session: LifecycleSession;
+  unarchive(trigger: HTMLElement): void;
+}) {
+  const offer = useLifecycleOffer(session, channel);
+  return (
+    offer?.canUnarchive &&
+    session.channelLifecycle.available && (
+      <Button
+        type="button"
+        size="sm"
+        variant="prominent"
+        onClick={(event) => unarchive(event.currentTarget)}
+      >
+        Unarchive
+      </Button>
+    )
+  );
+}
+
 /** Settings offers live-state actions; the sidebar owns confirmation. */
 export function ChannelLifecycleActions({
   channel,

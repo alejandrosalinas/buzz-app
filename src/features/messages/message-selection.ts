@@ -8,6 +8,8 @@ import type { ChannelMessage } from "../relay/contracts";
  * Lists publish row lookup and editing; shortcuts act on the focused row.
  */
 export type MessageList = Readonly<{
+  /** The session partition used by the message's existing Copy link action. */
+  scope?: string | undefined;
   row(id: string): ChannelMessage | undefined;
   /** The conversation's newest message, rendered or not. */
   newest(): string | undefined;
@@ -20,8 +22,8 @@ export type MessageList = Readonly<{
   markUnread(row: ChannelMessage): void;
   /** Where Escape and Down past the newest message return focus. */
   composer(): HTMLElement | null;
-  /** Append copied message HTML to this list's own composer as a quote. */
-  quote(html: string): boolean;
+  /** Append copied message HTML and its source links to this list's own composer. */
+  quote(html: string, sourceLinks?: readonly string[]): boolean;
   canQuote(): boolean;
 }>;
 

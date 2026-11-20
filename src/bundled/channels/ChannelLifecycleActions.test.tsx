@@ -5,7 +5,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ChannelLifecycleCapability } from "../../features/relay/channel-lifecycle";
 import type { ChannelSummary } from "../../features/relay/contracts";
-import { ChannelLifecycleActions } from "./ChannelLifecycleActions";
+import {
+  ChannelLifecycleActions,
+  ChannelUnarchiveButton,
+} from "./ChannelLifecycleActions";
 
 afterEach(cleanup);
 const viewer = "a".repeat(64),
@@ -39,6 +42,29 @@ function session(available = true) {
     },
   };
 }
+
+it.each([true, false])(
+  "offers footer Unarchive to an admin only on a supported connection (%s)",
+  async (available) => {
+    const host = session(available);
+    const unarchive = vi.fn();
+    render(
+      <ChannelUnarchiveButton
+        channel={channel({ viewerRole: "admin", archived: true })}
+        session={host}
+        unarchive={unarchive}
+      />,
+    );
+    const button = screen.queryByRole("button", { name: "Unarchive" });
+    expect(!!button).toBe(available);
+    if (button) {
+      await userEvent.setup().click(button);
+      expect(unarchive).toHaveBeenCalledExactlyOnceWith(button);
+    }
+    expect(host.channelLifecycle.load).not.toHaveBeenCalled();
+    expect(host.channelLifecycle.run).not.toHaveBeenCalled();
+  },
+);
 
 it("offers permitted actions at once and hands the trigger to the existing confirmation, without reading or writing", async () => {
   const host = session();

@@ -18,7 +18,7 @@ export function MessageListRow({
   sender: ReactNode;
   source: ReactNode;
   time: ReactNode;
-  preview: string;
+  preview: ReactNode;
   previewId?: string | undefined;
   unread?: boolean;
 } & Omit<
@@ -62,7 +62,12 @@ export function MessageListRow({
       }
       trailing={
         unread ? (
-          <span className={styles.unreadSlot} role="img" aria-label="Unread">
+          <span
+            className={styles.unreadSlot}
+            role="img"
+            aria-label="Unread"
+            data-inbox-unread=""
+          >
             <span className={styles.unreadDot} />
           </span>
         ) : (

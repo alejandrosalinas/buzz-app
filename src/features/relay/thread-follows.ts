@@ -6,6 +6,16 @@ export type ThreadFollowStorage = Readonly<{
   read(): ThreadFollows;
   /** Throws when the choices were not saved. */
   write(choices: ThreadFollows): void;
+  /** Synced stores: saves one choice, resolving only once it is durable. */
+  set?(key: string, follow: boolean): Promise<void>;
+  /** Synced stores: publication health after the tap, for the sync notice.
+   * `complete: false` means some peer's choices could not be read. */
+  syncHealth?(): Readonly<{
+    status: string;
+    complete?: boolean;
+    error?: string;
+  }>;
+  retry?(): Promise<void>;
   /** Another window saved new choices. */
   subscribe(listener: () => void): () => void;
 }>;

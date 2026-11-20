@@ -335,3 +335,14 @@ it.each(["session/list", "_goose/unstable/session/export"])(
     expect(goose.geese[0]?.killed).toBe(true);
   },
 );
+
+it("counts a community lifetime first opened by an unaddressed wake", () => {
+  const session = sessionUsage("wake", [
+    user(
+      `<context>\nScope: standalone\nSession scope: community\nAgent: ${agent}\n</context>\ncheck`,
+    ),
+    reply(start + 1, tokens(3, 0, 0)),
+  ]);
+  expect(session?.observations).toHaveLength(1);
+  expect(session?.channelId).toBeUndefined();
+});

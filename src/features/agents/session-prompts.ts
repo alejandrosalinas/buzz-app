@@ -180,6 +180,15 @@ export function sessionPrompts(
     );
   };
   const get = (session: string) => all().find(([id]) => id === session)?.[1];
+  /** Saves `sessions`, the oldest dropped until they fit the budget. */
+  const write = async (sessions: Session[]) => {
+    let value = JSON.stringify(packed(sessions));
+    while (size(value) > PROMPTS_BUDGET && sessions.length > 1) {
+      sessions.shift();
+      value = JSON.stringify(packed(sessions));
+    }
+    await storage.set(key, value);
+  };
   return {
     get,
     /** The sessions kept, oldest first, with how each started when that was
@@ -211,12 +220,24 @@ export function sessionPrompts(
             : kept,
           start,
         ]);
-        let value = JSON.stringify(packed(sessions));
-        while (size(value) > PROMPTS_BUDGET && sessions.length > 1) {
-          sessions.shift();
-          value = JSON.stringify(packed(sessions));
-        }
-        await storage.set(key, value);
+        await write(sessions);
+      } catch (error) {
+        console.error("A session's prompt was not saved", error);
+      }
+    },
+    /** Adds a piece a kept session was sent later, after what it started
+     * with changed. A session that is not kept gets none. */
+    async add(session: string, part: PromptPart) {
+      try {
+        const sessions = all();
+        const index = sessions.findIndex(([id]) => id === session);
+        const kept = sessions[index];
+        if (!kept?.[1] || !part.text) return;
+        const next: Session = [kept[0], [...kept[1], part], kept[2]];
+        // A piece that takes the session over the budget alone is not kept.
+        if (size(JSON.stringify(packed([next]))) > PROMPTS_BUDGET) return;
+        sessions[index] = next;
+        await write(sessions);
       } catch (error) {
         console.error("A session's prompt was not saved", error);
       }

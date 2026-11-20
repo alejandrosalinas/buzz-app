@@ -1,4 +1,37 @@
-import { parseDiff, type FileData, type DiffType } from "react-diff-view";
+import parser, {
+  type File as FileData,
+  type FileType as DiffType,
+} from "gitdiff-parser";
+export type { File as FileData } from "gitdiff-parser";
+
+/** A path from a `---`/`+++` line without its timestamp or a/, b/ prefix. */
+function headerPath(line: string): string {
+  const path = (line.slice(4).split("\t")[0] ?? "").replace(
+    / \d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)? [+-]\d{4}$/,
+    "",
+  );
+  return path === "/dev/null" ? path : path.replace(/^[ab]\//, "");
+}
+
+/** The patch with a Git header. A plain unified patch (bare `---`/`+++`, with
+ * or without timestamps) gains one, so every parser reads the same paths. */
+export function gitPatch(text: string): string {
+  const source = text.trimStart();
+  if (source.startsWith("diff --git")) return source;
+  const lines = source.split("\n");
+  const oldPath = headerPath(lines[0] ?? "");
+  const newPath = headerPath(lines[1] ?? "");
+  const added = oldPath === "/dev/null";
+  const deleted = newPath === "/dev/null";
+  return [
+    `diff --git a/${added ? newPath : oldPath} b/${deleted ? oldPath : newPath}`,
+    ...(added ? ["new file mode 100644"] : []),
+    ...(deleted ? ["deleted file mode 100644"] : []),
+    added ? "--- /dev/null" : `--- a/${oldPath}`,
+    deleted ? "+++ /dev/null" : `+++ b/${newPath}`,
+    ...lines.slice(2),
+  ].join("\n");
+}
 
 export function parsePatch(content: string): FileData[] | undefined {
   // Legacy send-diff caps UTF-8 payloads at 60 KiB. Unbounded relay content
@@ -6,9 +39,9 @@ export function parsePatch(content: string): FileData[] | undefined {
   if (content.length > 100_000) return undefined;
   if (!content.trim()) return [];
   try {
-    const files = parseDiff(content).filter(
-      (file) => file.hunks.length || file.oldPath || file.newPath,
-    );
+    const files = parser
+      .parse(gitPatch(content))
+      .filter((file) => file.hunks.length || file.oldPath || file.newPath);
     // The parser accepts incomplete hunks. Do not present a cut-off patch as a
     // complete change; the raw fallback preserves even its final partial line.
     const complete = files.every((file) =>

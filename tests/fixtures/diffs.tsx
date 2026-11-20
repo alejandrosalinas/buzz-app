@@ -51,7 +51,12 @@ const diff = (time: number, extra: string[][] = [], content = patch) =>
     created_at: time,
     tags: [
       ["h", "diffs"],
-      ["file", "src/greeting.ts"],
+      [
+        "file",
+        content.includes("src/Greeting.kt")
+          ? "src/Greeting.kt"
+          : "src/greeting.ts",
+      ],
       ["repo", "https://example.com/repository"],
       ["commit", "abcdef0"],
       [
@@ -148,6 +153,32 @@ function Preview() {
           }}
         >
           Receive live diff
+        </Button>
+        <Button
+          onClick={() => {
+            const e = diff(
+              events.length + 1,
+              [],
+              `${patch}diff --git a/src/Second.kt b/src/Second.kt\n--- a/src/Second.kt\n+++ b/src/Second.kt\n@@ -1 +1 @@\n-val status = "old"\n+val status = "new"\n`,
+            );
+            events.push(e);
+            receive([e]);
+          }}
+        >
+          Receive multi-file diff
+        </Button>
+        <Button
+          onClick={() => {
+            const e = diff(
+              events.length + 1,
+              [],
+              `diff --git a/src/Greeting.kt b/src/Greeting.kt\n--- a/src/Greeting.kt\n+++ b/src/Greeting.kt\n@@ -1,4 +1,5 @@\n class Greeting {\n-  val message = "Hello"\n+  val message = "Welcome"\n+  fun greet(name: String) = "\${message}, \${name}!"\n   // Render this Kotlin in both themes\n }\n`,
+            );
+            events.push(e);
+            receive([e]);
+          }}
+        >
+          Receive Kotlin diff
         </Button>
         <Button
           onClick={() => {

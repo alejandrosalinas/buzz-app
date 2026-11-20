@@ -94,15 +94,31 @@ impl ProcessProtection {
     }
 }
 
-/// A read-only path that does not exist yet is protected by name in its existing,
-/// non-root parent, so nothing can be created, linked or renamed to it.
+/// A read-only path that does not exist yet is protected by name below its nearest
+/// existing, non-root ancestor, and so are the missing folders between them, so
+/// nothing can be created, linked or renamed to it or to any folder on its way.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn missing_leaf(path: &Path) -> Option<PathBuf> {
-    let (parent, name) = (path.parent()?.canonicalize().ok()?, path.file_name()?);
-    let missing = path
-        .symlink_metadata()
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-    (missing && parent != Path::new("/")).then(|| parent.join(name))
+    let mut tail = vec![];
+    let mut existing = path;
+    loop {
+        match existing.symlink_metadata() {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tail.push(existing.file_name()?);
+                existing = existing.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
+    let base = existing.canonicalize().ok()?;
+    (!tail.is_empty() && base != Path::new("/"))
+        .then(|| tail.iter().rev().fold(base, |path, name| path.join(name)))
+}
+
+/// Whether [`ProcessProtection::profile`] can protect `path` as read-only.
+pub(crate) fn protectable(path: &Path) -> bool {
+    path.is_absolute() && (path.canonicalize().is_ok() || missing_leaf(path).is_some())
 }
 
 #[cfg(test)]
@@ -120,7 +136,10 @@ mod tests {
         assert!(protection.profile(&[]).is_err());
         let dir = tempfile::tempdir().unwrap();
         protection.read_only_paths = vec![dir.path().join("missing").join("leaf")];
-        assert!(protection.profile(&[]).is_err());
+        assert!(
+            protection.profile(&[]).is_ok(),
+            "missing folders are protected too"
+        );
         #[cfg(unix)]
         {
             let link = dir.path().join("dangling");
@@ -269,5 +288,40 @@ mod tests {
             assert!(leaf.symlink_metadata().is_err(), "{script}");
         }
         assert!(run("printf allowed > \"$1.sibling\""));
+    }
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn kernel_denies_creating_the_missing_folders_of_a_read_only_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("policy");
+        let leaf = folder.join("nested").join("managed-plugins.json");
+        assert!(protectable(&leaf));
+        assert!(!protectable(Path::new(
+            "/no-such-buzz-folder/managed-plugins.json"
+        )));
+        let profile = ProcessProtection {
+            read_only_paths: vec![leaf.clone()],
+            hidden_paths: vec![],
+        }
+        .profile(&[])
+        .unwrap();
+        let run = |script: &str| {
+            std::process::Command::new("/usr/bin/sandbox-exec")
+                .args(["-p", &profile, "/bin/sh", "-c", script, "sandbox-test"])
+                .arg(&folder)
+                .arg(&leaf)
+                .status()
+                .unwrap()
+                .success()
+        };
+        for script in [
+            "mkdir -p \"$(dirname \"$2\")\" && printf planted > \"$2\"",
+            "mkdir \"$1\"",
+            "ln -s /tmp \"$1\"",
+        ] {
+            assert!(!run(script), "{script}");
+            assert!(folder.symlink_metadata().is_err(), "{script}");
+        }
+        assert!(run("mkdir \"$1.sibling\""));
     }
 }

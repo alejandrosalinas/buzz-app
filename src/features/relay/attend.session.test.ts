@@ -946,54 +946,62 @@ it("counts a joined channel's metadata as only saved from a stream drop until di
   expect(summary()?.metadataCached).toBeUndefined();
 });
 
-it("keeps a channel the viewer looked up heard for the viewer when a recheck after an access-revoked CLOSED finds it public again", async () => {
-  const h = harness();
-  await h.discover();
-  const lookup = () =>
-    h.wire.pending.findIndex(
-      (entry) => !entry.signal?.aborted && asks(entry.filters, OPEN),
-    );
-  // The viewer's own lookup, for a link since unmounted, finds it before
-  // agents attend it.
-  const release = h.owner.session.channels.refer?.(OPEN);
-  await vi.waitFor(() => expect(lookup()).not.toBe(-1));
-  h.wire.pending
-    .splice(lookup(), 1)[0]
-    ?.respond(channel(OPEN, "public") as RelayEvent[]);
-  await vi.waitFor(() =>
-    expect(h.owner.session.channels.get?.(OPEN)).toBeDefined(),
-  );
-  release?.();
-  const stop = h.owner.session.attend([OPEN]);
-  await vi.waitFor(() =>
-    expect(h.update.mock.lastCall?.[0] ?? []).toContain(OPEN),
-  );
-  expect(h.owner.session.unattended(OPEN, false)).toBe(true);
-  h.state({
-    status: "connected",
-    routes: [
-      {
-        id: "attended",
-        channelId: OPEN,
-        status: "error",
-        replay: "unknown",
-        error: "restricted: channel access revoked",
-      },
-    ],
-  });
-  // The recheck, and attendance's own read of the suspended channel, find it
-  // public again; neither is news to the viewer.
-  await vi.waitFor(() => expect(lookup()).not.toBe(-1));
-  await flush();
-  while (lookup() !== -1)
+it.each([false, true])(
+  "keeps a viewer preview heard after access recovery with admission lookup %s",
+  async (admit) => {
+    const h = harness();
+    await h.discover();
+    const lookup = () =>
+      h.wire.pending.findIndex(
+        (entry) => !entry.signal?.aborted && asks(entry.filters, OPEN),
+      );
+    // The viewer's own lookup, for a link since unmounted, finds it before
+    // agents attend it.
+    const release = h.owner.session.channels.refer?.(OPEN);
+    await vi.waitFor(() => expect(lookup()).not.toBe(-1));
     h.wire.pending
       .splice(lookup(), 1)[0]
       ?.respond(channel(OPEN, "public") as RelayEvent[]);
-  await flush();
-  expect(h.owner.session.channels.get?.(OPEN)).toBeDefined();
-  expect(h.owner.session.unattended(OPEN, false)).toBe(true);
-  stop();
-});
+    await vi.waitFor(() =>
+      expect(h.owner.session.channels.get?.(OPEN)).toBeDefined(),
+    );
+    release?.();
+    const stop = h.owner.session.attend([OPEN]);
+    await vi.waitFor(() =>
+      expect(h.update.mock.lastCall?.[0] ?? []).toContain(OPEN),
+    );
+    expect(h.owner.session.unattended(OPEN, false)).toBe(true);
+    h.state({
+      status: "connected",
+      routes: [
+        {
+          id: "attended",
+          channelId: OPEN,
+          status: "error",
+          replay: "unknown",
+          error: "restricted: channel access revoked",
+        },
+      ],
+    });
+    // Admission may resolve the temporarily hidden preview before recovery.
+    expect(h.owner.session.channels.get?.(OPEN)).toBeUndefined();
+    const admission = admit
+      ? h.owner.session.channels.resolve?.([OPEN], { viewerLookup: false })
+      : undefined;
+    // The recheck, attendance and admission preserve the viewer's provenance.
+    await vi.waitFor(() => expect(lookup()).not.toBe(-1));
+    await flush();
+    while (lookup() !== -1)
+      h.wire.pending
+        .splice(lookup(), 1)[0]
+        ?.respond(channel(OPEN, "public") as RelayEvent[]);
+    await flush();
+    await admission;
+    expect(h.owner.session.channels.get?.(OPEN)).toBeDefined();
+    expect(h.owner.session.unattended(OPEN, false)).toBe(true);
+    stop();
+  },
+);
 
 it("skips the queued lookups of attended channels no watch wants any more, so a new watch's lookup does not wait behind them", async () => {
   const h = harness();
@@ -1337,6 +1345,55 @@ it("keeps a suspended preview the viewer looked up heard for the viewer when a r
   expect(h.owner.session.unattended(OPEN, false)).toBe(true);
   stop();
 });
+it("keeps explicit agent metadata admission out of viewer provenance", async () => {
+  const h = harness();
+  await h.discover();
+  const resolving = h.owner.session.channels.resolve?.([OPEN], {
+    viewerLookup: false,
+  });
+  assert(resolving);
+  await vi.waitFor(() =>
+    expect(h.wire.pending.some((entry) => asks(entry.filters, OPEN))).toBe(
+      true,
+    ),
+  );
+  h.wire.pending
+    .splice(
+      h.wire.pending.findIndex((entry) => asks(entry.filters, OPEN)),
+      1,
+    )[0]
+    ?.respond(channel(OPEN, "public") as RelayEvent[]);
+  await resolving;
+  h.owner.session.attend([OPEN]);
+  expect(h.owner.session.unattended(OPEN, false)).toBe(false);
+});
+
+it.each(["loading", "error"] as const)(
+  "refuses agent metadata admission while discovery is %s",
+  async (status) => {
+    const h = harness();
+    h.connect();
+    await vi.waitFor(() => expect(h.wire.pending).toHaveLength(1));
+    if (status === "error") h.wire.next().fail(new Error("Discovery failed"));
+    await vi.waitFor(() =>
+      expect(h.owner.session.channels.list().status).toBe(status),
+    );
+    const before = h.owner.session.channels.list();
+    const resolving = h.owner.session.channels.resolve?.([OPEN], {
+      viewerLookup: false,
+    });
+    assert(resolving);
+    const outcome = resolving.then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+    await flush();
+    const exact = h.wire.pending.find((entry) => asks(entry.filters, OPEN));
+    exact?.respond(channel(OPEN, "public") as RelayEvent[]);
+    expect(await outcome).toMatch(/not discovered/i);
+    expect(h.owner.session.channels.list()).toEqual(before);
+  },
+);
 
 it("stops counting an attended preview's saved grant once a read after a drop omits it, and hears it once a later lookup finds it public again", async () => {
   for (const continuous of [false, true]) {

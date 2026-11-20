@@ -16,7 +16,7 @@ import {
   describePull,
   issueIcons,
   issueState,
-  stateIcons,
+  pullLinkIcon,
 } from "./pull-state-view";
 import type { PullStates } from "./pull-states";
 import { parseGitHubReference } from "./references";
@@ -46,7 +46,7 @@ export function PullLink({ url, states }: { url: string; states: PullStates }) {
   const shown = state && (issue ? issueState(state) : state.state);
   const Icon = issue
     ? issueIcons[state ? issueState(state) : "open"]
-    : stateIcons[state?.state ?? "open"];
+    : pullLinkIcon(state);
   const words = (issue ? describeIssue : describePull)({
     state,
     failed: read === "failed",

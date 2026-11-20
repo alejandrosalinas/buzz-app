@@ -1,5 +1,6 @@
+// Combining marks (the vowel sign in "की") belong to the letter before them.
 const isWordChar = (char: string | undefined) =>
-  /[\p{L}\p{N}]/u.test(char ?? "");
+  /[\p{L}\p{M}\p{N}]/u.test(char ?? "");
 
 /** How well a label matches typed text, best first. Ranks are whole numbers,
  * so callers can order them and add fractional tie-breaks. */
@@ -12,8 +13,9 @@ export const MatchRank = {
   /** Each letter continues a run that began at a word start ("tlp" in
    * "team-launch-planning"). */
   wordRuns: 4,
-  /** The letters appear in order. */
-  inOrder: 5,
+  /** Each typed word appears in the name, in any order ("team buzz" in
+   * "buzz-hive-team"). Words split on spaces and punctuation. */
+  words: 5,
 } as const;
 export type MatchRank = (typeof MatchRank)[keyof typeof MatchRank];
 
@@ -33,9 +35,9 @@ export function matchName(
     rank,
     positions: aligned ? positions : [],
   });
-  const run = (at: number) => {
+  const run = (at: number, typed = needle) => {
     const from = [...text.slice(0, at)].length;
-    return Array.from({ length: [...needle].length }, (_, n) => from + n);
+    return Array.from({ length: [...typed].length }, (_, n) => from + n);
   };
   if (text === needle) return found(MatchRank.exact, run(0));
   let substring: number | undefined;
@@ -53,13 +55,10 @@ export function matchName(
   // Spaces in typed text only separate words; they need not match.
   const letters = [...needle.replace(/\s+/g, "")];
   if (!letters.length) return undefined;
-  // Letters in order, the loosest rank. Without them nothing below matches,
-  // so a name that misses skips the word-run search.
-  const inOrder: number[] = [];
-  chars.forEach((char, j) => {
-    if (char === letters[inOrder.length]) inOrder.push(j);
-  });
-  if (inOrder.length < letters.length) return undefined;
+  // Word runs need the letters in order, so a name without them skips the
+  // word-run search.
+  let inOrder = 0;
+  for (const char of chars) if (char === letters[inOrder]) inOrder += 1;
   // Can letters[i..] match chars[j..] with every run starting at a word start?
   // `inRun` means the previous letter matched chars[j - 1].
   const memo = new Map<number, boolean>();
@@ -77,7 +76,7 @@ export function matchName(
     memo.set(key, result);
     return result;
   };
-  if (wordRuns(0, 0, false)) {
+  if (inOrder === letters.length && wordRuns(0, 0, false)) {
     // Replay the same choices the search made: take a letter when it leads
     // to a full match, otherwise skip the character.
     const positions: number[] = [];
@@ -90,7 +89,29 @@ export function matchName(
     }
     return found(MatchRank.wordRuns, positions);
   }
-  return found(MatchRank.inOrder, inOrder);
+  // Last, each typed word must appear whole, preferably where a word starts.
+  // Scattered single letters never match.
+  const words = needle.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
+  if (!words.length) return undefined;
+  const positions = new Set<number>();
+  for (const word of words) {
+    // A one-letter word ("q" in "q&a", or "की" with its vowel sign) matches
+    // only a one-letter word, so it cannot land inside a longer one.
+    const single = [...word.replace(/\p{M}/gu, "")].length === 1;
+    const whole = (at: number) =>
+      !isWordChar(text[at - 1]) &&
+      (!single || !isWordChar(text[at + word.length]));
+    let at = text.indexOf(word);
+    const inside = single ? -1 : at;
+    while (at >= 0 && !whole(at)) at = text.indexOf(word, at + 1);
+    if (at < 0) at = inside;
+    if (at < 0) return undefined;
+    for (const position of run(at, word)) positions.add(position);
+  }
+  return found(
+    MatchRank.words,
+    [...positions].sort((a, b) => a - b),
+  );
 }
 
 export const matchRank = (label: string, needle: string) =>

@@ -2,11 +2,14 @@
 // desktop app registers it with its tabs, and a standalone host runs it alone.
 import { syncedSettingsSchema, withSyncedSettings } from "./settings";
 import type { AgentType, AgentHandle } from "../../features/agents/service";
-import { type ClaudeRuntime, type Config, config } from "./runtime";
+import {
+  type ClaudeRuntime,
+  type Config,
+  config,
+  HANDOVER_MS,
+} from "./runtime";
 
 export const TYPE_ID = "claude-code";
-/** A turn's run returns once Claude has it, so this bounds only the hand-over. */
-const HANDOVER_MS = 2 * 60_000;
 
 /** How agents of this type run on `runtime`. A turn first waits for `ready`
  * when given, such as for the first download of Claude, within its deadline. */

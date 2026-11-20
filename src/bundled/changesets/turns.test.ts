@@ -11,8 +11,10 @@ import { KEEP, TURNS_KEY, type Turn, createTurns } from "./turns";
 
 const canvases = new Map<string, string>();
 vi.mock("../../features/agent-harness/project", () => ({
-  ownerCanvas: async (_canvas: unknown, _owner: string, channelId: string) =>
-    canvases.get(channelId),
+  ownerCanvas: async (_canvas: unknown, _owner: string, channelId: string) => {
+    const content = canvases.get(channelId);
+    return content === undefined ? undefined : { content };
+  },
 }));
 
 const storage = (initial: Record<string, string> = {}): Storage => {

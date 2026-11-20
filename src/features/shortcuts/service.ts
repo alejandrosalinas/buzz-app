@@ -20,6 +20,8 @@ import {
 } from "./bindings";
 export type { KeyBinding, NormalizedShortcut, Shortcut } from "./bindings";
 export type RegisteredShortcut = Contribution<NormalizedShortcut>;
+/** Host-only: a field matches it itself, so it is listed in Settings but never reserved or run. */
+export type HostShortcut = NormalizedShortcut & Readonly<{ local: boolean }>;
 export type Shortcuts = {
   register(shortcut: Shortcut): void;
   snapshot(): readonly RegisteredShortcut[];
@@ -64,9 +66,9 @@ function runShortcut(shortcut: Shortcut) {
 }
 export class ShortcutsService extends Service implements Shortcuts {
   private readonly contributions;
-  private readonly hostBindings = new Map<string, NormalizedShortcut>();
+  private readonly hostBindings = new Map<string, HostShortcut>();
   private readonly hostListeners = new Set<() => void>();
-  private hostReady: readonly NormalizedShortcut[] = Object.freeze([]);
+  private hostReady: readonly HostShortcut[] = Object.freeze([]);
   constructor(
     ctx: Context,
     host: Window | undefined = typeof window === "undefined"
@@ -102,8 +104,10 @@ export class ShortcutsService extends Service implements Shortcuts {
       const eligible = (shortcut: Shortcut) =>
         eligibleIn(shortcut, editable, modal);
       // Host chords are reserved even while unavailable (e.g. Settings behind a modal).
-      const reserved = [...this.hostBindings.values()].find((shortcut) =>
-        matches(bindingsFor(shortcut, shortcut.id), event, apple),
+      const reserved = [...this.hostBindings.values()].find(
+        (shortcut) =>
+          !shortcut.local &&
+          matches(bindingsFor(shortcut, shortcut.id), event, apple),
       );
       const shortcut = reserved
         ? eligible(reserved)
@@ -135,7 +139,12 @@ export class ShortcutsService extends Service implements Shortcuts {
     // back/forward: the chord's own eligibility, outside any editable.
     this.runHost = (id: string) => {
       const shortcut = this.hostBindings.get(id);
-      if (!shortcut || !eligibleIn(shortcut, false, modalOpen())) return false;
+      if (
+        !shortcut ||
+        shortcut.local ||
+        !eligibleIn(shortcut, false, modalOpen())
+      )
+        return false;
       runShortcut(shortcut);
       return true;
     };
@@ -161,8 +170,11 @@ export class ShortcutsService extends Service implements Shortcuts {
     this.contributions.register(this.ctx, normalizeShortcut(shortcut));
   }
   /** Host composition only; not part of the injected plugin contract. */
-  registerHost(shortcut: Shortcut) {
-    const entry = normalizeShortcut(shortcut);
+  registerHost(shortcut: Shortcut, { local = false } = {}) {
+    const entry: HostShortcut = Object.freeze({
+      ...normalizeShortcut(shortcut),
+      local,
+    });
     if (this.hostBindings.has(entry.id))
       throw new Error(`Host shortcut already registered: ${entry.id}`);
     this.hostBindings.set(entry.id, entry);

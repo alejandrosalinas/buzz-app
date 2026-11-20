@@ -160,8 +160,8 @@ export function ProfilePeek({
     viewer,
     agent,
     enabled: open,
-    onOpened(channelId) {
-      if (!onOpen(`buzz://channel/${encodeURIComponent(channelId)}`))
+    onOpened(link) {
+      if (!onOpen(link))
         throw new Error("Could not open the conversation. Try again.");
       setOpen(false);
     },

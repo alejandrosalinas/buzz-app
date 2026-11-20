@@ -7,7 +7,9 @@ import {
 } from "nostr-tools";
 import {
   decodeReadState,
+  decodeThreadFollows,
   signReadState,
+  signThreadFollows,
   validReadStateEvent,
 } from "./read-state.mjs";
 const secret = generateSecretKey();
@@ -114,5 +116,130 @@ describe("host-only read-state codec", () => {
         100,
       ),
     ).toThrow("capacity");
+  });
+});
+
+describe("host-only expiring unread codec", () => {
+  const unread = {
+    v: 2,
+    client_id: "fixture",
+    contexts: { room: 0, "ov_s:room": 100, "ov_c:room": 0, "ov_b:room": 0 },
+  };
+  it("signs version 2 under its own paired prefix and tag, and roundtrips", () => {
+    const event = signReadState({ ...intent, blob: unread }, secret, 100);
+    expect(event.tags).toEqual([
+      ["d", `read-state-unread-v2:${"a".repeat(32)}`],
+      ["t", "read-state-unread-v2"],
+    ]);
+    expect(decodeReadState([event], secret)).toEqual([
+      { eventId: event.id, blob: unread },
+    ]);
+  });
+  it("rejects a version that does not match its coordinate", () => {
+    const key = nip44.v2.utils.getConversationKey(secret, getPublicKey(secret));
+    const crossed = (blob, d, t) =>
+      finalizeEvent(
+        {
+          kind: 30078,
+          created_at: 100,
+          tags: [
+            ["d", d],
+            ["t", t],
+          ],
+          content: nip44.v2.encrypt(JSON.stringify(blob), key),
+        },
+        secret,
+      );
+    const slot = "a".repeat(32);
+    expect(() =>
+      decodeReadState(
+        [crossed(unread, `read-state:${slot}`, "read-state")],
+        secret,
+      ),
+    ).toThrow();
+    expect(() =>
+      decodeReadState(
+        [crossed(blob, `read-state-unread-v2:${slot}`, "read-state-unread-v2")],
+        secret,
+      ),
+    ).toThrow();
+    expect(() =>
+      decodeReadState(
+        [crossed(unread, `read-state-unread-v2:${slot}`, "read-state")],
+        secret,
+      ),
+    ).toThrow();
+  });
+});
+describe("host-only thread-follows codec", () => {
+  const payload = {
+    v: 1,
+    client_id: "fixture",
+    threads: { [`room:${"1".repeat(64)}`]: { follow: true, at: 90, x: 1 } },
+    later: true,
+  };
+  const follow = { slot: "b".repeat(32), createdAt: 100, payload };
+  it("signs only the exact thread-follows shape and round-trips unknown fields", () => {
+    const event = signThreadFollows(follow, secret, 100);
+    expect(event.tags).toEqual([
+      ["d", `thread-follows:${"b".repeat(32)}`],
+      ["t", "thread-follows"],
+    ]);
+    expect(event.content).not.toContain("room");
+    expect(decodeThreadFollows([event], secret)).toEqual([
+      { eventId: event.id, payload },
+    ]);
+  });
+  it("keeps the two shapes apart and rejects bad intent", () => {
+    const event = signThreadFollows(follow, secret, 100);
+    expect(() => decodeReadState([event], secret)).toThrow();
+    expect(() =>
+      decodeThreadFollows([signReadState(intent, secret, 100)], secret),
+    ).toThrow();
+    expect(() => decodeThreadFollows([event], generateSecretKey())).toThrow();
+    expect(() =>
+      signThreadFollows({ ...follow, slot: "B".repeat(32) }, secret, 100),
+    ).toThrow();
+    expect(() =>
+      signThreadFollows({ ...follow, payload: blob }, secret, 100),
+    ).toThrow();
+    expect(() =>
+      signReadState({ ...intent, blob: payload }, secret, 100),
+    ).toThrow();
+    expect(() =>
+      signThreadFollows(
+        {
+          ...follow,
+          payload: { ...payload, threads: { bad: { follow: true, at: 1 } } },
+        },
+        secret,
+        100,
+      ),
+    ).toThrow();
+  });
+  it("refuses created_at more than 60 seconds from now in either direction", () => {
+    expect(() => signThreadFollows(follow, secret, 39)).toThrow();
+    expect(() => signThreadFollows(follow, secret, 161)).toThrow();
+    expect(signThreadFollows(follow, secret, 40).created_at).toBe(100);
+  });
+  it("decodes an own event it can't read as unknown, not absent", () => {
+    const unreadable = finalizeEvent(
+      {
+        kind: 30078,
+        created_at: 100,
+        tags: [
+          ["d", `thread-follows:${"b".repeat(32)}`],
+          ["t", "thread-follows"],
+        ],
+        content: nip44.v2.encrypt(
+          JSON.stringify({ v: 2 }),
+          nip44.v2.utils.getConversationKey(secret, getPublicKey(secret)),
+        ),
+      },
+      secret,
+    );
+    expect(decodeThreadFollows([unreadable], secret)).toEqual([
+      { eventId: unreadable.id, payload: null },
+    ]);
   });
 });

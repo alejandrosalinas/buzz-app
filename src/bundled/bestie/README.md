@@ -83,6 +83,20 @@ no Bestie to your account: the agent stays, its check-ins stop, and its memory
 section and private channels stay, which its Former Bestie tab can turn off.
 Both need an account to save none to.
 
+**Cost, last 7 days** is there only while the Usage plugin is on. It shows
+what the agent's sessions on this device cost over the last seven days: a bar
+for each day, today last, the total, and **Open Usage**, which opens Settings →
+Usage (not filtered to this agent; Usage keeps its own filters). With Usage off,
+its settings card is not registered, so neither tab shows the row and nothing is
+read; turning Usage off stops a read under way. It reads the sessions when the tab opens, through the same
+agent-type `usage` read and the same estimate as the Usage plugin (`stats()`
+and its price data are imported from it), and keeps nothing: no stored state, no
+sync. A cost is an estimate from the harness's own record or its token counts at
+published prices, not a bill, and it says so when some of it is unknown. A
+hosted agent, an agent on another device and an agent whose type reports no
+usage show the row as not available; a read that fails says so quietly with
+**Retry**, and nothing else in the tab waits for it.
+
 **Remembers you** adds memory rules to the agent's instructions, in a section
 marked `<!-- buzz:bestie/memory v2 -->` … `<!-- /buzz:bestie/memory -->`, and
 turning it off removes that section. The section is the memory map and its

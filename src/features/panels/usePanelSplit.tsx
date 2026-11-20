@@ -147,3 +147,13 @@ function PanelSplitHandle({
     />
   );
 }
+
+/** Attach ref to the layout container and render handle beside the secondary pane. */
+export type PanelSplit = ReturnType<typeof usePanelSplit>;
+
+/** Plugin layouts never share persistence keys with built-in page layouts. */
+export const usePluginPanelSplit: typeof usePanelSplit = (
+  scope,
+  name,
+  ...options
+) => usePanelSplit(scope, `plugin:${name}`, ...options);

@@ -78,6 +78,16 @@ it("keeps labeled channels in one live or recovery placement throughout registra
   ).rejects.toThrow("ended");
 });
 
+it("keeps the snapshot when a roster change leaves the placement alone", () => {
+  const h = fixture();
+  const before = h.service.snapshot();
+  const channels = h.session.channels.list().channels;
+  h.roster([...channels, { id: "team", name: "Team" }]);
+  expect(h.service.snapshot()).toBe(before);
+  h.roster(channels.filter((channel) => channel.id !== "shared"));
+  expect([...h.service.snapshot().excluded]).toEqual(["owned"]);
+});
+
 it("fences reconnects and rejects old or conflicting snapshots without losing labeled channels", async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const h = fixture(),

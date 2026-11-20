@@ -32,6 +32,7 @@ dirs = "6"
 tempfile = "3"
 url = "2"
 cap-std = "4"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking"] }
 nostr = { version = "=0.45.5", default-features = false, features = ["std", "os-rng"] }
 # Unused in code: its build metadata (`DEP_TAURI_DEV`) tells build.rs whether
 # this is a `tauri dev` run. The app's own tauri dependency sets its features.

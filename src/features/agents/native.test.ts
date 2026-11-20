@@ -205,3 +205,27 @@ it("searches profile names natively and reports a community without the search",
     /malformed or invalidly signed/,
   );
 });
+
+it("keeps managed attachment hints out of the signed event and preserves absent-context IPC", async () => {
+  vi.mocked(invoke).mockReset().mockResolvedValue(message);
+  const template = { kind: 9, content: "attachment", tags: [["h", "c"]] };
+  const managedAttachments = [
+    {
+      path: "/saved/file",
+      sha256: "a".repeat(64),
+      size: 5,
+      url: "https://example.test/media",
+    },
+  ];
+  await native.publish(member, template, { managedAttachments });
+  expect(invoke).toHaveBeenLastCalledWith("app_agent_publish", {
+    ...member,
+    event: template,
+    managedAttachments,
+  });
+  await native.publish(member, template);
+  expect(invoke).toHaveBeenLastCalledWith("app_agent_publish", {
+    ...member,
+    event: template,
+  });
+});

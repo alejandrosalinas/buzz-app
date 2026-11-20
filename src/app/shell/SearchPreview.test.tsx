@@ -68,6 +68,7 @@ it("holds room for a message's earlier neighbours, so the hit stays put as they 
           createdAt: 1000,
           authorId: "author",
           text: "the hit",
+          mentioned: { content: "the hit", mentions: [] },
         },
       }}
       tone="message"
@@ -125,6 +126,7 @@ function messagePreview(session: RelaySession, cache = new Map()) {
           createdAt: 1000,
           authorId: "author",
           text: "the hit",
+          mentioned: { content: "the hit", mentions: [] },
         },
       }}
       tone="message"
@@ -439,3 +441,75 @@ it.each([
     }
   },
 );
+
+it("shows each line's resolved mentions as chips, keeping the hit's highlight", async () => {
+  vi.useFakeTimers();
+  const tomb = "c".repeat(64);
+  const profiles = new Map([[tomb, { name: "tomb" }]]);
+  const pages = [
+    [
+      {
+        ...event("a", 900, "ping @tomb"),
+        tags: [
+          ["h", "channel"],
+          ["p", tomb],
+        ],
+      },
+    ],
+    [],
+  ];
+  const session = {
+    readPage: vi.fn(async () => ({ events: pages.shift() ?? [] })),
+    profiles: {
+      subscribe: () => () => {},
+      snapshot: () => profiles,
+      ensure: vi.fn(() => Promise.resolve()),
+    },
+    channels: {
+      get: () => ({}),
+      list: () => list,
+      subscribeList: () => () => {},
+    },
+  } as unknown as RelaySession;
+  render(
+    <SearchPreview
+      session={session}
+      cache={new Map()}
+      row={{
+        key: "m:hit",
+        label: "@tomb the hit",
+        icon: ChatCircleIcon,
+        run: () => {},
+        peek: {
+          kind: "message",
+          channelId: "channel",
+          messageId: "hit",
+          createdAt: 1000,
+          authorId: "author",
+          text: "@tomb the hit",
+          mentioned: { content: "@tomb the hit", mentions: [tomb] },
+        },
+      }}
+      tone="message"
+      terms={["hit"]}
+      nameOf={() => "Author"}
+      whereOf={() => "#channel"}
+    />,
+  );
+  await act(async () => {
+    vi.advanceTimersByTime(150);
+  });
+  const lines = [...document.querySelectorAll(".search-peek-text")];
+  expect(lines.map((line) => line.textContent)).toEqual([
+    "ping tomb",
+    "tomb the hit",
+  ]);
+  expect(
+    lines.map((line) => line.querySelector("[data-mention-kind]")?.textContent),
+  ).toEqual(["tomb", "tomb"]);
+  expect(lines[1]?.querySelector("mark.search-match")).toHaveTextContent("hit");
+  expect(session.profiles.ensure).toHaveBeenCalledWith(
+    expect.arrayContaining(["author", tomb]),
+    "background",
+  );
+});

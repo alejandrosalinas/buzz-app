@@ -2,6 +2,7 @@ import { Field as BaseField } from "@base-ui/react/field";
 import { RadioGroup as BaseRadioGroup } from "@base-ui/react/radio-group";
 import { Radio as BaseRadio } from "@base-ui/react/radio";
 import { useId, type ComponentProps, type ReactNode } from "react";
+import { CheckIcon } from "../icons";
 
 /** Compose inside Field so each Radio has its own labelled Field.Item. */
 export function RadioGroup<Value>({
@@ -31,7 +32,7 @@ export function Radio({
 }: Omit<ComponentProps<typeof BaseRadio.Root>, "className" | "children"> & {
   label: ReactNode;
   description?: ReactNode;
-  variant?: "default" | "card" | "tile";
+  variant?: "default" | "card" | "tile" | "row";
   size?: "sm" | "md";
 }) {
   const generatedId = useId();
@@ -59,8 +60,14 @@ export function Radio({
           data-variant={variant}
           data-size={size}
         >
-          {variant !== "tile" && (
-            <BaseRadio.Indicator className="buzz-radio-indicator" />
+          {variant === "row" ? (
+            <BaseRadio.Indicator className="buzz-radio-check">
+              <CheckIcon aria-hidden="true" />
+            </BaseRadio.Indicator>
+          ) : (
+            variant !== "tile" && (
+              <BaseRadio.Indicator className="buzz-radio-indicator" />
+            )
           )}
         </BaseRadio.Root>
         <span>

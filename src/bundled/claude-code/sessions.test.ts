@@ -6,11 +6,16 @@ import {
   flush,
   sessionState,
 } from "./claude-testing";
-import type { ToolServer } from "./claude";
+import type { ClaudeProcess, Spawn, ToolServer } from "./claude";
+import {
+  VECTOR_BINDING,
+  VECTOR_PROFILE,
+} from "../../features/agents/gateway/vectors";
 import {
   AgentSessions,
   IDLE_MS,
   localSessions,
+  PROCESS_LIMIT,
   type SavedSession,
   Spare,
   type SessionStore,
@@ -45,14 +50,21 @@ function sessions(
     spare: Spare;
     tools: ToolServer;
     started: (sessionId: string, systemPrompt: string) => void;
+    /** Each process's own settings env. */
+    env: Record<string, string>;
+    resumed: (sessionId: string, systemPrompt: string) => void;
     agent: Readonly<{ pubkey: string; relay: string }>;
+    /** The host refuses every process, as at its process limit. */
+    full: boolean;
+    room: () => Promise<boolean>;
   }> = {},
 ) {
-  const fake = fakeSpawn(options.known);
+  const fake = fakeSpawn(options.known, options.env);
   const store = options.store ?? memoryStore();
   let model = "opus";
   let ids = 0;
   const spawn = (id: string, spawnOptions?: object) => {
+    if (options.full) return Promise.reject(PROCESS_LIMIT);
     // The fake records each process as the call begins.
     const process = fake.spawn(id, spawnOptions);
     const started = fake.processes.at(-1);
@@ -69,6 +81,7 @@ function sessions(
   };
   const pool = new AgentSessions({
     spawn,
+    ...(options.room ? { room: options.room } : {}),
     strictResume: !!options.strictResume,
     ...(options.spare ? { spare: options.spare } : {}),
     store,
@@ -86,6 +99,7 @@ function sessions(
     fingerprint: () => model,
     newId: () => `new-${++ids}`,
     ...(options.started ? { started: options.started } : {}),
+    ...(options.resumed ? { resumed: options.resumed } : {}),
   });
   const claudes = () =>
     fake.processes.filter((process) => process.id === "claude");
@@ -161,6 +175,20 @@ it("starts a new conversation on the shared spare and warms another", async () =
   expect(used?.prompts).toEqual(["hello"]);
   expect(store.get("c/root")).toMatchObject({ id: "spare-1", seen: 10 });
   expect(pool.snapshot()).toEqual([{ key: "c/root", busy: false }]);
+});
+
+it("hands over no spare started with another compaction threshold", async () => {
+  const { spare, claudes } = withSpare();
+  spare.warm({ cwd: "/work", model: "opus" });
+  await flush();
+  await expect(
+    spare.take({ cwd: "/work", model: "opus", compactAt: 200000 }),
+  ).resolves.toBeUndefined();
+  spare.warm({ cwd: "/work", model: "opus", compactAt: 200000 });
+  await flush();
+  expect(claudes().at(-1)?.options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(
+    "200000",
+  );
 });
 
 it("hands the spare's tools to the agent that takes it", async () => {
@@ -265,6 +293,123 @@ it("starts a conversation elsewhere afresh, and the spare follows it", async () 
   );
   expect(next?.options.cwd).toBe("/work");
   expect(next?.killed).toBe(false);
+});
+
+it("stops the spare to free its place, and starts no other until asked", async () => {
+  const { spare, claudes } = withSpare();
+  spare.warm({ cwd: "/work", model: "opus" });
+  await flush();
+  const [first] = claudes();
+  await spare.free();
+  expect(first?.killed).toBe(true);
+  await flush();
+  expect(claudes()).toHaveLength(1);
+  expect(spare.free()).toBeUndefined();
+});
+
+it("makes no more room for a cancelled message, but does for the next one", async () => {
+  let full = true;
+  // Each place made, once the test lets it be.
+  const rooms: (() => void)[] = [];
+  const room = () =>
+    new Promise<boolean>((resolve) => rooms.push(() => resolve(true)));
+  const fake = fakeSpawn();
+  const pool = new AgentSessions({
+    spawn: (id, options) =>
+      full ? Promise.reject(PROCESS_LIMIT) : fake.spawn(id, options),
+    room,
+    store: memoryStore(),
+    launch: async () => ({ cwd: "/work", systemPrompt: "prompt" }),
+    fingerprint: () => "same",
+  });
+  let cancelled = false;
+  const first = pool.deliver("a", "first", 1, { current: () => !cancelled });
+  const second = pool.deliver("a", "second", 2);
+  await flush();
+  expect(rooms).toHaveLength(1);
+  // Stopped while its place is made, and the host still full: it asks for
+  // no other.
+  cancelled = true;
+  rooms[0]?.();
+  await expect(first).resolves.toEqual({ ok: true, undelivered: true });
+  // The next message opens its own process, making room again.
+  await flush();
+  expect(rooms).toHaveLength(2);
+  full = false;
+  rooms[1]?.();
+  await expect(second).resolves.toEqual({ ok: true });
+  expect(fake.processes.map((process) => process.prompts)).toEqual([
+    ["second"],
+  ]);
+  pool.dispose();
+});
+
+it("keeps a cold compaction's process while it waits to send /compact", async () => {
+  const fake = fakeSpawn(new Set(["saved-a"]));
+  const store = memoryStore();
+  store.all.set("a", { id: "saved-a", seen: 100, at: 1 });
+  let first = true;
+  let occupied = false;
+  let refuse: (() => void) | undefined;
+  let entered!: () => void;
+  const asking = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  // The host has one place. Another conversation's request reaches it
+  // first, and is refused only once the compaction has taken the place.
+  const spawn: Spawn = (id, options) => {
+    if (first && !options?.args?.includes("--resume")) {
+      first = false;
+      entered();
+      return new Promise((_resolve, reject) => {
+        refuse = () => reject(PROCESS_LIMIT);
+      });
+    }
+    if (occupied) return Promise.reject(PROCESS_LIMIT);
+    occupied = true;
+    const launched = fake.spawn(id, options);
+    void launched.then((process) =>
+      process.exited.then(() => {
+        occupied = false;
+      }),
+    );
+    return launched;
+  };
+  const stopped: number[] = [];
+  const pool: AgentSessions = new AgentSessions({
+    spawn,
+    store,
+    launch: async () => ({ cwd: "/work", systemPrompt: "prompt" }),
+    fingerprint: () => "same",
+    room: async () => {
+      const idlest = pool.idlest();
+      if (!idlest) return false;
+      stopped.push(idlest.used);
+      await idlest.stop();
+      return true;
+    },
+    onChange: () => {
+      if (!refuse || !pool.snapshot().some((row) => row.key === "a")) return;
+      const reject = refuse;
+      refuse = undefined;
+      // Refused after the compaction's process is adopted, before it sends.
+      queueMicrotask(reject);
+    },
+  });
+  try {
+    const competing = pool.deliver("b", "new request", 101);
+    await asking;
+    await expect(pool.compact("a")).resolves.toEqual({ ok: true });
+    await competing;
+    expect(store.all.get("a")?.id).toBe("saved-a");
+    expect(stopped).toEqual([]);
+    expect(
+      fake.processes.find((row) => row.options.args?.includes("saved-a"))
+        ?.prompts,
+    ).toEqual(["/compact"]);
+  } finally {
+    pool.dispose();
+  }
 });
 
 it("does not wait for a spare started elsewhere", async () => {
@@ -395,7 +540,8 @@ it("resumes a saved conversation after its process stops", async () => {
   vi.useFakeTimers();
   const store = memoryStore();
   const started = vi.fn();
-  const { pool, claudes } = sessions({ store, started });
+  const again = vi.fn();
+  const { pool, claudes } = sessions({ store, started, resumed: again });
   await pool.deliver("c/root", "first", 1);
   const first = claudes()[0];
   vi.advanceTimersByTime(IDLE_MS + 1);
@@ -407,8 +553,112 @@ it("resumes a saved conversation after its process stops", async () => {
   expect(resumed?.options.args).toContain("new-1");
   expect(resumed?.prompts).toEqual(["later"]);
   expect(store.get("c/root")).toMatchObject({ id: "new-1", seen: 5 });
-  // Only the new session tells what it started with; the resume does not.
+  // Only the new session tells what it started with; the resume tells what
+  // it was resumed with.
   expect(started.mock.calls).toEqual([["new-1", "prompt", undefined]]);
+  expect(again.mock.calls).toEqual([["new-1", "prompt"]]);
+});
+
+it("offers the conversation used longest ago that is doing nothing, to stop", async () => {
+  let now = 1_000;
+  const at = (time: number) => {
+    now = time;
+  };
+  // Before the pool reads the clock it keeps.
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const { pool, claudes } = sessions();
+  try {
+    at(1_000);
+    await pool.deliver("c/a", "one", 1);
+    at(2_000);
+    await pool.deliver("c/b", "two", 2);
+    at(3_000);
+    await pool.deliver("c/a", "three", 3);
+    const [a, b] = claudes();
+    expect(a?.prompts).toEqual(["one", "three"]);
+    const idlest = pool.idlest();
+    expect(idlest?.used).toBe(2_000);
+    await idlest?.stop();
+    expect(b?.killed).toBe(true);
+    expect(a?.killed).toBe(false);
+    expect(pool.snapshot()).toEqual([{ key: "c/a", busy: false }]);
+  } finally {
+    vi.restoreAllMocks();
+    pool.dispose();
+  }
+});
+
+it("offers no conversation that is working or about to take a message", async () => {
+  const { pool, claudes } = sessions({ hold: true });
+  try {
+    const working = pool.deliver("c/a", "one", 1);
+    await flush(10);
+    expect(pool.idlest()).toBeUndefined();
+    claudes()[0]?.finish();
+    await working;
+    expect(pool.idlest()).toBeDefined();
+    let release!: () => void;
+    const held = new Promise<string>((resolve) => {
+      release = () => resolve("two");
+    });
+    const next = pool.deliver("c/a", "two", 2, { refresh: () => held });
+    await flush(10);
+    expect(pool.idlest()).toBeUndefined();
+    release();
+    await flush(10);
+    claudes()[0]?.finish();
+    await next;
+  } finally {
+    pool.dispose();
+  }
+});
+
+it("offers no conversation whose next message is still being prepared", async () => {
+  const { pool } = sessions();
+  try {
+    await pool.deliver("c/a", "one", 1);
+    const first = pool.incoming("c/a");
+    const second = pool.incoming("c/a");
+    expect(pool.idlest()).toBeUndefined();
+    first();
+    first();
+    expect(pool.idlest()).toBeUndefined();
+    second();
+    expect(pool.idlest()).toBeDefined();
+  } finally {
+    pool.dispose();
+  }
+});
+
+it("stops making room for a one-off turn once it is given up", async () => {
+  const given = new AbortController();
+  let rooms = 0;
+  const room = vi.fn(async () => {
+    given.abort(new Error("given up"));
+    return ++rooms < 3;
+  });
+  const { pool } = sessions({ full: true, room });
+  try {
+    const settled = await pool.runOnce("timer", () => "go", given.signal);
+    expect(settled.ok).toBe(false);
+    await flush(10);
+    expect(room).toHaveBeenCalledTimes(1);
+  } finally {
+    pool.dispose();
+  }
+});
+
+it("never makes room for model discovery", async () => {
+  const room = vi.fn(async () => false);
+  const { pool } = sessions({ full: true, room });
+  try {
+    await pool.metadata().catch(() => undefined);
+    expect(room).not.toHaveBeenCalled();
+    await pool.deliver("c/a", "one", 1).catch(() => undefined);
+    expect(room).toHaveBeenCalledTimes(1);
+  } finally {
+    pool.dispose();
+  }
 });
 
 it("bounds a channel session's thread history while retaining recently used threads", async () => {
@@ -1208,6 +1458,60 @@ it("releases a conversation handover when its refresh fails", async () => {
   } finally {
     f.pool.dispose();
   }
+});
+
+it("attributes a new conversation on the adopted spare and saves its binding beside the session", async () => {
+  const { pool, spare, store, claudes } = withSpare({
+    env: {
+      ANTHROPIC_BASE_URL: "https://gateway.example/ai-gateway/anthropic",
+      ANTHROPIC_CUSTOM_HEADERS: "x-keep: configured",
+    },
+  });
+  spare.warm({ cwd: "/work", model: "opus" });
+  await flush();
+  const seen: unknown[] = [];
+  const attribute = vi.fn(async (process: ClaudeProcess, saved: unknown) => {
+    seen.push(saved);
+    await process.attribute({
+      origin: "https://gateway.example",
+      profile: VECTOR_PROFILE,
+      headers: { [VECTOR_PROFILE.headers.launcher_client]: "client-a" },
+    });
+    return VECTOR_BINDING;
+  });
+  await pool.deliver("c/root", "hello", 10, { attribute });
+  const [used] = claudes();
+  // The spare was warmed before any agent; its own headers are read at the
+  // first attribution, so nothing of another conversation carries over.
+  expect(used?.headers).toEqual([
+    "x-keep: configured\nx-gw-launcher-client: client-a",
+  ]);
+  expect(store.get("c/root")).toMatchObject({
+    id: "spare-1",
+    gateway: VECTOR_BINDING,
+  });
+  // The next turn is given the binding saved beside its session.
+  await pool.deliver("c/root", "again", 11, { attribute });
+  expect(seen).toEqual([undefined, VECTOR_BINDING]);
+});
+
+it("gives a resumed session only the binding saved beside it", async () => {
+  const store = memoryStore();
+  store.set("c/root", {
+    id: "old",
+    seen: 1,
+    gateway: VECTOR_BINDING,
+    at: 1,
+  });
+  const { pool } = sessions({ known: new Set(["old"]), store });
+  const attribute = vi.fn(async () => undefined);
+  await pool.deliver("c/root", "hello", 10, { attribute });
+  expect(attribute).toHaveBeenCalledWith(expect.anything(), VECTOR_BINDING);
+  // New session forgets it with the harness session.
+  await pool.forget("c/root");
+  await pool.deliver("c/root", "fresh", 11, { attribute });
+  expect(attribute).toHaveBeenLastCalledWith(expect.anything(), undefined);
+  expect(store.get("c/root")?.gateway).toBeUndefined();
 });
 
 it("retains a missing remote session until the owner starts a new session", async () => {

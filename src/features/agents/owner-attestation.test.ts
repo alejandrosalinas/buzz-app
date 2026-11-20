@@ -1,5 +1,5 @@
-import { expect, it } from "vitest";
-import { attestedOwner } from "./owner-attestation";
+import { expect, it, vi } from "vitest";
+import { attestedOwner, authTagOwner } from "./owner-attestation";
 
 // NIP-OA test vector: owner secret 1, agent secret 2.
 const owner =
@@ -64,4 +64,45 @@ it("rejects self-attestation and another agent key", async () => {
       event([["auth", owner, conditions, sig]], { pubkey: "b".repeat(64) }),
     ),
   ).toBeUndefined();
+});
+
+it("reuses the check for a repeated auth tag", async () => {
+  const tag = ["auth", owner, conditions, sig];
+  const target = "d".repeat(64);
+  const digest = vi.spyOn(crypto.subtle, "digest");
+  try {
+    await authTagOwner(target, tag);
+    await authTagOwner(target, [...tag]);
+    expect(digest).toHaveBeenCalledOnce();
+  } finally {
+    digest.mockRestore();
+  }
+});
+
+it("verifies an oversized auth tag without keeping it", async () => {
+  const tag = ["auth", owner, `kind=1${"&kind=1".repeat(100)}`, sig];
+  const target = "e".repeat(64);
+  const digest = vi.spyOn(crypto.subtle, "digest");
+  try {
+    await authTagOwner(target, tag);
+    await authTagOwner(target, tag);
+    expect(digest).toHaveBeenCalledTimes(2);
+  } finally {
+    digest.mockRestore();
+  }
+});
+
+it("retries a check that failed instead of keeping the failure", async () => {
+  const tag = ["auth", owner, conditions, sig];
+  const target = "f".repeat(64);
+  const digest = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockRejectedValueOnce(new DOMException("failed", "OperationError"));
+  try {
+    expect(await authTagOwner(target, tag)).toBeUndefined();
+    await authTagOwner(target, tag);
+    expect(digest).toHaveBeenCalledTimes(2);
+  } finally {
+    digest.mockRestore();
+  }
 });

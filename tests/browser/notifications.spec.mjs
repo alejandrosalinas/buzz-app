@@ -76,13 +76,18 @@ async function ready(page, app) {
 function liveMessage(
   app,
   content,
-  { age = 0, replyTo, mentioned = true } = {},
+  {
+    age = 0,
+    createdAt = Math.floor(Date.now() / 1000) - age,
+    replyTo,
+    mentioned = true,
+  } = {},
 ) {
   const event = finalizeEvent(
     {
       kind: 9,
       content,
-      created_at: Math.floor(Date.now() / 1000) - age,
+      created_at: createdAt,
       tags: [
         ["h", "beta"],
         ...(mentioned ? [["p", app.viewer]] : []),
@@ -322,7 +327,11 @@ test("a fully visible incoming row stays quiet without publishing read intent", 
   // Controlled policy/dwell ordering, not evidence about native frame scheduling.
   // Exact-row navigation and reflow journeys below retain native rAF.
   await pauseClock(page, 30_000);
-  const row = liveMessage(app, "Visible mention");
+  // The earlier row can finish its dwell as the clock advances. Publish
+  // after its read frontier so this live mention starts unread.
+  const row = liveMessage(app, "Visible mention", {
+    createdAt: following.created_at + 1,
+  });
   await expect
     .poll(() =>
       page.evaluate(
@@ -387,7 +396,9 @@ test("a fully visible incoming row stays quiet without publishing read intent", 
   );
   await settle(page);
   await history.focus();
-  liveMessage(app, "Allowed visible mention");
+  liveMessage(app, "Allowed visible mention", {
+    createdAt: row.created_at + 1,
+  });
   await expect.poll(() => systemCount(page)).toBe(1);
 });
 

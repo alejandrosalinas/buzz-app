@@ -47,7 +47,10 @@ function parseRecord(
           value.turnId.length > 256
         )
           return [];
-        return [{ record: projected, value }];
+        // A frozen projection lets transcripts reuse its parse by identity.
+        return [
+          { record: byScope ? Object.freeze(projected) : projected, value },
+        ];
       } catch {
         return [];
       }

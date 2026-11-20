@@ -37,7 +37,8 @@ export function createPresenceActivity(
       choice = restored;
       error = undefined;
     } catch {
-      error = "Could not read your saved status. Changes apply to this window.";
+      error =
+        "Could not read your saved availability. Changes apply to this window.";
     }
     emit();
   };
@@ -157,7 +158,7 @@ export function createPresenceActivity(
         error = undefined;
       } catch {
         error =
-          "Could not save your status. It applies to this window until you close it.";
+          "Could not save your availability. It applies to this window until you close it.";
       }
       if (choice === "auto") input();
       emit();

@@ -5,7 +5,10 @@ import {
   viewRevision,
   writeView,
 } from "../../shared/view-state";
-import type { UploadedAttachment } from "../relay/attachments";
+import {
+  isUploadedAttachment,
+  type UploadedAttachment,
+} from "../relay/attachments";
 import type { MentionPicks } from "../relay/messages";
 import type { ComposerToken } from "./composer-token";
 import { messageTokenTags } from "./message-tokens";
@@ -210,20 +213,7 @@ function valid(value: unknown): value is SavedFollowUp {
     strings(v.recipients) &&
     strings(v.references) &&
     Array.isArray(v.attachments) &&
-    v.attachments.every(
-      (a) =>
-        a &&
-        typeof a.name === "string" &&
-        typeof a.url === "string" &&
-        typeof a.type === "string" &&
-        typeof a.sha256 === "string" &&
-        Number.isFinite(a.size) &&
-        (a.voice === undefined ||
-          (a.voice &&
-            Number.isFinite(a.voice.duration) &&
-            Array.isArray(a.voice.waveform) &&
-            a.voice.waveform.every(Number.isFinite))),
-    ) &&
+    v.attachments.every(isUploadedAttachment) &&
     !!v.picks &&
     typeof v.picks === "object" &&
     !Array.isArray(v.picks) &&

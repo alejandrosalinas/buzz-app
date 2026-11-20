@@ -1,3 +1,5 @@
+@reference "../../shared/styles/globals.css";
+
 /* Global navigation and filters sit above the shared sidebar scrollport. */
 .sidebarControls {
   display: flex;
@@ -11,31 +13,50 @@
   flex: 1 1 10rem;
   min-width: 0;
 }
-.sidebarGroup + .sidebarGroup:not([hidden]) {
-  margin-block-start: var(--space-6);
+/* The app-wide New menu floats over the sidebar's bottom-left corner;
+   SidebarFrame pads the list so its last rows can scroll clear of it. */
+.sidebarCreation {
+  @apply interaction-floating;
+  position: absolute;
+  inset-block-end: var(--space-2);
+  inset-inline-start: var(--sidebar-padding-inline);
+  z-index: 2;
+  display: flex;
 }
-.sidebarGroup[hidden] + .sidebarGroup {
-  margin-block-start: 0;
+/* Paint the menu surface inside the button's existing footprint. */
+.sidebarCreation::before {
+  @apply floating-surface;
+  --floating-radius: var(--radius-pill);
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
 }
-
-/* Page rows reserve the channel list's scrollbar gutter (.channelList in
-   SidebarFrame.module.css), so they end in its column wherever scrollbars take
-   space; the controls above keep the header's full width. The gutter needs a
-   scroll container, and this one never overflows. It clips, so its padding
-   holds row focus rings (2px wide, offset 2px, unscaled by Interface size),
-   and its margins offset that padding so rows do not move. */
+/* Give pinned pages the same trailing scrollbar budget as the list. Their
+   focus rings are drawn inside the rows. Block padding maintains the gap
+   between the pinned pages and the first scrolling section. */
 .destinations {
   --row-ring-extent: 4px;
   display: flex;
   flex-direction: column;
   gap: var(--space-half);
   margin: calc(-1 * var(--row-ring-extent)) calc(-1 * var(--row-ring-extent))
-    calc(var(--space-3) + var(--space-2) - var(--row-ring-extent));
-  padding: var(--row-ring-extent);
-  overflow: hidden;
+    calc(var(--space-2) - var(--row-ring-extent));
+  margin-inline-end: calc(-1 * var(--sidebar-padding-end));
+  padding: var(--row-ring-extent) 0 var(--row-ring-extent)
+    var(--row-ring-extent);
+  /* Bound the pinned region so the conversation scrollport keeps room at
+     short window heights and large interface sizes. */
+  max-block-size: 40dvh;
+  overflow-y: auto;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+  scrollbar-color: var(--scrollbar-thumb-quiet) transparent;
+}
+.destinations > * {
+  flex-shrink: 0;
+  width: min(100%, 100cqi);
 }
 .destinations::-webkit-scrollbar {
   width: 5px;
@@ -50,4 +71,16 @@
   font-size: var(--text-body-sm);
   line-height: var(--text-body-sm--line-height);
   letter-spacing: var(--text-body-sm--letter-spacing);
+}
+/* The plus turns into a close mark while its menu is open. */
+.sidebarCreation svg {
+  transition: transform var(--duration-settle) var(--ease-settle);
+}
+.sidebarCreation [aria-expanded="true"] svg {
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebarCreation svg {
+    transition: none;
+  }
 }

@@ -9,6 +9,7 @@ import { MessageLink } from "../conversation/MessageLink";
 import type { ConversationExtensions } from "../conversation/contracts";
 import { parseBuzzLink } from "../navigation/buzz-links";
 import type { AgentLibrary } from "../agents/library";
+import { profileKey } from "../profiles/target";
 import styles from "../../shared/InlineReference.module.css";
 
 const emptyProfiles: ReadonlyMap<string, Profile> = new Map();
@@ -28,11 +29,66 @@ export function MentionLabel({
   return (
     <>
       <span className={styles.lead}>
-        <Icon aria-hidden="true" className={styles.icon} />
+        <span role="img" aria-label={agent ? "agent @" : "@"}>
+          <Icon aria-hidden="true" className={styles.icon} />
+        </span>
         {lead}
       </span>
       {label.slice(lead.length)}
     </>
+  );
+}
+
+/** A bound profile mention's chip, as messages and their previews show it:
+ * its name resolved for the channel, without a namesake qualifier, and
+ * marked as an agent or the viewer. A button when it opens the profile. */
+export function ProfileMention({
+  text,
+  target,
+  profiles,
+  agents,
+  viewer,
+  resolveName,
+  onOpen,
+}: {
+  text: string;
+  target: string;
+  profiles: ReadonlyMap<string, Profile>;
+  agents: AgentLibrary["identities"];
+  viewer: string | undefined;
+  resolveName: (pubkey: string, fallback: string) => string;
+  onOpen?: ((target: string) => unknown) | undefined;
+}) {
+  const key = profileKey(target);
+  const agent =
+    !!key &&
+    (agents.some((entry) => entry.pubkey === key) ||
+      !!profiles.get(key)?.isAgent);
+  // A namesake-qualified span shows its name; its target is the key.
+  const shown = text.slice(1).replace(/ \([a-f0-9]{64}\)$/i, "");
+  const label = key ? resolveName(key, shown) : shown;
+  const Mention = onOpen ? "button" : "span";
+  // Selection copy reads the identity and the whole label (selection-copy.ts).
+  return (
+    <Mention
+      type={onOpen ? "button" : undefined}
+      className={styles.link}
+      data-mention-kind={agent ? "agent" : "person"}
+      data-mention-self={key && key === viewer ? "" : undefined}
+      data-profile-target={target}
+      data-mention-name={label}
+      aria-label={onOpen ? `View ${label} profile` : undefined}
+      onClick={
+        onOpen
+          ? (event) => {
+              event.currentTarget.focus();
+              onOpen(target);
+            }
+          : undefined
+      }
+    >
+      <MentionLabel agent={agent} label={label} />
+    </Mention>
   );
 }
 /** The only channel fields a reference may read; the rest can be out of date. */

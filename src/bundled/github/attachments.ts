@@ -138,3 +138,23 @@ export function signedUrl(
   const url = githubMediaUrl(value);
   return url && metadata.get(assetKey(url))?.src;
 }
+
+export type Size = Readonly<{ width: number; height: number }>;
+const MAX_SIZES = 500;
+const sizes = new Map<string, Size>();
+
+/** The size `value`'s media measured at, kept so a body shown again sizes its
+ * frames before the media loads. */
+export function knownSize(value: string): Size | undefined {
+  const url = githubMediaUrl(value);
+  return url && sizes.get(assetKey(url));
+}
+
+export function rememberSize(value: string, size: Size) {
+  const url = githubMediaUrl(value);
+  if (!url || !(size.width > 0 && size.height > 0)) return;
+  const key = assetKey(url);
+  sizes.delete(key);
+  sizes.set(key, size);
+  if (sizes.size > MAX_SIZES) sizes.delete(sizes.keys().next().value ?? key);
+}

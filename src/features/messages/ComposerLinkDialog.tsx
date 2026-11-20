@@ -4,6 +4,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import type { ComposerInputElement, ComposerLinkEdit } from "./composer-dom";
+import { Combobox } from "../../shared/design-system/ui/Combobox";
 import { composerLinkUrl } from "./composer-link";
 
 export function ComposerLinkDialog({
@@ -12,7 +13,11 @@ export function ComposerLinkDialog({
   finalFocus = input,
   disabled,
   close,
+  destinations,
+  limitLabel = "message",
 }: {
+  destinations?: readonly { label: string; href: string }[] | undefined;
+  limitLabel?: string;
   edit: ComposerLinkEdit;
   input: RefObject<ComposerInputElement | null>;
   finalFocus?: DialogProps["finalFocus"];
@@ -38,7 +43,7 @@ export function ComposerLinkDialog({
     }
     if (!edit.save(text, href)) {
       setError(
-        "The draft changed or this link exceeds the message limit. Close and try again.",
+        `The draft changed or this link exceeds the ${limitLabel} limit. Close and try again.`,
       );
       return;
     }
@@ -89,6 +94,34 @@ export function ComposerLinkDialog({
           save();
         }}
       >
+        {destinations && (
+          <Combobox.Root<{ label: string; href: string }>
+            items={[...destinations]}
+            itemToStringLabel={(item) => item.label}
+            itemToStringValue={(item) => item.href}
+            onValueChange={(item) => {
+              if (!item) return;
+              setUrl(item.href);
+              if (!text.trim()) setText(item.label);
+              setError("");
+            }}
+          >
+            <Combobox.Control
+              label="Link destination"
+              triggerLabel="Browse destinations"
+              placeholder="Search destinations…"
+            />
+            <Combobox.Popup empty="No destinations match.">
+              <Combobox.List>
+                {(item) => (
+                  <Combobox.Item key={item.href} value={item}>
+                    {item.label}
+                  </Combobox.Item>
+                )}
+              </Combobox.List>
+            </Combobox.Popup>
+          </Combobox.Root>
+        )}
         <Field label="Text">
           <Input
             ref={textInput}

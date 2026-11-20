@@ -142,7 +142,7 @@ it.each(["Markdown", "HTML"])(
       );
       const preview = screen.getByAltText(alt);
       expect(preview).toHaveAttribute("alt", alt);
-      expect(screen.getByRole("link")).toHaveAttribute("href", image);
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
       fireEvent.load(preview);
       expect(screen.queryByRole("link")).not.toBeInTheDocument();
       expect(container).toHaveTextContent(/^Before after\.$/);
@@ -169,7 +169,7 @@ it.each([
       />,
     );
     const preview = screen.getByAltText(description);
-    expect(screen.getByRole("link")).toHaveAttribute("href", source);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
     fireEvent.load(preview);
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(container).toHaveTextContent(
@@ -684,7 +684,7 @@ it("keeps mixed HTML text, images and attachment links in order after loading an
   expect(screenshot).toHaveAttribute("src", image);
   expect(screenshot).not.toHaveAttribute("onerror");
   expect(container).toHaveTextContent(
-    "Before the screenshot. HTML screenshot After the screenshot. Source archive",
+    "Before the screenshot. After the screenshot. Source archive",
   );
   fireEvent.load(screenshot);
   expect(screen.queryByRole("link", { name: "HTML screenshot" })).toBeNull();
@@ -853,10 +853,9 @@ it.each([`![Linked image](${image})`, `**![Linked image](${image})**`])(
       />,
     );
     expect(screen.getByAltText("Linked image").closest("a, p")).toBeNull();
-    expect(screen.getByRole("link", { name: "Linked image" })).toHaveAttribute(
-      "href",
-      image,
-    );
+    expect(
+      screen.queryByRole("link", { name: "Linked image" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "https://example.com/review" }),
     ).toBeVisible();
@@ -867,9 +866,139 @@ it.each([`![Linked image](${image})`, `**![Linked image](${image})**`])(
     expect(
       screen.getByRole("link", { name: "https://example.com/review" }),
     ).toBeVisible();
+    fireEvent.error(screen.getByAltText("Linked image"));
+    expect(screen.getByRole("link", { name: "Linked image" })).toHaveAttribute(
+      "href",
+      image,
+    );
     expect(container.querySelector("a a")).toBeNull();
   },
 );
+
+it("omits the link GitHub adds from an uploaded image to itself", () => {
+  render(
+    <GitHubBody
+      url={url}
+      body={`<a href="${image}"><img src="${image}" alt="Self-linked"></a>`}
+    />,
+  );
+  fireEvent.load(screen.getByAltText("Self-linked"));
+  expect(screen.queryByRole("link")).not.toBeInTheDocument();
+});
+
+it("bounds an image's frame by its authored width before it loads", () => {
+  const { container } = render(
+    <GitHubBody
+      url={url}
+      body={`<img src="${image}" alt="Wide" width="340">\n\n<img src="${image}" alt="Thumbnail" width="64">\n\n![Unsized](${before})`}
+    />,
+  );
+  const widths = [
+    ...container.querySelectorAll<HTMLElement>("[data-media-preview]"),
+  ].map((frame) =>
+    frame.parentElement?.style.getPropertyValue("--attachment-width"),
+  );
+  expect(widths).toEqual(["340px", "64px", ""]);
+});
+
+it("sizes an image's frame from an early off-screen read", async () => {
+  const tall =
+    "https://github.com/user-attachments/assets/0b7c41c2-1f62-4a55-9a4e-6f1d2c3b4a51";
+  const signed =
+    "https://private-user-images.githubusercontent.com/1/2-0b7c41c2-1f62-4a55-9a4e-6f1d2c3b4a51.png?jwt=fresh";
+  const read: string[] = [];
+  vi.stubGlobal(
+    "Image",
+    class {
+      naturalWidth = 400;
+      naturalHeight = 1200;
+      onload: (() => void) | null = null;
+      set src(value: string) {
+        read.push(value);
+        queueMicrotask(() => this.onload?.());
+      }
+    },
+  );
+  const body = (
+    <GitHubBody
+      url={url}
+      body={`![Tall](${tall})`}
+      bodyHtml={`<img src="${signed}">`}
+    />
+  );
+  const { unmount } = render(body);
+  const frame = () =>
+    document.querySelector<HTMLElement>("[data-media-preview]");
+  await waitFor(() =>
+    expect(frame()?.style.getPropertyValue("--media-ratio")).toBe("400 / 1200"),
+  );
+  expect(read).toEqual([signed]);
+
+  // A body shown again sizes the frame from the size read before.
+  unmount();
+  vi.unstubAllGlobals();
+  render(body);
+  expect(frame()?.style.getPropertyValue("--media-ratio")).toBe("400 / 1200");
+});
+
+it("keeps an image's off-screen read on its link until that link fails", () => {
+  const slow =
+    "https://github.com/user-attachments/assets/7e1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+  const signed = (jwt: string) =>
+    `https://private-user-images.githubusercontent.com/1/2-7e1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b.png?jwt=${jwt}`;
+  const reads: { link: string; onerror: (() => void) | null }[] = [];
+  vi.stubGlobal(
+    "Image",
+    class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(value: string) {
+        reads.push(Object.assign(this, { link: value }));
+      }
+    },
+  );
+  const body = (jwt: string) => (
+    <GitHubBody
+      url={url}
+      body={`![Slow](${slow})`}
+      bodyHtml={`<img src="${signed(jwt)}">`}
+    />
+  );
+  const { rerender } = render(body("first"));
+  rerender(body("second"));
+  expect(reads.map(({ link }) => link)).toEqual([signed("first")]);
+  act(() => reads[0]?.onerror?.());
+  expect(reads.map(({ link }) => link)).toEqual([
+    signed("first"),
+    signed("second"),
+  ]);
+});
+
+it("takes an image's new size when it loads after a remembered one", () => {
+  const changing =
+    "https://github.com/user-attachments/assets/5d2e8f10-7a3b-4c6d-9e1f-2a3b4c5d6e7f";
+  const body = <GitHubBody url={url} body={`![Changing](${changing})`} />;
+  const load = (width: number, height: number) => {
+    const preview = screen.getByAltText("Changing");
+    Object.defineProperties(preview, {
+      naturalWidth: { value: width },
+      naturalHeight: { value: height },
+    });
+    fireEvent.load(preview);
+  };
+  const ratio = () =>
+    document
+      .querySelector<HTMLElement>("[data-media-preview]")
+      ?.style.getPropertyValue("--media-ratio");
+  const { unmount } = render(body);
+  load(300, 900);
+  unmount();
+
+  render(body);
+  expect(ratio()).toBe("300 / 900");
+  load(600, 300);
+  expect(ratio()).toBe("600 / 300");
+});
 
 it("preserves linked HTML images and media fallback destinations without nested links", () => {
   const { container } = render(

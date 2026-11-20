@@ -47,6 +47,25 @@ const locator =
   "buzz://open?target=%7B%22version%22%3A1%2C%22kind%22%3A%22home%22%7D";
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+it("binds a New message link to the selected community and viewer", () => {
+  expect(deepLinkStep(`buzz://dm/new?to=${root}`, client)).toEqual({
+    open: {
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.channels",
+      pageId: "channels",
+      scope: { viewer, communityOrigin: origin },
+      route: {
+        version: 1,
+        params: { kind: "new-message", to: root, at: expect.any(Number) },
+      },
+    },
+  });
+  expect(
+    deepLinkStep(`buzz://dm/new?to=${root}`, { viewer, selected: null }),
+  ).toEqual({ fail: "unavailable" });
+});
+
 it("binds message and channel links to the selected community and viewer", () => {
   expect(deepLinkStep(messageLink, client)).toEqual({
     open: {

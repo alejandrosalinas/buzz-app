@@ -103,7 +103,7 @@ it.each([
       expect(h.unread.markChannelRead).toHaveBeenCalledExactlyOnceWith("room");
       expect(h.unread.markUnreadLocal).not.toHaveBeenCalled();
     } else {
-      expect(item).toHaveAttribute("title", "Mark unread on this device only");
+      expect(item).toHaveAttribute("title", "Mark as unread");
       expect(h.unread.markUnreadLocal).toHaveBeenCalledExactlyOnceWith({
         kind: "channel",
         channelId: "room",

@@ -56,3 +56,23 @@ it("asks nothing when off", async () => {
   expect(result.current).toEqual({ status: "off" });
   expect(goose.recommends).not.toHaveBeenCalled();
 });
+
+it("asks again when told to, keeping its last answer meanwhile", async () => {
+  let ready = false;
+  const goose = harness("goose", "Goose", () => ready);
+  const { result, rerender } = renderHook(
+    ({ asked }) => useRecommendedPick([goose], true, asked),
+    { initialProps: { asked: 0 } },
+  );
+  await act(async () => {});
+  expect(result.current).toEqual({ status: "none" });
+  ready = true;
+  rerender({ asked: 1 });
+  expect(result.current).toEqual({ status: "none" });
+  await act(async () => {});
+  expect(result.current).toMatchObject({ status: "found" });
+  ready = false;
+  rerender({ asked: 2 });
+  await act(async () => {});
+  expect(result.current).toEqual({ status: "none" });
+});

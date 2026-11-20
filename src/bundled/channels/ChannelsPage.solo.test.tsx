@@ -93,7 +93,10 @@ function fixture({
   member = false,
   emptyHistory = false,
   restored = false,
+  muted,
 }: {
+  /** Channels the viewer muted; enables sidebar mute writes when given. */
+  muted?: readonly string[];
   sidebarRows?: readonly RegisteredSidebarRows[];
   /** Observed unread messages in this chat; fakes the read state when given. */
   unread?: number;
@@ -280,6 +283,14 @@ function fixture({
     status: "reconciled" as const,
     completeness: "snapshot" as const,
   };
+  const preferences = muted
+    ? { ...projects, data: { ...projects.data, muted } }
+    : projects;
+  const setMute = vi.fn(async (channel: string, mute: boolean) =>
+    mute
+      ? [...(muted ?? []), channel]
+      : (muted ?? []).filter((m) => m !== channel),
+  );
   const session = {
     ...owner.session,
     profiles: {
@@ -353,15 +364,16 @@ function fixture({
           ? removal.preview
           : owner.session.channels.get?.(channelId),
     },
-    soloPreferences: {
-      ...owner.session.soloPreferences,
-      snapshot: () => projects,
+    sidebarPreferences: {
+      ...owner.session.sidebarPreferences,
+      snapshot: () => preferences,
       subscribe: (listener: () => void) => {
         listeners.add(listener);
         return () => {
           listeners.delete(listener);
         };
       },
+      ...(muted ? { muteWritable: true, ensure: async () => {}, setMute } : {}),
     },
     messages: { ...owner.session.messages, send },
     unread:
@@ -482,6 +494,10 @@ function fixture({
       <ChannelsPage
         relay={relay}
         panels={{
+          ui: {
+            Workspace: () => null,
+            useSplit: vi.fn(),
+          },
           ...contribution,
           register() {},
           resolve: () => undefined,
@@ -685,6 +701,64 @@ it("turns /leave into the existing channel confirmation without posting it", asy
   await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(editor).toHaveFocus());
   expect(f.run).not.toHaveBeenCalled();
+});
+
+it.each([
+  { muted: [] as string[], next: true, toast: "Muted Planning" },
+  { muted: [id], next: false, toast: "Unmuted Planning" },
+])(
+  "toggles the channel mute with /mute without posting it (muted: $next)",
+  async ({ muted, next, toast }) => {
+    const f = fixture({ type: "stream", muted });
+    f.mountWithToasts();
+    const editor = await screen.findByRole("textbox", {
+      name: "Message Planning",
+    });
+    const user = userEvent.setup();
+    await user.type(editor, "/mute{Enter}");
+    expect(await screen.findByText(toast)).toBeInTheDocument();
+    expect(
+      f.session.sidebarPreferences.setMute,
+    ).toHaveBeenCalledExactlyOnceWith(id, next);
+    expect(f.send).not.toHaveBeenCalled();
+    expect(editor).toHaveValue("");
+  },
+);
+
+it("offers Retry when a mute from /mute cannot be saved", async () => {
+  const f = fixture({ type: "stream", muted: [] });
+  vi.mocked(f.session.sidebarPreferences.setMute).mockRejectedValueOnce(
+    new Error("refused"),
+  );
+  f.mountWithToasts();
+  const editor = await screen.findByRole("textbox", {
+    name: "Message Planning",
+  });
+  const user = userEvent.setup();
+  await user.type(editor, "/mute{Enter}");
+  const failure = await screen.findByRole("dialog", {
+    name: "Couldn’t mute Planning",
+  });
+  expect(
+    within(failure).getByRole("button", { name: "Retry" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("Muted Planning")).not.toBeInTheDocument();
+  expect(f.send).not.toHaveBeenCalled();
+});
+
+it("keeps /mute in the composer where mutes are unavailable", async () => {
+  const f = fixture({ type: "stream" });
+  f.mountWithToasts();
+  const editor = await screen.findByRole("textbox", {
+    name: "Message Planning",
+  });
+  const user = userEvent.setup();
+  await user.type(editor, "/mute{Enter}");
+  expect(
+    await screen.findByText("You can’t mute this conversation here."),
+  ).toBeInTheDocument();
+  expect(f.send).not.toHaveBeenCalled();
+  expect(editor).toHaveValue("/mute");
 });
 
 it("retires the Archive shortcut once the chat is archived", async () => {
@@ -1676,7 +1750,7 @@ it("offers the header's chat actions from the sidebar row, plus inline Rename", 
 it("runs the header's own chat actions and returns focus to Chat actions", async () => {
   const f = fixture();
   const assign = vi.fn(async () => {});
-  Object.assign(f.session.soloPreferences, { writable: true, assign });
+  Object.assign(f.session.sidebarPreferences, { writable: true, assign });
   f.mount();
   const user = userEvent.setup();
   const trigger = await screen.findByRole("button", { name: "Chat actions" });
@@ -1698,8 +1772,8 @@ it("runs the header's own chat actions and returns focus to Chat actions", async
 
 it("reports a failed header move beside the header and retries it", async () => {
   const f = fixture();
-  const base = f.session.soloPreferences.snapshot();
-  let current: ReturnType<typeof f.session.soloPreferences.snapshot> = base;
+  const base = f.session.sidebarPreferences.snapshot();
+  let current: ReturnType<typeof f.session.sidebarPreferences.snapshot> = base;
   const listeners = new Set<() => void>();
   const publish = (next: typeof current) => {
     current = next;
@@ -1718,7 +1792,7 @@ it("reports a failed header move beside the header and retries it", async () => 
     ],
   } as unknown as typeof current;
   const retryMove = vi.fn(async () => {});
-  Object.assign(f.session.soloPreferences, {
+  Object.assign(f.session.sidebarPreferences, {
     writable: true,
     snapshot: () => current,
     subscribe: (listener: () => void) => {
@@ -2029,33 +2103,28 @@ function watchForLossNotice() {
   };
 }
 
-it("names an archived channel above its history, and its owner unarchives it there", async () => {
-  const f = fixture({ type: "stream", archived: true, emptyHistory: true });
+it("announces a remote archive and offers Unarchive in the only visible notice", async () => {
+  const f = fixture({ type: "stream", emptyHistory: true });
   f.mountWithToasts();
-  const banner = await screen.findByRole("region", {
-    name: "Archived · view only",
+  await screen.findByRole("textbox", { name: "Message Planning" });
+  const liveRegions = screen.getAllByRole("status");
+  act(() => f.setArchived(true));
+  const notice = await screen.findByRole("region", {
+    name: "Archived channel",
   });
-  expect(banner).toHaveTextContent(
-    "It’s hidden from the sidebar until it’s unarchived.",
-  );
-  // The pane's persistent status announces it; the notice is not another one.
-  expect(banner.parentElement).toHaveAttribute("role", "status");
-  expect(banner).not.toHaveAttribute("role");
-  expect(banner).not.toHaveAttribute("aria-live");
-  const history = screen.getByRole("region", {
-    name: "Channel message history",
-  });
+  const message =
+    "This channel is archived. It's read-only and hidden from your sidebar.";
+  expect(within(notice).getByText(message)).toBeVisible();
+  const announcement = screen.getByText(message, { selector: ".sr-only" });
+  const status = announcement.closest('[role="status"]');
+  expect(liveRegions).toContain(status);
   expect(
-    banner.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  // The lower notice still says what archiving does to writing.
-  expect(
-    screen.getByRole("region", { name: "Archived channel" }),
-  ).toHaveTextContent("This channel is archived");
+    screen.queryByRole("region", { name: "Archived · view only" }),
+  ).toBeNull();
   expect(await screen.findByText("No messages yet.")).toBeVisible();
   expect(screen.queryByText("Start the conversation below.")).toBeNull();
   const user = userEvent.setup();
-  await user.click(within(banner).getByRole("button", { name: "Unarchive" }));
+  await user.click(within(notice).getByRole("button", { name: "Unarchive" }));
   const dialog = await screen.findByRole("dialog", {
     name: "Unarchive channel: Planning",
   });
@@ -2074,9 +2143,8 @@ it("names an archived channel above its history, and its owner unarchives it the
       screen.getByRole("textbox", { name: "Message Planning" }),
     ).toHaveFocus(),
   );
-  expect(
-    screen.queryByRole("region", { name: "Archived · view only" }),
-  ).toBeNull();
+  expect(screen.queryByRole("region", { name: "Archived channel" })).toBeNull();
+  expect(status).toBeEmptyDOMElement();
   expect(screen.getByText("Start the conversation below.")).toBeVisible();
 });
 
@@ -2094,19 +2162,61 @@ it("returns focus to Unarchive when its confirmation is cancelled", async () => 
 
 it("offers no Unarchive to a member of an archived channel", async () => {
   fixture({ type: "stream", archived: true, member: true }).mount();
-  const banner = await screen.findByRole("region", {
-    name: "Archived · view only",
+  const notice = await screen.findByRole("region", {
+    name: "Archived channel",
   });
-  expect(within(banner).queryByRole("button")).toBeNull();
+  expect(within(notice).queryByRole("button")).toBeNull();
 });
 
-it("says nothing about the sidebar to a preview reader of an archived channel", async () => {
+it("shows only the archived pill to a preview reader without Unarchive permission", async () => {
   fixture({ type: "stream", archived: true, preview: {} }).mount();
-  const banner = await screen.findByRole("region", {
-    name: "Archived · view only",
+  const notice = await screen.findByRole("region", {
+    name: "Archived channel",
   });
-  // It was never in their sidebar.
-  expect(banner).toHaveTextContent(/^Archived · view only$/);
+  expect(
+    within(notice).getByText("This channel is archived and read-only."),
+  ).toBeVisible();
+  expect(within(notice).queryByRole("button")).toBeNull();
+  expect(
+    screen.queryByRole("region", { name: "Archived · view only" }),
+  ).toBeNull();
+});
+
+it("waits for preview history before offering Join after remote unarchive", async () => {
+  const f = fixture({
+    type: "stream",
+    archived: true,
+    preview: {},
+    emptyHistory: true,
+  });
+  const channels: RelaySession["channels"] = f.session.channels;
+  const settled = channels.window(id);
+  const history = vi
+    .spyOn(channels, "window")
+    .mockReturnValue({ ...settled, status: "loading" });
+  const listeners = new Set<() => void>();
+  vi.spyOn(channels, "subscribeWindow").mockImplementation(
+    (_channelId, listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  );
+  f.mount();
+  const archive = await screen.findByRole("region", {
+    name: "Archived channel",
+  });
+  expect(archive).toBeVisible();
+  act(() => f.setArchived(false));
+  expect(archive).toHaveAttribute("inert");
+  expect(screen.queryByRole("button", { name: /^Join$/ })).toBeNull();
+
+  act(() => {
+    history.mockReturnValue(settled);
+    for (const listener of listeners) listener();
+  });
+  expect(await screen.findByRole("button", { name: /^Join$/ })).toBeVisible();
 });
 
 it.each(["private", "public"] as const)(
@@ -2159,7 +2269,7 @@ it("explains lost membership of an already-archived channel opened from Search",
   // Out of the sidebar, so its membership comes from the roster itself.
   const f = fixture({ type: "stream", archived: true });
   f.mountWithToasts();
-  await screen.findByRole("region", { name: "Archived · view only" });
+  await screen.findByRole("region", { name: "Archived channel" });
   act(() => f.remove("private"));
   const banner = await screen.findByRole("region", {
     name: "You’re no longer a member of Planning",

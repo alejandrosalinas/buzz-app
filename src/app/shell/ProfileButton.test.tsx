@@ -95,29 +95,34 @@ it("keeps the header cutout and menu status in sync with presence", () => {
       .closest("[data-status]"),
   ).toHaveAttribute("data-status", "online");
 
-  for (const [status, label] of [
-    ["away", "Away"],
-    ["offline", "Offline"],
-    ["unknown", "Status unavailable"],
+  for (const [status, name] of [
+    ["away", "Availability: Away"],
+    ["offline", "Availability: Offline"],
+    ["unknown", "Availability unknown"],
   ] as const) {
     act(() => {
       presence = { ...presence, status };
       for (const listener of listeners) listener();
     });
-    if (status === "unknown")
+    if (status === "unknown") {
       expect(button.querySelector(".buzz-avatar-status")).not.toHaveAttribute(
         "data-status",
       );
-    else
+      expect(
+        screen.getByRole("img", { name: "Your availability is unknown" }),
+      ).toBeInTheDocument();
+    } else
       expect(button.querySelector(".buzz-avatar-status")).toHaveAttribute(
         "data-status",
         status,
       );
-    expect(
-      screen
-        .getByRole("button", { name: `Availability: ${label}` })
-        .closest("[data-status]"),
-    ).toHaveAttribute("data-status", status);
+    const pill = screen.getByRole("button", { name });
+    expect(pill.closest("[data-status]")).toHaveAttribute(
+      "data-status",
+      status,
+    );
+    // The unknown pill shows its whole accessible name.
+    if (status === "unknown") expect(pill).toHaveTextContent(name);
   }
 });
 
@@ -446,7 +451,7 @@ it("shows the selected community name and authenticated avatar without saving a 
       await screen.findByRole("menu", { name: "Community name" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Availability: Status unavailable" }),
+      screen.getByRole("button", { name: "Availability unknown" }),
     ).toBeVisible();
     expect(media).toHaveBeenCalledWith(
       "https://community.test/media/avatar.png",
@@ -1119,7 +1124,7 @@ async function statusFeedbackFixture(disconnected = false) {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Your profile" }));
   await user.click(
-    await screen.findByRole("button", { name: /^Availability:/ }),
+    await screen.findByRole("button", { name: /^Availability/ }),
   );
   await screen.findByRole("menuitemradio", { name: "Away" });
   return {
@@ -1163,7 +1168,7 @@ it("keeps confirmed indicators while pending, replaces attempts, times out, retr
     act(() => vi.advanceTimersByTime(1));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not confirm your status",
+      "Could not confirm your availability",
     );
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Offline" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1192,6 +1197,11 @@ it("cancels feedback on disconnected community switches even when both sessions 
   try {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Away" }));
     expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Availability unknown, updating to away",
+      }),
+    ).toBeInTheDocument();
     h.community();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     act(() => vi.advanceTimersByTime(15000));

@@ -236,6 +236,21 @@ createRoot(root).render(
           <UserStatusDisplay session={first} userId={viewer.pubkey} />
           <UserStatusDisplay session={first} userId={other.pubkey} />
         </section>
+        <section
+          aria-label="Profile preview"
+          className="rounded-2xl border border-line p-4"
+        >
+          <h2>Profile preview</h2>
+          {["16rem", "5rem"].map((width) => (
+            <div key={width} style={{ width }}>
+              <UserStatusDisplay
+                session={first}
+                userId={other.pubkey}
+                size="caption"
+              />
+            </div>
+          ))}
+        </section>
       </div>
       <div className="mt-6 flex gap-2">
         <button

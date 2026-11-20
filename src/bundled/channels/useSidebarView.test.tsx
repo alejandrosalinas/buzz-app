@@ -36,20 +36,28 @@ it("keeps the viewport when a child retries a pending reveal during a preserved 
       </>
     );
   }
-  function View({ current = false }: { current?: boolean }) {
+  function View({
+    location = "activity",
+  }: {
+    location?: "activity" | "source" | "other";
+  }) {
     const sidebar = useSidebarView(
       "fixture",
       true,
-      current ? "source" : "activity",
-      current,
+      location,
+      location === "source",
     );
     return (
       <>
-        <button type="button" onClick={sidebar.revealAgain}>
+        <button type="button" onClick={() => sidebar.revealAgain()}>
           Reveal current
         </button>
         <nav ref={sidebar.list} data-testid="viewport">
-          <Rows current={current} retryReveal={sidebar.retryReveal} />
+          <Rows
+            key={location}
+            current={location !== "activity"}
+            retryReveal={sidebar.retryReveal}
+          />
         </nav>
       </>
     );
@@ -64,7 +72,7 @@ it("keeps the viewport when a child retries a pending reveal during a preserved 
   const view = render(<View />);
   const viewport = screen.getByTestId("viewport");
   Object.defineProperty(viewport, "clientHeight", { value: 100 });
-  view.rerender(<View current />);
+  view.rerender(<View location="source" />);
   expect(viewport.scrollTop).toBe(0);
   fireEvent.click(screen.getByText("Reveal current"));
   expect(viewport.scrollTop).toBe(160);
@@ -75,6 +83,14 @@ it("keeps the viewport when a child retries a pending reveal during a preserved 
   expect(viewport.scrollTop).toBe(0);
   fireEvent.click(screen.getByText("Toggle source"));
   expect(viewport.scrollTop).toBe(160);
+
+  // A pending explicit reveal belongs to the chat whose chip requested it.
+  const reveal = screen.getByRole("button", { name: "Reveal current" });
+  fireEvent.click(screen.getByText("Toggle source"));
+  reveal.focus();
+  fireEvent.click(reveal);
+  view.rerender(<View location="other" />);
+  expect(reveal).toHaveFocus();
 });
 it("re-arms only explicit current reveals using the latest location and preserves manual scrolling otherwise", () => {
   let sidebar: ReturnType<typeof useSidebarView> | undefined;
@@ -87,13 +103,14 @@ it("re-arms only explicit current reveals using the latest location and preserve
     ready: boolean;
     preserve?: boolean;
   }) {
-    sidebar = useSidebarView("fixture", ready, location, preserve);
+    const state = useSidebarView("fixture", ready, location, preserve);
+    sidebar = state;
     return (
       <>
-        <button type="button" onClick={sidebar.revealAgain}>
+        <button type="button" onClick={() => state.revealAgain()}>
           Reveal current
         </button>
-        <nav ref={sidebar.list} data-testid="viewport">
+        <nav ref={state.list} data-testid="viewport">
           <button type="button" aria-current="page">
             Current
           </button>

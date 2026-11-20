@@ -129,6 +129,31 @@ it("distinguishes empty patches and supports plain unified patches", () => {
   ).toHaveLength(1);
 });
 
+it.each([
+  ["bare", "--- a/src/a.ts\n+++ b/src/a.ts\n"],
+  [
+    "tab-timestamped",
+    "--- src/a.ts\t2024-01-01 00:00:00.000000000 +0000\n+++ src/a.ts\t2024-01-02 00:00:00.000000000 +0000\n",
+  ],
+  [
+    "space-timestamped",
+    "--- src/a.ts 2024-01-01 00:00:00.000000000 +0000\n+++ src/a.ts 2024-01-02 00:00:00.000000000 +0000\n",
+  ],
+])("reads the path of a %s patch without a Git header", (_name, headers) => {
+  expect(parsePatch(`${headers}@@ -1 +1 @@\n-old\n+new\n`)).toMatchObject([
+    { oldPath: "src/a.ts", newPath: "src/a.ts", type: "modify" },
+  ]);
+});
+
+it("reads added and deleted files in patches without a Git header", () => {
+  expect(
+    parsePatch("--- /dev/null\n+++ b/src/a.ts\n@@ -0,0 +1 @@\n+new\n"),
+  ).toMatchObject([{ newPath: "src/a.ts", type: "add" }]);
+  expect(
+    parsePatch("--- a/src/a.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n"),
+  ).toMatchObject([{ oldPath: "src/a.ts", type: "delete" }]);
+});
+
 it("retains multiple hunks and exact no-newline markers", () => {
   const files = parsePatch(
     patch.replace("-old\n", "-old\n\\ No newline at end of file\n") +

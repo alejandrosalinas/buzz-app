@@ -372,12 +372,14 @@ test("covered panes and notifications preserve focus and F6 recovery", async ({
     await expect(search).toBeFocused();
     await expect(alpha).toHaveText("Alpha draft");
   }
-  // Repeat with a notification above the competing dock. Toasts now rise above
-  // docked composers; pin the stack to its base offset so a covered composer's
-  // focus recovery stays exercised.
+  // Force overlap with the competing dock to exercise covered-composer focus
+  // recovery independently of the production toast's top-right placement.
   await page.addStyleTag({
-    content:
-      '[aria-label="App notifications"] { --buzz-toast-clearance: 0px !important; }',
+    content: `[data-sonner-toaster] {
+      top: auto !important;
+      bottom: 8px !important;
+      height: var(--front-toast-height) !important;
+    }`,
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await composer.fill("Toast draft");
@@ -579,13 +581,23 @@ test.extend({ readState: true, threadUnread: true })(
     await page
       .getByRole("textbox", { name: "Message #Alpha", exact: true })
       .click();
-    const newest = Math.max(...history.map((event) => event.created_at));
+    // Channel catch-up stops at the newest top-level post, never a reply.
+    const newest = Math.max(
+      ...history
+        .filter(
+          (event) =>
+            !event.tags.some(
+              ([name, , , marker]) => name === "e" && marker === "reply",
+            ),
+        )
+        .map((event) => event.created_at),
+    );
     await expect
-      .poll(async () => (await frontiers())["activity:alpha"] ?? 0)
+      .poll(async () => (await frontiers())["alpha"] ?? 0)
       .toBeGreaterThanOrEqual(newest);
     await page.setViewportSize({ width: 600, height: 900 });
     await expect(tab).toBeFocused();
-    const caughtUp = (await frontiers())["activity:alpha"];
+    const caughtUp = (await frontiers())["alpha"];
     const message = app.append(
       "primary",
       "alpha",
@@ -604,16 +616,14 @@ test.extend({ readState: true, threadUnread: true })(
     // message has passed too.
     const reply = app.reply(root.id);
     await expect
-      .poll(async () =>
-        read(await frontiers(), reply, `thread-activity:${root.id}`),
-      )
+      .poll(async () => read(await frontiers(), reply, `thread:${root.id}`))
       .toBe(true);
-    expect(read(await frontiers(), message, "activity:alpha")).toBe(false);
+    expect(read(await frontiers(), message, "alpha")).toBe(false);
     await page
       .getByRole("button", { name: "Close Thread root 1 tab", exact: true })
       .click();
     await expect
-      .poll(async () => read(await frontiers(), message, "activity:alpha"))
+      .poll(async () => read(await frontiers(), message, "alpha"))
       .toBe(true);
   },
 );

@@ -1,6 +1,40 @@
 {
   "accepted": [
     {
+      "name": "conditional Solo role change",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "member"],
+          ["expected_role", "admin"]
+        ]
+      }
+    },
+    {
+      "name": "conditional Solo role change from bot to admin",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "admin"],
+          ["expected_role", "bot"]
+        ]
+      }
+    },
+    {
       "name": "remove",
       "event": {
         "kind": 9001,
@@ -65,6 +99,90 @@
     }
   ],
   "rejected": [
+    {
+      "name": "Solo role change without expected role",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "member"]
+        ]
+      }
+    },
+    {
+      "name": "Solo role change with owner as expected role",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "member"],
+          ["expected_role", "owner"]
+        ]
+      }
+    },
+    {
+      "name": "Solo role change with absent as expected role",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "member"],
+          ["expected_role", "absent"]
+        ]
+      }
+    },
+    {
+      "name": "Solo role change with a misnamed expected-role tag",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "member"],
+          ["old_role", "admin"]
+        ]
+      }
+    },
+    {
+      "name": "Solo role change with owner as the new role",
+      "event": {
+        "kind": 9050,
+        "created_at": 1700000010,
+        "content": "",
+        "tags": [
+          ["h", "11111111-1111-4111-8111-111111111111"],
+          [
+            "p",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          ["role", "owner"],
+          ["expected_role", "admin"]
+        ]
+      }
+    },
     {
       "name": "wrong kind",
       "event": {

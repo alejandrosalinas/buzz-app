@@ -30,7 +30,7 @@ const TRAFFIC_LIMIT = 1500;
 export type NetworkSource =
   | "live"
   | "catalog"
-  | "solo-preferences"
+  | "threads"
   | "sidebar-preferences"
   | "visibility";
 export type NetworkEvent = Readonly<{

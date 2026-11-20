@@ -39,3 +39,50 @@ and `notify-failed` identify the write phase that throws. `keep` and `use-saved`
 Multiple editor IDs for one draft can show which mounted editors observe a
 write. These records locate the guard and operation order. They do not prove
 which external process changed storage or why it did so.
+
+## macOS storage locks
+
+WebKit can replace a Networking helper but fail to stop the old helper. The
+abandoned helper can keep a SQLite write lock that blocks later draft saves.
+An immediate read-back can succeed before WebKit reports the storage failure.
+This is one possible cause, not a diagnosis for every draft conflict.
+
+Buzz extends its GPU recovery to Networking helpers reported by the main
+webview's data store. GPU helpers get two valid missing checks. Networking
+helpers get ten checks, about ten seconds, before the watcher signals them. This
+gives a Networking helper more time to exit. The helper's expected executable,
+process ID, and start time must still match. An unreadable reported identity
+pauses that helper watch.
+Current helpers and helpers Buzz never observed remain untouched.
+
+This recovery runs only while Buzz is open. It does not scan for helpers left
+by earlier launches, delete storage, or bypass draft conflict checks. It is not
+a storage-flush barrier for pending writes in an abandoned helper. Unified log
+messages containing `WebKit Networking process` record each recovery attempt.
+Collect those messages alongside the draft trace when investigating a lock.
+
+### Native regression check
+
+Run this check from a graphical macOS session with the Xcode command-line tools:
+
+```sh
+bin/cargo run --locked -p buzz-webkit-reaper-test
+```
+
+The check loads the production watcher in an isolated Tauri host with temporary
+storage. It starts no Buzz services and uses no saved identity. It drives the
+real timer callbacks and suspends only its own Networking helper to hold a
+SQLite write lock. It checks recovery, active helpers, the committed draft, and
+a new durable write without reloading. It cleans up its own Networking helpers
+and temporary storage.
+
+This check needs WebKit's directory-based data-store fixture API. It fails
+before exercising recovery if that API is unavailable. It does not exercise
+the Buzz composer or establish human acceptance.
+
+## Glossary
+
+- **Helper:** a separate WebKit process used by the app's webview.
+- **Networking helper:** the WebKit process that also manages local website storage.
+- **SQLite:** the database engine WebKit uses for saved local data.
+- **Webview:** the native view that renders Buzz's web interface.

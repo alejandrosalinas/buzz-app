@@ -172,6 +172,20 @@ for (const target of ["alpha", "profiles"]) {
         await expect(warning).toHaveCount(0);
       }
     }
+    if (target === "alpha") {
+      const header = page.locator(".shell-header");
+      await header.evaluate((node) => node.classList.add("shell-header-mac"));
+      await expect
+        .poll(() =>
+          page
+            .locator(".buzz-toast")
+            .evaluate((node) => node.getBoundingClientRect().top),
+        )
+        .toBe(12);
+      await header.evaluate((node) =>
+        node.classList.remove("shell-header-mac"),
+      );
+    }
     // The notice keeps showing while the retried REQ waits for EOSE, and it
     // floats above the composer without covering Send.
     for (const width of [390, 800, 1440]) {
@@ -297,8 +311,13 @@ test("long recovery stays above the composer at enlarged text size", async ({
 async function openDiagnostics(page) {
   // A quick reopen can retain the outgoing settings DOM during its exit.
   const summary = page.getByText("Diagnostics", { exact: true });
-  if ((await summary.locator("..").getAttribute("open")) === null)
-    await summary.click();
+  // A recovery toast can cover the bottom of Channel settings.
+  if ((await summary.locator("..").getAttribute("open")) === null) {
+    await summary.focus();
+    await page.keyboard.press("Enter");
+    // Move the mouse off Channel actions, which a wider viewport puts over Activity's hover preview.
+    await summary.hover({ force: true });
+  }
   await expect(summary.locator("..")).toHaveAttribute("open", "");
 }
 

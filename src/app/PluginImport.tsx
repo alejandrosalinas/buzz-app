@@ -675,6 +675,15 @@ export function PluginImport({
         result && updateId
           ? {
               ...result,
+              warnings: savedSource
+                ? result.warnings.filter((warning) =>
+                    warning.startsWith(
+                      savedSource.path === "."
+                        ? "Selected folder:"
+                        : `${savedSource.path}:`,
+                    ),
+                  )
+                : result.warnings,
               candidates: result.candidates.filter(
                 (item) =>
                   item.manifest.id === updateId &&

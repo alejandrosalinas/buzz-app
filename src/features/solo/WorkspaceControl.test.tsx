@@ -21,7 +21,7 @@ function fixture() {
     },
   };
   const session = {
-    soloPreferences: {
+    sidebarPreferences: {
       snapshot: () => snapshot,
       subscribe: () => () => {},
       assign,
@@ -58,7 +58,7 @@ it("changes a new-chat project locally instead of moving a saved channel", async
 it("keeps project recovery reachable after preferences fail", async () => {
   const refresh = vi.fn(async () => {});
   const session = {
-    soloPreferences: {
+    sidebarPreferences: {
       snapshot: () => ({ status: "error", error: "Projects unavailable" }),
       subscribe: () => () => {},
       assign: vi.fn(async () => {}),
@@ -78,7 +78,9 @@ it("shows a region chat's workspace and files it through its region", async () =
   const h = createSoloRegionFixture();
   try {
     const { session, assign } = fixture();
-    Object.assign(h.session, { soloPreferences: session.soloPreferences });
+    Object.assign(h.session, {
+      sidebarPreferences: session.sidebarPreferences,
+    });
     let id: string | undefined = "buzz";
     let revision = 1;
     const region = await h.register({
@@ -121,7 +123,9 @@ it("keeps focus on the control while a keyboard choice saves, and ignores it unt
   let finish = () => {};
   try {
     const { session } = fixture();
-    Object.assign(h.session, { soloPreferences: session.soloPreferences });
+    Object.assign(h.session, {
+      sidebarPreferences: session.sidebarPreferences,
+    });
     const file = vi.fn(
       () => new Promise<void>((resolve) => (finish = resolve)),
     );
@@ -163,7 +167,9 @@ it("keeps hiding a region chat whose region offers no workspace", async () => {
   const h = createSoloRegionFixture();
   try {
     const { session } = fixture();
-    Object.assign(h.session, { soloPreferences: session.soloPreferences });
+    Object.assign(h.session, {
+      sidebarPreferences: session.sidebarPreferences,
+    });
     await h.register();
     const relay = h.session as unknown as RelaySession;
     const view = render(<WorkspaceControl session={relay} channelId="owned" />);

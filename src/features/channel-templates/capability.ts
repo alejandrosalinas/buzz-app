@@ -15,10 +15,12 @@ import {
   KIT_TAG,
   ME_KIT_TAG,
   kitTag,
+  legacyWorkspaceRecipeCoordinate,
   parseKitRecord,
   type KitEntry,
   type KitRecord,
   type KitValue,
+  type Groups,
 } from "./model";
 import { CANVAS_HISTORY_PAGE } from "./canvas-limits";
 import { TEAM_MANIFEST_TAG } from "./team-payload";
@@ -88,6 +90,36 @@ export function createChannelKit({
   };
   const fresh = (filters: readonly ReadFilter[], readSignal = signal) =>
     reader.read(filters, { signal: readSignal, fresh: true });
+  async function readLegacyGroups(
+    active: AbortSignal,
+  ): Promise<Groups | undefined> {
+    if (!host) throw new Error("Saved chat workspaces are unavailable");
+    const d = legacyWorkspaceRecipeCoordinate(community);
+    const event = selectedHead(
+      await fresh(
+        [
+          {
+            kinds: [30078],
+            authors: [viewer],
+            "#d": [d],
+            limit: 1,
+            consistency: "strong",
+          },
+        ],
+        active,
+      ),
+    );
+    active.throwIfAborted();
+    if (!event) return;
+    const decoded = await host.decode([event], active);
+    active.throwIfAborted();
+    if (decoded.length !== 1 || decoded[0]?.eventId !== event.id)
+      throw new Error("Saved chat workspaces could not be verified");
+    const record = parseKitRecord(decoded[0].record, community);
+    if (record.value.type !== "groups" || coordinate(record) !== d)
+      throw new Error("Saved chat workspaces could not be verified");
+    if (!record.deleted) return record.value;
+  }
   /** `after: true` never joins a read that began before this call, so the
    * result reflects every change visible when the caller asked. */
   async function refresh({ after = false } = {}) {
@@ -471,6 +503,7 @@ export function createChannelKit({
   );
   return {
     capability,
+    readLegacyGroups,
     canvas,
     confirm,
     clear() {

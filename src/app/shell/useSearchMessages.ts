@@ -13,8 +13,12 @@ import {
   searchDebounce,
 } from "../../shared/search-debounce";
 import { objectBody } from "../../features/relay/body";
+import { imetaAttachmentUrls } from "../../features/relay/fold";
+import { projectMarkdownAttachments } from "../../features/relay/message-content";
+import type { PreviewMentions } from "../../features/messages/PreviewText";
 import type { RelaySession } from "../../features/relay/session";
 import type { ReadFilter } from "../../features/relay/events";
+import { ReadError } from "../../features/relay/errors";
 import type { Profile } from "../../features/relay/contracts";
 import { foldProfiles } from "../../features/relay/profiles";
 import { searchedProfiles } from "../../features/relay/profile-search";
@@ -35,7 +39,7 @@ import {
 } from "./parseSearchOperators";
 
 const noAgentNames: ReadonlyMap<string, string> = new Map();
-const PAGE_SIZE = 20;
+export const PAGE_SIZE = 20;
 
 export type SearchSort = "relevance" | "newest";
 
@@ -48,6 +52,8 @@ export type SearchMessage = Readonly<{
   preview: string;
   /** The searchable text, whitespace kept, for snippets and previews. */
   text: string;
+  /** The message's signed mentions, which its chips bind. */
+  mentioned: PreviewMentions;
 }>;
 
 /** Message kinds search returns: chat, agent and diff messages. Ranked
@@ -61,10 +67,56 @@ export function eventText(event: { kind: number; content: string }) {
   return typeof body?.content === "string" ? body.content : "Agent message";
 }
 
+type IndexedEvent = {
+  kind: number;
+  content: string;
+  tags: readonly (readonly string[])[];
+};
+
+/** An indexed event's body as its conversation binds it, with its images
+ * and attachment links projected out the same way. */
+function eventBody(event: IndexedEvent) {
+  const content = eventText(event);
+  const urls = imetaAttachmentUrls(event);
+  return content.includes("![") || urls.size
+    ? projectMarkdownAttachments(content, urls)
+    : { content, seams: [] };
+}
+
 /** An indexed event's text as it reads, without Markdown syntax and with
- * spoilers hidden, for snippets and previews. */
+ * spoilers hidden, for snippets and previews. It keeps the raw body, with
+ * attachment names and image markers, so a search for a file name shows it;
+ * only chips bind the projected body (`eventMentions`), and past an
+ * attachment the preview's text check leaves names as text. */
 export function searchText(event: { kind: number; content: string }) {
   return plainText(eventText(event), { limit: 4000 });
+}
+
+/** An indexed event's body and signed mentions, read from its tags as a
+ * message reads them: `p` recipients and two-field `mention` references. A
+ * patch shows as raw text, so it binds no one. */
+export function eventMentions(event: IndexedEvent): PreviewMentions {
+  if (event.kind === 40008) return { content: eventText(event), mentions: [] };
+  const keys = (pick: (tag: readonly string[]) => boolean) => [
+    ...new Set(
+      event.tags.flatMap((tag) =>
+        pick(tag) && tag[1] && isHexPubkey(tag[1]) ? [tag[1]] : [],
+      ),
+    ),
+  ];
+  const mentions = keys(([name]) => name === "p");
+  const mentionReferences = keys(
+    (tag) => tag.length === 2 && tag[0] === "mention",
+  );
+  if (!mentions.length && !mentionReferences.length)
+    return { content: eventText(event), mentions };
+  const { content, seams } = eventBody(event);
+  return {
+    content,
+    mentions,
+    mentionReferences,
+    ...(seams.length ? { attachmentSeams: seams } : {}),
+  };
 }
 type Result = {
   owner: object;
@@ -124,11 +176,12 @@ async function readPage(
         createdAt: event.created_at,
         preview: text.replace(/\s+/g, " ").trim().slice(0, 240) || "Attachment",
         text,
+        mentioned: eventMentions(event),
       },
     ];
   });
   // The relay pages by offset, so only a full page can have a successor.
-  return { messages, more: relayCount >= PAGE_SIZE };
+  return { messages, more: relayCount >= (filter.limit ?? PAGE_SIZE) };
 }
 
 /** Later pages extend the list. Offsets can shift between reads, so a repeated
@@ -160,6 +213,9 @@ export function useSearchMessages(
   agentNames: ReadonlyMap<string, string> = noAgentNames,
   /** Newest is honored only by relays advertising `buzz-search-sort`. */
   sort: SearchSort = "relevance",
+  /** Pages the first relevance-ranked read asks for at once, so a reranker
+   * sees more than one. Later pages are read one at a time. */
+  rankedPages = 1,
 ) {
   const ordinaryChannel = useCallback(
     (id: string, includePending = false) => {
@@ -216,6 +272,7 @@ export function useSearchMessages(
   const newest = sort === "newest" && session.searchSort;
   // Without text the relay reads its ordinary newest-first history.
   const newestFirst = newest || !parsed.text;
+  const firstPages = newestFirst ? 1 : rankedPages;
   // Only evidence consulted by this resolution can invalidate its results.
   // Other views verify unrelated people without resetting these pages.
   const verification = useMemo(() => {
@@ -274,6 +331,7 @@ export function useSearchMessages(
       attempt,
       newest,
       verifiedRevision,
+      firstPages,
     }),
     [
       session,
@@ -283,6 +341,7 @@ export function useSearchMessages(
       attempt,
       newest,
       verifiedRevision,
+      firstPages,
     ],
   );
   // The copied result changes synchronously even if React has not committed it yet.
@@ -480,16 +539,41 @@ export function useSearchMessages(
           ...(parsed.since !== null ? { since: parsed.since } : {}),
           ...(parsed.until !== null ? { until: parsed.until } : {}),
         };
-        const page = await readPage(
-          session,
-          channelId,
-          filter,
-          1,
-          controller.signal,
-        );
+        const read = (limit: number) =>
+          readPage(
+            session,
+            channelId,
+            { ...filter, limit },
+            1,
+            controller.signal,
+          );
+        let pages = firstPages;
+        let page: Awaited<ReturnType<typeof read>>;
+        try {
+          page = await read(PAGE_SIZE * pages);
+        } catch (error) {
+          // Full events can overflow the read budget across several pages
+          // when one page fits: the search still shows that page.
+          if (
+            pages === 1 ||
+            !(error instanceof ReadError && error.kind === "invalid-response")
+          )
+            throw error;
+          pages = 1;
+          page = await read(PAGE_SIZE);
+        }
+        // Offsets count in the later pages' size: after n first pages, the
+        // next is page n + 1.
         return {
           messages: page.messages,
-          ...(page.more ? { next: { filter, page: 2 } } : {}),
+          ...(page.more
+            ? {
+                next: {
+                  filter: { ...filter, limit: PAGE_SIZE },
+                  page: pages + 1,
+                },
+              }
+            : {}),
         };
       })()
         .then(({ messages, next, ambiguousAuthor }) => {
@@ -528,6 +612,7 @@ export function useSearchMessages(
     agents,
     newest,
     verification,
+    firstPages,
   ]);
   const loadMore = useCallback(() => {
     const base = copied.current;

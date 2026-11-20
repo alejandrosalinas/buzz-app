@@ -8,6 +8,7 @@ import {
 } from "motion/react";
 import { WORKFLOW_CHANNEL_BATCH } from "../../features/workflows/queries";
 import {
+  type ComponentProps,
   type ReactNode,
   type Ref,
   type RefObject,
@@ -23,6 +24,7 @@ import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import { useChannelIdentityNames } from "../../features/identity-names/react";
+import { avatarMedia } from "../../shared/avatar-source";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import type {
   WorkflowCapability,
@@ -55,6 +57,7 @@ import {
   TimerIcon,
   WebhooksLogoIcon,
 } from "../../shared/design-system/icons";
+import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -445,16 +448,53 @@ function WorkflowIcon({ kind }: { kind: WorkflowCardIcon }) {
   return <Icon size={20} strokeWidth={2.5} aria-hidden="true" />;
 }
 
+/** "panel" on an inset surface, as in the detail hero. */
+type OwnerFallbackSurface = NonNullable<
+  ComponentProps<typeof Avatar>["fallbackSurface"]
+>;
+
+/** The owner's avatar, then their name. The avatar is decorative, so the name
+ * is read once. Sighted users read the avatar as "owned by"; assistive
+ * technology gets that from a label that is never drawn. */
+function WorkflowOwnerLabel({
+  name,
+  src,
+  isAgent,
+  fallbackSurface,
+}: {
+  name: string;
+  src?: string | undefined;
+  isAgent?: boolean | undefined;
+  fallbackSurface: OwnerFallbackSurface;
+}) {
+  return (
+    <span className="workflow-owner">
+      <Avatar
+        size="tiny"
+        alt=""
+        fallback={name}
+        src={src}
+        shape={isAgent ? "squircle" : "circle"}
+        fallbackSurface={fallbackSurface}
+      />
+      <span className="sr-only">Owner: </span>
+      <span>{name}</span>
+    </span>
+  );
+}
+
 function WorkflowOwner({
   session,
   owner,
   channelId,
   keyLabel,
+  fallbackSurface,
 }: {
   session: RelaySession;
   owner: string;
   channelId: string;
   keyLabel: string;
+  fallbackSurface: OwnerFallbackSurface;
 }) {
   const selection = useMemo(
     () => selectProfiles(session.profiles, [owner]),
@@ -468,7 +508,14 @@ function WorkflowOwner({
   const name = useChannelIdentityNames(session, channelId);
   const profile = profiles.get(owner);
   const fallback = profile && !profile.nameIsFallback ? profile.name : keyLabel;
-  return <>Owner: {name(owner, fallback)}</>;
+  return (
+    <WorkflowOwnerLabel
+      name={name(owner, fallback)}
+      src={avatarMedia(profile?.picture, session.media)}
+      isAgent={profile?.isAgent}
+      fallbackSurface={fallbackSurface}
+    />
+  );
 }
 
 function WorkflowCard({
@@ -582,16 +629,6 @@ function WorkflowCard({
   const name = fields.name || "Unnamed or malformed workflow";
   const keyLabel =
     ownerKeyLabels.get(definition.owner.toLowerCase()) ?? "Unknown owner";
-  const owner = session ? (
-    <WorkflowOwner
-      session={session}
-      owner={definition.owner}
-      channelId={definition.channelId}
-      keyLabel={keyLabel}
-    />
-  ) : (
-    <>Owner: {keyLabel}</>
-  );
   const runDisabled =
     !!channel.archived ||
     readonly ||
@@ -764,10 +801,25 @@ function WorkflowCard({
       )}
     </>
   );
-  const updated = (
-    <time dateTime={new Date(definition.createdAt * 1000).toISOString()}>
-      {new Date(definition.createdAt * 1000).toLocaleDateString()}
-    </time>
+  // One line in the card and the detail: who owns it, then when it was saved.
+  // The line's gap separates the two, so a wrapped date leaves nothing behind.
+  const ownership = (fallbackSurface: OwnerFallbackSurface) => (
+    <>
+      {session ? (
+        <WorkflowOwner
+          session={session}
+          owner={definition.owner}
+          channelId={definition.channelId}
+          keyLabel={keyLabel}
+          fallbackSurface={fallbackSurface}
+        />
+      ) : (
+        <WorkflowOwnerLabel name={keyLabel} fallbackSurface={fallbackSurface} />
+      )}
+      <time dateTime={new Date(definition.createdAt * 1000).toISOString()}>
+        {new Date(definition.createdAt * 1000).toLocaleDateString()}
+      </time>
+    </>
   );
   const detail = (
     <section className="workflow-detail" aria-label={name}>
@@ -788,10 +840,12 @@ function WorkflowCard({
           {presentation.description}
         </p>
         <p className="text-caption text-subtle">
-          #{channel.name} · {channel.archived && "Archived · "}
-          {updated}
+          #{channel.name}
+          {channel.archived && " · Archived"}
         </p>
-        <p className="text-caption text-subtle">{owner}</p>
+        <p className="workflow-detail-owner text-caption text-subtle">
+          {ownership("panel")}
+        </p>
         <div className="workflow-detail-actions">
           <Button
             variant="primary"
@@ -929,25 +983,23 @@ function WorkflowCard({
                   <span className="workflow-card-name" title={name}>
                     {name}
                   </span>
-                  <span aria-hidden="true">·</span>
                   {showChannel && (
                     <>
+                      <span aria-hidden="true">·</span>
                       <span className="workflow-card-name" title={channel.name}>
                         #{channel.name}
                       </span>
-                      <span aria-hidden="true">·</span>
                       {channel.archived && (
                         <>
-                          <span>Archived</span>
                           <span aria-hidden="true">·</span>
+                          <span>Archived</span>
                         </>
                       )}
                     </>
                   )}
-                  {updated}
                 </span>
                 <span className="workflow-card-owner text-caption text-subtle">
-                  {owner}
+                  {ownership("subtle")}
                 </span>
               </span>
             }

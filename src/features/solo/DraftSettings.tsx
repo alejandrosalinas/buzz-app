@@ -4,7 +4,7 @@ import {
   detailsDraftErrors,
 } from "../relay/channel-details-protocol";
 import { DEFAULT_TEMPORARY_CHANNEL_TTL_SECONDS } from "../relay/channel-writes";
-import { useEffect, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import type { RelaySession } from "../relay/session";
 import type { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -69,6 +69,7 @@ export function DraftSettings({
   const [raw, setRaw] = useState<string>();
   // The Canvas the dialog opened with; undefined until it has loaded.
   const [opened, setOpened] = useState<string>();
+  const historical = useRef<{ canvas: string; workspace: string }>(undefined);
   const loaded = opened !== undefined;
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -85,7 +86,12 @@ export function DraftSettings({
         try {
           const workspace = readWorkspace(content);
           setWorkspace(workspace);
-          setOpened(workspaceCanvas(workspace));
+          const normalized = instructionsCanvas(workspace, undefined);
+          historical.current =
+            normalized === undefined
+              ? { canvas: content, workspace: JSON.stringify(workspace) }
+              : undefined;
+          setOpened(normalized ?? JSON.stringify(workspace));
         } catch {
           setRaw(content);
           setOpened(content);
@@ -99,13 +105,21 @@ export function DraftSettings({
       active = false;
     };
   }, [session, projectId, canvas, attempt]);
+  // Preserve an unchanged historical header when its replacement would not fit.
+  const rawCanvas =
+    raw ??
+    (JSON.stringify(workspace) === historical.current?.workspace
+      ? historical.current.canvas
+      : undefined);
   return (
     <ChatSettingsDialog
       dismissOnOutsideClick={false}
       dirty={
         canonicalDetailsName(value) !== canonicalDetailsName(openedName) ||
         ttl !== ttlSeconds ||
-        (loaded && instructionsCanvas(workspace, raw) !== opened)
+        (loaded &&
+          (instructionsCanvas(workspace, raw) ?? JSON.stringify(workspace)) !==
+            opened)
       }
       finalFocus={finalFocus}
       close={close}
@@ -113,9 +127,9 @@ export function DraftSettings({
       onSave={() => {
         try {
           save(
-            raw === undefined
+            rawCanvas === undefined
               ? workspaceCanvas(workspace)
-              : workspaceCanvas({ folders: [], canvas: raw }),
+              : workspaceCanvas({ folders: [], canvas: rawCanvas }),
             ttl,
             normalized,
           );

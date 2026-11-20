@@ -4,6 +4,7 @@ import { virtuaIdle } from "./timeline.mjs";
 import { holdMenuExit, opened } from "./menu-motion.mjs";
 
 const chatId = "33333333-3333-4333-8333-333333333333";
+const visibleSoloTitle = "[data-solo-chat-title] > [aria-hidden=true]";
 test.use({
   productionBroker: true,
   channelIds: ["alpha", "beta", chatId],
@@ -70,7 +71,7 @@ test("navigation menus do not highlight labels while message text and editors re
   await expect(channelMenu).toHaveCount(0);
 
   // Section disclosures have their own style, outside NavigationItem.
-  const section = channels.locator("summary").filter({ hasText: "Channels" });
+  const section = channels.locator("summary").filter({ hasText: "Team" });
   await expectNoSelection(page, section);
   await section.click({
     button: "right",
@@ -103,10 +104,11 @@ test("navigation menus do not highlight labels while message text and editors re
 
   await newChat(page);
   const conversations = page.getByRole("navigation", {
-    name: "Solo conversations",
+    name: "Subscribed channels",
   });
-  const chat = conversations.locator(`[data-solo-channel-id="${chatId}"]`);
-  const chatLabel = chat.getByText("Solo conversation", { exact: true });
+  const chat = conversations.locator(`[data-solo-destination-id="${chatId}"]`);
+  const chatLabel = chat.locator(visibleSoloTitle);
+  await expect(chat).toHaveAccessibleName("Solo conversation");
   // Leaving the draft retires its "New chat" row; let the list settle first.
   await chatLabel.click();
   await expect(
@@ -146,10 +148,9 @@ test("navigation menus do not highlight labels while message text and editors re
   expect(app.report.detailsPublications ?? []).toHaveLength(0);
 
   // Chats and named projects share this disclosure control, not the row style.
-  const heading = conversations.getByRole("button", {
-    name: "Chats",
-    exact: true,
-  });
+  const heading = conversations.locator(
+    '[data-sidebar-section="solo"] summary',
+  );
   await expectNoSelection(page, heading);
   await heading.click({
     button: "right",
@@ -180,16 +181,14 @@ test("context menus appear immediately and retain their source highlight through
       const source =
         surface === "channel"
           ? page.locator('[data-channel-id="beta"]')
-          : page.locator(`[data-solo-channel-id="${chatId}"]`);
+          : page.locator(`[data-solo-destination-id="${chatId}"]`);
       const name = surface === "channel" ? "Beta" : "Solo conversation";
       const menu = page.getByRole("menu", {
         name: `Actions for ${name}`,
         exact: true,
       });
       const frame = source.locator(
-        surface === "channel"
-          ? "xpath=ancestor::*[@data-channel-sidebar-row]"
-          : "xpath=ancestor::*[@data-solo-menu-id]",
+        "xpath=ancestor::*[@data-channel-sidebar-row]",
       );
       const background = () =>
         frame.evaluate(
@@ -222,7 +221,14 @@ test("context menus appear immediately and retain their source highlight through
           subtree: true,
         });
       }, `Actions for ${name}`);
-      await source.getByText(name, { exact: true }).click({ button: "right" });
+      const label =
+        surface === "channel"
+          ? source.getByText(name, { exact: true })
+          : source.locator(visibleSoloTitle);
+      await label.click({
+        button: "right",
+        position: await textPosition(label),
+      });
       await opened(menu);
       const samples = await page.evaluate(() => {
         window.__contextObserver.disconnect();

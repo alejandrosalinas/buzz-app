@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
 import { SurfaceButton } from "../../shared/design-system/ui/SurfaceButton";
+import { SoloChatTitle } from "../../features/solo/SoloChatTitle";
 import { ChannelMemberAvatars } from "./ChannelMemberAvatars";
 import styles from "./ChannelHeaderIdentity.module.css";
 
@@ -73,7 +74,18 @@ export function ChannelHeaderIdentity({
         <ChannelMemberAvatars session={session} channelId={channelId} />
       </span>
       <span className={styles.label}>
-        <span className={`${styles.name} text-body-sm`}>{name}</span>
+        <span className={`${styles.name} text-body-sm`}>
+          {access === soloAccess || access === soloReadOnlyAccess ? (
+            <SoloChatTitle
+              key={channelId}
+              channelId={channelId}
+              title={name}
+              details={session.channelDetails}
+            />
+          ) : (
+            name
+          )}
+        </span>
       </span>
     </SurfaceButton>
   );

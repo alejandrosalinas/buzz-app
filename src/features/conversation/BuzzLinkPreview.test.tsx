@@ -195,7 +195,8 @@ it("says why each stopped read fails instead of loading forever, and that the ca
   expect(missing.tree.textContent).toContain("Open link");
   const withheld = setup(base, root.id, undefined, { state: "withheld" });
   expect(text(withheld.tree)).toBe(previewFailures.withheld);
-  expect(withheld.tree.textContent).toContain("Open link");
+  // A withheld destination opens nothing, so its card offers no action.
+  expect(withheld.tree.textContent).not.toContain("Open link");
   expect(withheld.thread).not.toHaveBeenCalled();
 });
 it("waits for the channel lookup before trusting a refused read, then reads again", () => {

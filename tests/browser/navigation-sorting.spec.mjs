@@ -1,4 +1,5 @@
 import { test, expect } from "./fixture.mjs";
+import { animationsSettled } from "./animations.mjs";
 import { open } from "./timeline.mjs";
 import { openPage } from "./navigation.mjs";
 import { openChannelDetails } from "./channel-details.mjs";
@@ -249,7 +250,7 @@ test.describe("live reduced-motion preference", () => {
 // Hidden layout and rem-based row positions require the actual sidebar/browser.
 test.describe("nearby motion after layout changes", () => {
   test.use({ initialSidebarSort: { channels: "recent" } });
-  for (const change of ["Solo to Team", "interface text size"]) {
+  for (const change of ["reopening Team", "interface text size"]) {
     test(`starts a nearby reorder at the live positions after ${change}`, async ({
       page,
       app,
@@ -259,13 +260,13 @@ test.describe("nearby motion after layout changes", () => {
       const rows = section.locator("[data-channel-id]");
       await expect(rows.first()).toHaveAttribute("data-channel-id", "willow");
       let promoted = "cedar";
-      if (change === "Solo to Team") {
-        await page.getByRole("tab", { name: "Solo", exact: true }).click();
-        await expect(section).toBeHidden();
+      if (change === "reopening Team") {
+        await section.locator("summary").click();
+        await expect(rows.first()).toBeHidden();
         app.activity({ channel: "cedar", kind: 45003, age: 30 });
         await expect(rows.first()).toHaveAttribute("data-channel-id", "cedar");
-        await page.getByRole("tab", { name: "Team", exact: true }).click();
-        await expect(section).toBeVisible();
+        await section.locator("summary").click();
+        await expect(rows.first()).toBeVisible();
         promoted = "willow";
       } else {
         const modifier = await page.evaluate(() =>
@@ -321,7 +322,7 @@ test.describe("nearby motion after layout changes", () => {
 // must remain correct after hidden layout or rem-based geometry changes.
 test.describe("membership changes after layout changes", () => {
   test.use({ initialSidebarSort: { channels: "recent" } });
-  for (const change of ["Solo to Team", "interface text size"]) {
+  for (const change of ["reopening Team", "interface text size"]) {
     test(`keeps retained rows still and fades additions/removals after ${change}`, async ({
       page,
       app,
@@ -350,19 +351,19 @@ test.describe("membership changes after layout changes", () => {
         }),
       );
       for (const insertion of [false, true]) {
-        if (change === "Solo to Team") {
+        if (change === "reopening Team") {
           const channel = insertion
             ? await rows.last().getAttribute("data-channel-id")
             : "cedar";
-          await page.getByRole("tab", { name: "Solo", exact: true }).click();
-          await expect(section).toBeHidden();
+          await section.locator("summary").click();
+          await expect(rows.first()).toBeHidden();
           app.activity({ channel, kind: 45003, age: insertion ? 29 : 30 });
+          await section.locator("summary").click();
           await expect(rows.first()).toHaveAttribute(
             "data-channel-id",
             channel,
           );
-          await page.getByRole("tab", { name: "Team", exact: true }).click();
-          await expect(section).toBeVisible();
+          await expect(rows.first()).toBeVisible();
         } else {
           const modifier = await page.evaluate(() =>
             /Mac|iPhone|iPad/.test(navigator.platform) ? "Meta" : "Control",
@@ -506,15 +507,15 @@ test("keeps a stationary selected row visible while its neighbors exchange place
   const motion = await holdSidebarMotion(page);
   try {
     await section
-      .getByRole("button", { name: "More actions for Channels" })
+      .getByRole("button", { name: "More actions for Team" })
       .click();
     await page
-      .getByRole("menu", { name: "More actions for Channels", exact: true })
+      .getByRole("menu", { name: "More actions for Team", exact: true })
       .getByRole("menuitem", { name: "Sort", exact: true })
       .focus();
     await page.keyboard.press("ArrowRight");
     await page
-      .getByRole("menu", { name: "Sort Channels", exact: true })
+      .getByRole("menu", { name: "Sort Team", exact: true })
       .getByRole("menuitemradio", { name: "Recent", exact: true })
       .click();
     await expect
@@ -597,16 +598,14 @@ test("retargets an unfinished slide without jumping or losing focus", async ({
   await open(page, app);
   const section = page.locator('[data-sidebar-section="channels"]');
   const rows = section.locator("[data-channel-id]");
-  await section
-    .getByRole("button", { name: "More actions for Channels" })
-    .click();
+  await section.getByRole("button", { name: "More actions for Team" }).click();
   await page
-    .getByRole("menu", { name: "More actions for Channels", exact: true })
+    .getByRole("menu", { name: "More actions for Team", exact: true })
     .getByRole("menuitem", { name: "Sort", exact: true })
     .focus();
   await page.keyboard.press("ArrowRight");
   await page
-    .getByRole("menu", { name: "Sort Channels", exact: true })
+    .getByRole("menu", { name: "Sort Team", exact: true })
     .getByRole("menuitemradio", { name: "Recent", exact: true })
     .click();
   const cedar = section.locator('[data-channel-id="cedar"]');
@@ -831,7 +830,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   const channels = sidebar.locator('[data-sidebar-section="channels"]');
   const work = sidebar.locator('[data-sidebar-section="group:work"]');
   const trigger = channels.getByRole("button", {
-    name: "More actions for Channels",
+    name: "More actions for Team",
   });
   const rows = channels.locator("[data-channel-id]");
   const order = () =>
@@ -850,12 +849,12 @@ test("section sort applies immediately, rolls back on failure, and persists retr
     await trigger.click();
     await expect(channels.locator("details")).toHaveAttribute("open", "");
     await page
-      .getByRole("menu", { name: "More actions for Channels", exact: true })
+      .getByRole("menu", { name: "More actions for Team", exact: true })
       .getByRole("menuitem", { name: "Sort", exact: true })
       .focus();
     await page.keyboard.press("ArrowRight");
     await expect(
-      page.getByRole("menu", { name: "Sort Channels", exact: true }),
+      page.getByRole("menu", { name: "Sort Team", exact: true }),
     ).toBeVisible();
   }
   await page.screenshot({
@@ -863,7 +862,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
     clip: { x: 0, y: 0, width: 540, height: 460 },
   });
   await openSort();
-  const menu = page.getByRole("menu", { name: "Sort Channels", exact: true });
+  const menu = page.getByRole("menu", { name: "Sort Team", exact: true });
   await expect(
     menu.getByRole("menuitemradio", { name: "A–Z" }),
   ).toHaveAttribute("aria-checked", "true");
@@ -906,7 +905,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   }
   const error = page
     .getByRole("alert")
-    .filter({ hasText: "Couldn’t save the sort order for Channels" });
+    .filter({ hasText: "Couldn’t save the sort order for Team" });
   await expect(error).toContainText("Relay request failed (502)");
   await expect.poll(order).toEqual(alphaOrder);
   await page.unroute("**/sidebar-sort");
@@ -929,7 +928,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   await expect(error).toHaveCount(0);
   await expect.poll(order).not.toEqual(alphaOrder);
   expect(app.report.sidebarPublications.at(-1)).toMatchObject({
-    coordinate: "channel-sort",
+    coordinate: "channel-workspace-sort",
     blob: { groups: { channels: "recent" } },
   });
   const recentOrder = await order();
@@ -952,7 +951,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   // Real layout verifies that the shared nested-radius recipe reaches both the lone
   // submenu trigger and grouped radio choices, without feature-local corners.
   const sort = page
-    .getByRole("menu", { name: "More actions for Channels", exact: true })
+    .getByRole("menu", { name: "More actions for Team", exact: true })
     .getByRole("menuitem", { name: "Sort", exact: true });
   for (const mode of ["light", "dark"]) {
     await page.evaluate((value) => {
@@ -988,7 +987,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   }
   await expect(menu).toHaveCSS("opacity", "1");
   await expect(
-    page.getByRole("menu", { name: "More actions for Channels", exact: true }),
+    page.getByRole("menu", { name: "More actions for Team", exact: true }),
   ).toHaveCSS("opacity", "1");
   await page.screenshot({
     path: testInfo.outputPath("sidebar-sort-menu.png"),
@@ -1004,7 +1003,7 @@ test("section sort applies immediately, rolls back on failure, and persists retr
   await expect(menu).not.toBeVisible();
   await page.keyboard.press("Escape");
   await expect(
-    page.getByRole("menu", { name: "More actions for Channels", exact: true }),
+    page.getByRole("menu", { name: "More actions for Team", exact: true }),
   ).not.toBeVisible();
   await work.getByRole("button", { name: "More actions for Work" }).click();
   await page
@@ -1088,13 +1087,13 @@ test("retires Recent failures on A–Z and recovers selected ordering on retry",
     rows.evaluateAll((elements) => elements.map((el) => el.dataset.channelId));
   await expect(rows.first()).toBeVisible();
   const alphaOrder = await order();
-  const menu = page.getByRole("menu", { name: "Sort Channels", exact: true });
+  const menu = page.getByRole("menu", { name: "Sort Team", exact: true });
   async function openSort() {
     await channels
-      .getByRole("button", { name: "More actions for Channels" })
+      .getByRole("button", { name: "More actions for Team" })
       .click();
     await page
-      .getByRole("menu", { name: "More actions for Channels", exact: true })
+      .getByRole("menu", { name: "More actions for Team", exact: true })
       .getByRole("menuitem", { name: "Sort", exact: true })
       .focus();
     await page.keyboard.press("ArrowRight");
@@ -1134,6 +1133,10 @@ test("retires Recent failures on A–Z and recovers selected ordering on retry",
     await expect.poll(order).toEqual(alphaOrder);
 
     await failRecent(2);
+    const toast = notifications.locator("[data-sonner-toast]");
+    await expect(toast).toHaveAttribute("data-mounted", "true");
+    await animationsSettled(toast, { subtree: true });
+    await notifications.getByRole("dialog").hover();
     await notifications
       .getByRole("button", { name: "Dismiss notification" })
       .click();
@@ -1288,6 +1291,9 @@ test.describe("sorting with lifecycle visibility", () => {
       name: "Message #Lifecycle channel",
       exact: true,
     });
+    const archiveNotice = page
+      .getByRole("region", { name: "Archived channel", exact: true })
+      .getByText(/^This channel is archived\b/);
     await expect(composer).toBeVisible();
     const conversationUrl = page.url();
     await channel.click({ button: "right" });
@@ -1304,9 +1310,7 @@ test.describe("sorting with lifecycle visibility", () => {
     await expect.poll(ids).toEqual(["willow", "maple", "cedar"]);
     // Archive removes the sidebar row, not the selected conversation.
     await expect(page).toHaveURL(conversationUrl);
-    await expect(
-      page.getByRole("region", { name: "Archived channel", exact: true }),
-    ).toHaveText("This channel is archived");
+    await expect(archiveNotice).toBeVisible();
     await expect(composer).toHaveCount(0);
 
     const dm = sidebar.locator(`[data-channel-id="${hiddenId}"]`);
@@ -1324,16 +1328,14 @@ test.describe("sorting with lifecycle visibility", () => {
     await page.reload();
     await expect.poll(ids).toEqual(["willow", "maple", "cedar"]);
     await expect(page).toHaveURL(conversationUrl);
-    await expect(
-      page.getByRole("region", { name: "Archived channel", exact: true }),
-    ).toHaveText("This channel is archived");
+    await expect(archiveNotice).toBeVisible();
     await expect(composer).toHaveCount(0);
     // Opening Sort proves saved preference decoding and sidebar startup settled.
     await channels
-      .getByRole("button", { name: "More actions for Channels" })
+      .getByRole("button", { name: "More actions for Team" })
       .click();
     await page
-      .getByRole("menu", { name: "More actions for Channels", exact: true })
+      .getByRole("menu", { name: "More actions for Team", exact: true })
       .getByRole("menuitem", { name: "Sort", exact: true })
       .focus();
     await page.keyboard.press("ArrowRight");

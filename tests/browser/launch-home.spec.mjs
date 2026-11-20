@@ -99,7 +99,7 @@ test("launch opens Messages without exposing Home across responsive navigation, 
   await page.getByRole("button", { name: "Search Buzz" }).click();
   const dialog = page.getByRole("dialog", { name: "Search Buzz" });
   await expect(
-    dialog.getByRole("group", { name: "This conversation" }),
+    dialog.locator(".search-peek-keys").getByText("This conversation"),
   ).toBeVisible();
   await dialog
     .getByRole("combobox", { name: "Search Buzz", exact: true })
@@ -197,7 +197,10 @@ test("default navigation retries failed metadata and accepts a completed empty l
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Search Buzz" }).click();
   await expect(
-    page.getByRole("group", { name: "This conversation" }),
+    page
+      .getByRole("dialog", { name: "Search Buzz" })
+      .locator(".search-peek-keys")
+      .getByText("This conversation"),
   ).toBeVisible();
 });
 

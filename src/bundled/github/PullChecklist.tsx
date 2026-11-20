@@ -249,14 +249,26 @@ function mergeability(pull: Checklist) {
   if (pull.state !== "open" || pull.queued)
     return { now: false, bypass: false };
   // A queue-required branch can report BLOCKED until enqueued; GitHub
-  // validates its prerequisites when accepting the enqueue request.
-  if (pull.queueRequired)
+  // validates its prerequisites when accepting the enqueue request. Missing
+  // reviews and unfinished or failing checks would be rejected, so those wait
+  // for auto-merge to enqueue instead, as do checks that could not be read
+  // and unresolved conversations (the branch may require resolving them).
+  if (pull.queueRequired) {
+    const waiting =
+      pull.review.decision === "REVIEW_REQUIRED" ||
+      pull.review.decision === "CHANGES_REQUESTED" ||
+      pull.checks.state === "failure" ||
+      pull.checks.state === "pending" ||
+      pull.checks.state === "unavailable" ||
+      pull.unresolved > 0 ||
+      pull.moreThreads;
     return {
-      now: ["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND"].includes(
-        pull.merge,
-      ),
+      now:
+        ["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(pull.merge) ||
+        (["BLOCKED", "BEHIND"].includes(pull.merge) && !waiting),
       bypass: false,
     };
+  }
   if (["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(pull.merge))
     return { now: true, bypass: false };
   if (["BLOCKED", "BEHIND"].includes(pull.merge) && pull.canBypass)
@@ -335,12 +347,11 @@ function Actions({
   // Forgotten during render, so changing back does not reopen it.
   if (asked && !confirming) setConfirming(undefined);
   const canAutoMerge =
-    !pull.queueRequired &&
     !pull.queued &&
     pull.canEnableAutoMerge &&
     !pull.autoMerge &&
     pull.state === "open" &&
-    !["CLEAN", "HAS_HOOKS", "DIRTY"].includes(pull.merge);
+    !["CLEAN", "HAS_HOOKS", "DIRTY", "UNKNOWN"].includes(pull.merge);
   const others =
     pull.queueRequired || pull.queued
       ? []
@@ -353,7 +364,8 @@ function Actions({
           </MenuItem>
         ))
       : []),
-    ...(canAutoMerge && merge.now
+    // A queue branch that can be queued already has its one way in.
+    ...(canAutoMerge && merge.now && !pull.queueRequired
       ? [
           <MenuItem
             key="auto"
@@ -393,7 +405,10 @@ function Actions({
         ) : pull.autoMerge ? (
           <>
             <span className={styles.pullActionNote}>
-              Merges automatically when ready
+              {/* GitHub enqueues a queue branch's pull request, not merges it. */}
+              {pull.queueRequired
+                ? "Joins the merge queue when ready"
+                : "Merges automatically when ready"}
               {pull.autoMerge.by && ` · set by ${pull.autoMerge.by}`}
             </span>
             {pull.canDisableAutoMerge && (

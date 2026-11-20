@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { Context } from "@deepseek-ai/cordis";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Communities } from "../../features/communities/service";
 import { createShortcutBindings } from "../../features/shortcuts/preferences";
@@ -20,12 +20,16 @@ function setup(selected: string | null) {
     window,
     createShortcutBindings(window),
   );
-  const snapshot = {
+  let snapshot = {
     selected,
     memberships: [{ id: "a" }, { id: "b" }],
   };
+  const listeners = new Set<() => void>();
   const communities = {
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     snapshot: () => snapshot,
     select: vi.fn(),
   } as unknown as Communities;
@@ -37,7 +41,16 @@ function setup(selected: string | null) {
       onSelect={onSelect}
     />,
   );
-  return onSelect;
+  return {
+    onSelect,
+    /** The service saved a new switcher order. */
+    reorder(ids: string[]) {
+      act(() => {
+        snapshot = { ...snapshot, memberships: ids.map((id) => ({ id })) };
+        for (const listener of listeners) listener();
+      });
+    },
+  };
 }
 
 // jsdom has no platform, so Control is the primary modifier here.
@@ -54,7 +67,7 @@ const press = (key: string, shift = false) => {
 };
 
 it("switches to the community switcher's entries by number, Personal space first", () => {
-  const onSelect = setup("a");
+  const { onSelect } = setup("a");
   expect(press("1")).toBe(true);
   expect(onSelect).toHaveBeenLastCalledWith(null);
   expect(press("3")).toBe(true);
@@ -64,8 +77,22 @@ it("switches to the community switcher's entries by number, Personal space first
   expect(onSelect).toHaveBeenCalledTimes(2);
 });
 
+it("follows a reordered switcher at once, for numbers and steps alike", () => {
+  const { onSelect, reorder } = setup("a");
+  reorder(["b", "a"]);
+  expect(press("2")).toBe(true);
+  expect(onSelect).toHaveBeenLastCalledWith("b");
+  expect(press("3")).toBe(true);
+  expect(onSelect).toHaveBeenLastCalledWith("a");
+  // The selected community is now last, so the next step wraps.
+  expect(press("]", true)).toBe(true);
+  expect(onSelect).toHaveBeenLastCalledWith(null);
+  expect(press("[", true)).toBe(true);
+  expect(onSelect).toHaveBeenLastCalledWith("b");
+});
+
 it("steps to the next and previous community with wrapping, on either bracket key", () => {
-  const onSelect = setup("b");
+  const { onSelect } = setup("b");
   expect(press("}", true)).toBe(true);
   expect(onSelect).toHaveBeenLastCalledWith(null);
   expect(press("[", true)).toBe(true);

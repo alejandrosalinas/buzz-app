@@ -7,6 +7,7 @@ import {
 } from "react";
 import { DEFAULT_ACTIVE_WINDOW_SECONDS } from "../../features/relay/sidebar-preferences";
 import type {
+  MentionActivityItem,
   ThreadActivityItem,
   UnreadCapability,
 } from "../../features/relay/unread";
@@ -185,5 +186,73 @@ export function useUnreadThreadOnly(unread: UnreadCapability, targets: string) {
         ]),
       ),
     [threads],
+  );
+}
+
+export type UnreadReason = Readonly<{
+  /** The newest unread message that mentions the viewer, top-level or a
+   * reply, with a reply's thread (`rootId`). */
+  mention?: (MentionActivityItem & { rootId?: string }) | undefined;
+  /** The newest thread the viewer is in with unread replies. A thread that
+   * counts only for a mention or broadcast is not one. */
+  thread?: ThreadActivityItem | undefined;
+}>;
+
+/** Why each channel among `ids` (a JSON id array) needs attention beyond its
+ * own messages, for channels with an unread mention or thread reply. */
+export function useUnreadReasons(unread: UnreadCapability, ids: string) {
+  const channels = useMemo(() => JSON.parse(ids) as string[], [ids]);
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const stops = channels.map((channelId) =>
+        unread.subscribeActivity(channelId, listener),
+      );
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
+    [channels, unread],
+  );
+  const snapshot = useCallback(
+    () =>
+      JSON.stringify(
+        channels.flatMap((channelId) => {
+          const { items, mentions } = unread.activity(channelId);
+          const mention = [
+            ...(mentions ?? []),
+            ...(items ?? []).flatMap(({ mention, rootId }) =>
+              mention ? [{ ...mention, rootId }] : [],
+            ),
+          ].reduce<UnreadReason["mention"]>(
+            (newest, item) =>
+              !newest ||
+              item.createdAt > newest.createdAt ||
+              (item.createdAt === newest.createdAt &&
+                item.messageId < newest.messageId)
+                ? item
+                : newest,
+            undefined,
+          );
+          // Items come newest first.
+          const thread = items?.find(({ participating }) => participating);
+          const reason: UnreadReason = {
+            ...(mention ? { mention } : {}),
+            ...(thread ? { thread } : {}),
+          };
+          return reason.mention || reason.thread
+            ? [[channelId, reason] as const]
+            : [];
+        }),
+      ),
+    [channels, unread],
+  );
+  const reasons = useSyncExternalStore(subscribe, snapshot, snapshot);
+  return useMemo(
+    () =>
+      new Map(JSON.parse(reasons) as [string, UnreadReason][]) as ReadonlyMap<
+        string,
+        UnreadReason
+      >,
+    [reasons],
   );
 }

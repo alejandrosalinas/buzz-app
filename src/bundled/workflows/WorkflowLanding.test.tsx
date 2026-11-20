@@ -2143,7 +2143,7 @@ it("marks an archived channel's workflows as not runnable and blocks only turnin
 
     await user.click(screen.getByRole("button", { name: /^Open Off helper:/ }));
     const detail = within(target).getByRole("region", { name: "Off helper" });
-    expect(within(detail).getByText(/#General · Archived ·/)).toBeVisible();
+    expect(within(detail).getByText("#General · Archived")).toBeVisible();
     const detailRun = within(detail).getByRole("button", { name: "Run now" });
     expect(detailRun).toHaveAttribute("aria-disabled", "true");
     expect(detailRun).toHaveAccessibleDescription(reason);
@@ -2171,7 +2171,7 @@ it("marks an archived channel's workflows as not runnable and blocks only turnin
     });
     expect(
       within(recent).getByRole("button", { name: /^Open Off helper:/ }),
-    ).toHaveTextContent(/#General·Archived·/);
+    ).toHaveTextContent(/#General·Archived(?!·)/);
     expect(
       within(recent).getByRole("button", { name: /^Open Live helper:/ }),
     ).not.toHaveTextContent("Archived");

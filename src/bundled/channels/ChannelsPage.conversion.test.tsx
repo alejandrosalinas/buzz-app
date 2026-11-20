@@ -135,8 +135,8 @@ function fixture() {
   const session = {
     ...owner.session,
     channelDetails: { ...owner.session.channelDetails, save },
-    soloPreferences: {
-      ...owner.session.soloPreferences,
+    sidebarPreferences: {
+      ...owner.session.sidebarPreferences,
       snapshot: () => (filed ? filedProjects : unfiledProjects),
       refresh: async () => {},
       assign: unfile,
@@ -186,6 +186,10 @@ function fixture() {
           }
           relay={relay}
           panels={{
+            ui: {
+              Workspace: () => null,
+              useSplit: vi.fn(),
+            },
             ...contribution,
             register() {},
             resolve: () => undefined,
@@ -255,6 +259,10 @@ it("Messages conversion survives signed type replacement, announces completion a
   );
   expect(t.sign).toHaveBeenCalledOnce();
   expect(t.publish).toHaveBeenCalledOnce();
+  expect(t.unfile).not.toHaveBeenCalled();
+  expect(t.session.sidebarPreferences.snapshot().data?.assignments[id]).toBe(
+    "g",
+  );
 });
 it("Messages conversion Cancel restores chat actions without publishing", async () => {
   const t = fixture();
@@ -285,44 +293,4 @@ it("a retired Messages visit receives no late conversion completion", async () =
   }
   expect(screen.queryByText("Converted to channel.")).toBeNull();
   expect(t.publish).toHaveBeenCalledOnce();
-});
-
-it("Messages header reopens unfiling recovery after confirmed metadata and a failed project save", async () => {
-  const t = fixture();
-  t.unfile.mockRejectedValueOnce(new Error("Project save failed"));
-  const { user, confirm, dialog } = await openConversion();
-  try {
-    await user.click(confirm);
-    await act(async () => {
-      await t.confirmed;
-    });
-  } finally {
-    await act(async () => {
-      t.release();
-    });
-  }
-  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-    "Project save failed",
-  );
-  const closeButton = within(dialog)
-    .getAllByRole("button", { name: "Close" })
-    .at(-1);
-  if (!closeButton) throw new Error("Close missing");
-  await user.click(closeButton);
-  await user.click(screen.getByRole("button", { name: "Channel actions" }));
-  await user.click(
-    await screen.findByRole("menuitem", { name: "Finish conversion" }),
-  );
-  const reopened = await screen.findByRole("dialog", {
-    name: "Convert to channel",
-  });
-  await user.click(
-    within(reopened).getByRole("button", { name: "Finish conversion" }),
-  );
-  await waitFor(() => expect(reopened).not.toBeInTheDocument());
-  expect(t.unfile).toHaveBeenCalledTimes(2);
-  expect(t.publish).toHaveBeenCalledOnce();
-  await waitFor(() =>
-    expect(screen.getByRole("textbox", { name: "Message Work" })).toHaveFocus(),
-  );
 });

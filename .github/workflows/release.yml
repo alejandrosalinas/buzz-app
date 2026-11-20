@@ -1,9 +1,11 @@
 name: Desktop previews
 
 on:
-  # A daily preview from main.
+  # A daily preview from main. Sunday's run also refreshes main's caches
+  # (see purge_caches); keep that cron string identical to the job's test.
   schedule:
-    - cron: "37 9 * * *"
+    - cron: "37 9 * * 1-6"
+    - cron: "37 9 * * 0"
   # A preview of main right after each published stable release (always in
   # main's history), so preview installs get its code without leaving the
   # preview feed. The release only gates the run; main's head is built.
@@ -58,10 +60,42 @@ jobs:
         id: version
         run: node scripts/preview-version.mjs HEAD
 
+  purge_caches:
+    # A key whose exact match misses restores the newest older cache, builds,
+    # and saves the lot under the new key, so main's caches only grow. Once a
+    # week, delete the ones this run rebuilds so desktop and refresh_ci save
+    # them from scratch. Ordered before both; a failed purge still rebuilds.
+    if: github.repository == 'block/buzz-app' && github.event.schedule == '37 9 * * 0'
+    name: Delete main's growing caches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete release, Rust CI and pnpm caches on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Hermit saves exact keys without fallback and doesn't grow; mesh and
+        # Windows native caches aren't rebuilt by this run.
+        run: |
+          for prefix in v0-rust-macos-prerelease- v0-rust-windows-release- v0-rust-linux-release- \
+                        v0-rust-native- v0-rust-agent-protection- v0-rust-browser-fixture- pnpm-; do
+            gh cache list --ref refs/heads/main --key "$prefix" --limit 100 --json id,key \
+              --jq '.[] | "\(.id) \(.key)"' | while read -r id key; do
+              echo "Deleting $key"
+              gh cache delete "$id"
+            done
+          done
+
   desktop:
     # Candidate-only runs may build a feature branch; previews build main.
-    needs: source
-    if: github.repository == 'block/buzz-app' && !inputs.promote_version && (inputs.candidates || github.ref == 'refs/heads/main')
+    # purge_caches only orders the build; it runs whether or not that ran.
+    needs: [source, purge_caches]
+    if: >-
+      github.repository == 'block/buzz-app' && !cancelled() && needs.source.result == 'success' &&
+      !inputs.promote_version && (inputs.candidates || github.ref == 'refs/heads/main')
     uses: ./.github/workflows/desktop-build.yml
     permissions:
       contents: write
@@ -70,6 +104,14 @@ jobs:
     with:
       candidates: ${{ inputs.candidates == true }}
       preview_version: ${{ needs.source.outputs.version }}
+
+  refresh_ci:
+    # Rebuilds CI's caches out of band after Sunday's purge, even a failed one.
+    needs: purge_caches
+    if: ${{ !cancelled() && needs.purge_caches.result != 'skipped' }}
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
 
   promote_preview:
     name: Promote verified preview

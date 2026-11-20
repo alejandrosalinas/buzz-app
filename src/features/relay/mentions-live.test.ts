@@ -1,6 +1,6 @@
 import { assert, afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "./session";
-import { subscribeRelayTraffic } from "./live";
+import { LIVE_RESTART_SPREAD_MS, subscribeRelayTraffic } from "./live";
 import { keypair, metadata, roster, signed } from "./testing";
 import { matchesEvent } from "./projection";
 import { createRelayProfiler } from "./profiling";
@@ -171,7 +171,7 @@ it("reconnect AUTH must not reuse previous-generation roster before establishmen
   expect(() =>
     h.session.messages.send("c", "@Agent", [h.agent.pubkey]),
   ).toThrow(/membership/);
-  await vi.advanceTimersByTimeAsync(500);
+  await vi.advanceTimersByTimeAsync(LIVE_RESTART_SPREAD_MS);
   await h.socket(1).auth();
   // No new stream has reached EOSE and no post-reconnect finite read has run.
   expect(h.session.live.snapshot()).toMatchObject({
@@ -346,7 +346,7 @@ it.each(["disconnect", "clear", "newer-removal"])(
     assert.exists(read);
     if (change === "disconnect") {
       h.socket().close();
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(LIVE_RESTART_SPREAD_MS);
       await h.socket(1).auth();
     } else if (change === "clear") await h.clearCache();
     else {

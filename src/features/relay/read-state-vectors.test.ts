@@ -6,6 +6,12 @@ import {
   mergeReadStates,
   packReadState,
   readBlob,
+  unreadActive,
+  unreadBlob,
+  unreadDiscardable,
+  unreadExpired,
+  unreadReceive,
+  unreadStamp,
 } from "./read-state-model";
 
 const bytes = (value: unknown) =>
@@ -100,5 +106,31 @@ describe("NIP-RS shared vectors", () => {
     expect(plan[0]?.frontiers).toEqual(full?.frontiers);
     expect(plan[1]?.frontiers).toMatchObject({ ...rest?.frontiers });
     expect(plan.some((blob) => "room-a" in blob.frontiers)).toBe(true);
+  });
+});
+
+describe("NIP-RS shared vectors: expiring unread (version 2)", () => {
+  const { unreadV2 } = vectors;
+  const register = (r: { s: number; c: number; b: number }) => ({
+    set: r.s,
+    clear: r.c,
+    baseline: r.b,
+  });
+  const now = 1800000000;
+  it.each(unreadV2.liveness)("liveness $id", (v) => {
+    const value = register(v.register);
+    expect(unreadActive(value, v.frontier, now)).toBe(v.expectedActive);
+    expect(unreadExpired(value, now)).toBe(v.expectedExpired);
+    expect(unreadDiscardable(value, now)).toBe(v.expectedDiscardable);
+    const blob = unreadBlob("c", { room: value }, () => v.frontier, now);
+    const { room: _frontier, ...groups } = blob.contexts;
+    expect(blob.v).toBe(2);
+    expect(groups).toEqual(v.expectedDiscardable ? {} : v.expectedCanonical);
+  });
+  it.each(unreadV2.allocation)("allocation $id", (v) => {
+    expect(unreadStamp(register(v.register), v.now)).toBe(v.expectedStamp);
+  });
+  it.each(unreadV2.receive)("receive $id", (v) => {
+    expect(unreadReceive(register(v.register), v.now)).toBe(v.expected);
   });
 });

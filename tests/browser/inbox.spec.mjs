@@ -369,19 +369,17 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     0,
   );
   await expect(
-    row.getByRole("button", { name: /Mark as read|Mark unread/ }),
+    row.getByRole("button", { name: /Mark as read|Mark as unread/ }),
   ).toHaveCount(0);
   await row.getByRole("button", { name: /^Open / }).click({ button: "right" });
   // A read row offers only Mark unread.
-  await expect(page.getByRole("menuitem")).toHaveText(["Mark unread"]);
+  await expect(page.getByRole("menuitem")).toHaveText(["Mark as unread"]);
   await page.keyboard.press("Escape");
   await row.getByRole("button", { name: /^Open / }).focus();
   await page.keyboard.press("Shift+F10");
-  let action = page.getByRole("menuitem", { name: "Mark unread" });
+  let action = page.getByRole("menuitem", { name: "Mark as unread" });
   await expect(action).toBeVisible();
-  await expect(page.getByText("Mark unread on this device only.")).toHaveCount(
-    0,
-  );
+  await expect(page.locator('[title="Mark as unread"]')).toHaveCount(0);
   await action.click();
   await expect(row.getByRole("img", { name: "Unread" })).toBeVisible();
   await row.getByRole("button", { name: /^Open / }).click({ button: "right" });
@@ -407,7 +405,7 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   await expect(sideTabs.getByRole("tab")).toHaveText(["Thread root 1"]);
   await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
   await row.getByRole("button", { name: /^Open / }).click({ button: "right" });
-  action = page.getByRole("menuitem", { name: "Mark unread" });
+  action = page.getByRole("menuitem", { name: "Mark as unread" });
   await action.click();
   await expect(row.getByRole("img", { name: "Unread" })).toBeVisible();
   // The DM timeline and composer must occupy one vertical column in its tab.

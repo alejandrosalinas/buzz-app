@@ -5,9 +5,12 @@ sources are recommended here" by writing one JSON file. Buzz reads the file and
 offers the listed plugins in **Settings → Plugins**. Nothing in Buzz depends on who
 writes the file.
 
-The file only recommends. It never installs, enables, updates or removes anything.
-Each plugin still goes through the Git or URL import and its access review, and the person
-using Buzz confirms every change. The desktop app reads the file; the browser build
+A version 1 file only recommends. It never installs, enables, updates or removes
+anything. Each plugin still goes through the Git or URL import and its access review,
+and the person using Buzz confirms every change. A [version 2](#version-2-automatic-installs-and-updates)
+file [signed](#signed-policies) by the key the build names can also ask Buzz to install
+a listed plugin, or keep it at its pin, without a review, within the limits that section
+describes. The desktop app reads the file; the browser build
 has no native plugin storage, so the feature is absent there.
 
 ## File location
@@ -59,7 +62,7 @@ unset for OSS builds.
 
 The desktop app fetches the URL when it starts and every 6 hours, or 15 minutes after a
 failed attempt. It follows redirects only to `https` URLs, gives up after 30 seconds,
-and accepts at most 256 KiB. A response that is not a usable version 1 document (the
+and accepts at most 256 KiB. A response that is not a usable version 1 or 2 document (the
 rules below) is discarded, and Buzz keeps the last good copy in
 `packaged-managed-plugins-<hash of the URL>.json` beside the profile folders. A copy belongs to its URL: a build that names another URL never shows it, and the first usable policy from the new URL deletes it. Entries the copy ignores
 are reported as they are for the file. Serve the policy with short-lived or no edge
@@ -73,8 +76,14 @@ Later failures keep showing the last good copy.
 Buzz uses the packaged policy only when no file exists at the resolved location, and
 never when `BUZZ_MANAGED_PLUGINS` names a file. A file written by a machine manager
 therefore replaces it completely; the two are not merged. "Sign out and erase local
-data" deletes the stored copy, and the next fetch restores it. It recommends, exactly
-like the file.
+data" deletes the stored copy, and the next fetch restores it. It behaves exactly like
+the file, including version 2 automatic entries, which take effect only when the policy
+is [signed](#signed-policies).
+
+With each fetch Buzz also requests the policy's signature at the same URL with `.sig`
+appended to its path (a query string stays after it). A `404` means the policy is
+unsigned. Any other failure fails the refresh, and Buzz keeps the last good copy with its
+signature, stored as `packaged-managed-plugins-<hash>.json.sig`.
 
 ### Writing the file safely
 
@@ -107,7 +116,7 @@ like the file.
 
 | Field | Required | Rules |
 | --- | --- | --- |
-| `version` | yes | The number `1`. Any other value makes the whole file unusable. |
+| `version` | yes | The number `1`, or `2` for [automatic entries](#version-2-automatic-installs-and-updates). Any other value makes the whole file unusable. |
 | `source` | yes | Display name of the managing organization or tool, shown as "Recommended by *source*" and "Managed by *source*". 1 to 80 characters after trimming. Only visible characters and ordinary spaces: no control characters, no Unicode format characters (such as bidirectional overrides or zero-width characters) and no non-ASCII space or line separators. |
 | `plugins` | yes | Array of at most 256 entries. Later entries beyond 256 are ignored. |
 | `plugins[].id` | yes | The plugin manifest ID: lowercase letters, digits, dots and hyphens, starting with a letter. Not a plugin included with Buzz. |
@@ -142,6 +151,126 @@ signature is not carried in the artifact.
 
 Unknown fields are errors, at the top level and inside entries, so a typo is reported
 instead of silently ignored. A new schema revision gets a new `version`.
+
+### Version 2: automatic installs and updates
+
+A version 2 file has every version 1 field with the same rules, and two optional
+fields per entry, for Git and URL entries alike:
+
+```json
+{
+  "version": 2,
+  "source": "Example Org",
+  "plugins": [
+    {
+      "id": "example.notes",
+      "url": "https://downloads.example.com/buzz/example.notes-1.4.0.json",
+      "sha256": "9f2c…64 hexadecimal digits",
+      "install": "automatic",
+      "update": "automatic"
+    }
+  ]
+}
+```
+
+| Field | Default | Values |
+| --- | --- | --- |
+| `plugins[].install` | `"recommend"` | `"recommend"`: listed as in version 1. `"automatic"`: Buzz installs and enables the plugin when it is Missing. `"manual"`: never offered while Missing and not counted as pending; the entry only governs updates of a copy the person installed. |
+| `plugins[].update` | `"review"` | `"review"`: an Outdated copy offers **Review update** as in version 1. `"automatic"`: Buzz updates an Outdated copy to the pin. |
+
+Any other value ignores the entry, and a version 1 file that uses either field reports
+it as an unknown field. A version 2 file with neither field behaves exactly like
+version 1.
+
+Buzz applies automatic entries in the desktop app after each catalog refresh in which
+one is due, off the main thread and one run at a time, and `buzzodz plugin managed
+--apply` applies them once from the command line. Each run downloads or reads the pinned
+artifact or commit through the same import Buzz uses for a review, then:
+
+- **Install.** A Missing entry with `install: "automatic"` is installed and enabled,
+  with whatever host access it declares. Buzz records its ID in `managed-automatic.json`
+  in the profile folder, and records the ID of every plugin the person removes. A
+  recorded plugin is never installed automatically again in that profile, including
+  after a plugin settings reset; it returns to the Recommended group as a version 1
+  entry would, unless it is `"manual"`. An unreadable record stops automatic installs,
+  not updates.
+- **Update.** An Outdated entry with `update: "automatic"` is installed at the pin,
+  keeping its enabled state; an enabled plugin reloads at the new version. Buzz updates
+  only when the new version declares exactly the host access the installed one has, the
+  publisher is unchanged, and an unsigned plugin does not become signed. Anything else,
+  including a change that removes access, is left for the person's **Review update**.
+  The pin wins over the person's own choice of version: a plugin they updated past
+  the pin or rolled back is returned to it on the next run. If the plugin changes
+  while Buzz downloads the pin, Buzz leaves it alone for the run.
+  For a URL entry, a plugin installed from a Git source counts as eligible too, so a
+  plugin can move from Git to the published artifact. A plugin installed from a folder,
+  or included with Buzz, is never replaced.
+- **Failures.** Each pinned version (an ID with its `sha256`, or commit and path) is
+  tried at most once per app run, whether or not it succeeds, so an unreachable host or
+  a refused update does not retry in a loop. A failure is logged and the entry keeps
+  its version 1 offer. A new pin, or a restart, tries again.
+
+Automatic entries apply only to a [signed](#signed-policies) policy. In an unsigned
+policy, from any source, `install: "automatic"` is read as `"recommend"` and
+`update: "automatic"` as `"review"`, so every change goes through the person's review.
+
+Settings shows **Managed by *source* · updates automatically** for an installed plugin
+whose entry updates automatically under a signed policy. A notice names each plugin installed or updated
+during the run, once.
+
+**Trust.** Automatic entries remove the person's review for the plugins they name. The
+pins still protect against a changed artifact or commit, and the signature means only
+the holder of the build's signing key decides what is installed without a review.
+Protected agent workers cannot write the policy file, its signature or the packaged
+policy's stored copy. Keep `install: "recommend"` and `update: "review"` for plugins
+whose access the person should see first.
+
+### Signed policies
+
+A build that should honor automatic entries names the public key allowed to sign its
+policy:
+
+```sh
+BUZZ_BUILD_MANAGED_PLUGINS_SIGNER=<64 hexadecimal digits> bin/pnpm tauri build
+```
+
+The value is the signer's x-only secp256k1 public key, as `buzzodz plugin sign-policy`
+prints it, read from the build environment or `.env.local`. The build fails on any other
+value. A build without it treats every policy as unsigned. Nothing at runtime can change
+the key.
+
+The signature is a separate file beside the policy, `<policy>.sig`: for the file,
+`managed-plugins.json.sig` next to `managed-plugins.json`; for a packaged policy, the
+URL described [above](#packaged-policy). It holds one JSON Nostr event (NIP-01),
+Schnorr-signed with the signing key, at most 16 KiB:
+
+| Field | Value |
+| --- | --- |
+| `kind` | `1064` |
+| `content` | `""` |
+| `tags` | exactly one `["x", <SHA-256 of the policy file's exact bytes, lowercase hex>]` and one `["t", "buzz-managed-plugins-v2"]` |
+| `pubkey` | the key named by `BUZZ_BUILD_MANAGED_PLUGINS_SIGNER` |
+
+The signature covers the bytes as written, so any change to the policy, including
+whitespace, needs a new signature. A missing, malformed or mismatched signature, or one
+by another key, leaves the policy usable but unsigned. `buzzodz plugin managed` prints
+whether the policy is signed.
+
+To sign, with the key as `nsec` or 64 hexadecimal digits:
+
+```sh
+BUZZ_MANAGED_PLUGINS_SIGNING_KEY=<key> buzzodz plugin sign-policy managed-plugins.json
+```
+
+The command checks that the file is a usable policy, writes `managed-plugins.json.sig`
+beside it and prints `{"signature": "...", "signer": "<public key>"}`. Publish the
+`.sig` next to the policy, and the policy before or with the signature, so a reader
+never pairs a new signature with an old policy (that pair reads as unsigned until both
+arrive).
+
+A signature does not expire. Anyone who can serve or write an older signed policy with
+its signature can return Buzz to that policy's pins, but cannot pin anything the key
+never signed.
 
 ### What makes a file or entry invalid
 
@@ -198,7 +327,8 @@ other.
   **Review update** as the group above when the plugin is Outdated.
 - **Disable** works as for any plugin.
 - **Remove** works as for any plugin. The recommendation stays visible, so a removed
-  plugin returns to the Recommended group and can be reinstalled. Buzz never removes a
+  plugin returns to the Recommended group and can be reinstalled. A plugin a version 2
+  entry installed is not installed again automatically. Buzz never removes a
   plugin because the file changed or a line was deleted; a plugin no longer listed
   simply loses its Managed by label.
 - An invalid file or ignored entries are reported in the same section.
@@ -236,12 +366,15 @@ without a restart, in Settings and in the pending counts.
 
 ```sh
 buzzodz plugin managed
+buzzodz plugin managed --apply
 buzzodz --home /path/to/app-data plugin managed
 BUZZ_MANAGED_PLUGINS=/tmp/policy.json buzzodz plugin managed
 ```
 
 The command prints the file path, the source name, each valid entry with its state for
-the selected profile, and the reason for each ignored entry. `buzzodz` and the desktop
+the selected profile, and the reason for each ignored entry. `--apply` first installs and updates the version 2
+automatic entries for the selected profile, as the desktop would, and prints what it
+changed. `buzzodz` and the desktop
 share one implementation, so a writer can use it to check a file it wrote.
 
 To check a packaged policy before publishing it, write it to a scratch file and point

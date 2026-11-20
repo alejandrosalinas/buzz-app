@@ -448,12 +448,14 @@ Sign in, Cancel, and Sign out at narrow widths with enlarged text.
 
 Source plugins can import the shared components directly. External plugins must
 use the actual supported author contract and exposed CSS roles; source paths are
-not a published component SDK. These are composition requirements for Buzz UI,
-not a claim that arbitrary external code is automatically constrained. Do not
-introduce a private reset, theme provider, palette, body-level stylesheet, global
-control override, or parallel dialog/toast system to make one contribution fit.
-Keep plugin styles scoped to owned layout/content. Renderer exceptions do not
-exempt surrounding controls from shared appearance.
+not a published component SDK. The author contract's preview `ui` service offers a
+few of these controls to plugins with narrower props (`src/features/plugin-ui`).
+These are composition requirements for Buzz UI, not a claim that arbitrary
+external code is automatically constrained. Do not introduce a private reset,
+theme provider, palette, body-level stylesheet, global control override, or
+parallel dialog/toast system to make one contribution fit. Keep plugin styles
+scoped to owned layout/content. Renderer exceptions do not exempt surrounding
+controls from shared appearance.
 
 For a genuinely new surface, describe its task and the nearest recipe first.
 State the missing capability and smallest extension in its existing owner. Keep
@@ -476,6 +478,12 @@ An affordance is a control or action color. CSS spells these `--surface-panel`,
 Tailwind utilities include `bg-surface-panel`, `text-standard`,
 `border-prominent` and `bg-affordance-subtle-hover`. Text and border registrations
 stay in separate namespaces so they cannot accidentally share a value.
+
+Shared Markdown has a deliberate content exception: inline snippets, fenced
+code frames, and the backing behind pinned code actions use `affordance-subtle`
+to keep one code fill in both themes. Their text uses the renderer's existing
+text roles. This exception belongs to the shared Markdown renderer; other
+recessed content continues to use `surface-inset`.
 
 Enabled sidebar section headings, disclosure chevrons and quiet section actions
 use `text-subtle`, not `text-unavailable`. Disabled controls keep their shared
@@ -1506,18 +1514,19 @@ Base UI instant states and keyboard navigation skip transitions; reduced motion
 keeps only the fade.
 
 ToastProvider mounts one headless [Sonner](https://sonner.emilkowal.ski) Toaster
-in the host, portaled outside the app layout to the bottom right. Features and
+in the host, portaled outside the app layout to the top right. Features and
 plugins use the shared Toast API, never their own Toaster or direct Sonner calls.
 Toast cards reuse `floating-surface`, including its `--shadow-panel` elevation; the
 scrollable viewport leaves room for the shadow and keyboard focus.
 Buzz owns the floating surface, semantic colors, type roles, Button and IconButton;
 headless content inherits the host theme and text size without an OS-theme override.
 Group title and description with `space-1` (4px), then separate actions with
-`space-3` (12px). Use `space-3` padding on every card edge. The dismiss slot is
-independent of the text group so its 32px hit target cannot open a gap between
-title and description. It extends 8px toward the trailing edge and 4px vertically
-into the padding; title-only confirmations stay centered beside it. Descriptions
-use secondary text, and actions align with the message's leading edge.
+`space-3` (12px). Use `space-4` padding on every card edge. The close control floats at the upper
+leading corner and appears on hover or keyboard focus, remaining visible on
+touch. Descriptions use subtle text; actions trail the message and wrap below
+it when space is limited.
+Ordinary Tab or Shift+Tab entry expands the stack, and it remains expanded and
+scrollable while it contains focus, including when the pointer leaves.
 The pinned Sonner patch preserves intentional focus destinations when leaving a
 toast; fallback restoration still applies when focus is otherwise lost. Expiry
 pauses while the stack is hovered, focused or being dragged, independently of
@@ -1551,10 +1560,12 @@ expiry. Keep source-owned recovery on ToastNotice.
 Use a finite timeout for transient feedback. Recovery defaults to no expiry and
 no dismissal unless the source supplies onDismiss; preserve all recovery actions.
 The expanded, bounded, scrollable stack keeps every recovery action available.
-It sits at the bottom right with safe-area insets, including narrow windows; do
-not add feature-specific top offsets. Surfaces docked at the bottom of the
-window (the composer, the preview's Join notice) call `useToastClearance` with
-their element, and the stack rises above them so a notice never covers Send.
+It sits at the top right with safe-area insets. The app shell registers its
+header with `useToastClearance(ref)` and reserves the workspace header
+height on non-Mac shells. Mac uses a 12px top inset and an 8px right inset. Integrated Windows/Linux
+chrome aligns the card with the room/content divider. On touch,
+notices form a bounded scrolling list. Trailing actions wrap below the message
+when their intrinsic width cannot fit beside it.
 F6 enters notifications, Tab reaches actions. Modals remain above the stack. Content updates do not restart expiry; timeout changes do.
 
 Tabs with content use renderPanel, which lets Base UI connect each tab and panel.
@@ -1625,7 +1636,9 @@ Selected rows can expand without painting the entire branch in the accent color.
 Its `text` variant is a text-only row action, such as a capped list's Show
 more and Show fewer: the base navigation item's type and padding with no fill, resting in
 `--text-subtle` and strengthening to `--text-standard` on hover and keyboard
-focus. Use it where a fill would read as another destination.
+focus. Use it where a fill would read as another destination. A capped list
+puts both on one line: **Show more**, with a leading caret, on the row icons and
+titles, and **Show fewer** at the end, ending where row trailing content ends.
 
 PreviewCard may expose supplemental actions through `actionRef`, such as copying
 an identity's full npub. Focus opens every preview at once, so immediate Tab
@@ -1806,7 +1819,7 @@ inside a group than between groups.
 - Dense data uses edge-to-edge rows and dividers where a line helps track the row.
 - Distinct swatches, type samples, and avatars often need only space between them. Avoid adding a card or divider when the content already separates itself.
 - Show samples on the surface where they will be used. Glass needs a backdrop; a white swatch on white needs a quiet boundary.
-- Cards group widgets, gallery items, or settings. They sit on `bg-panel` with spacing or a hairline and have no default fill. Use `bg-hover` only for an interactive card’s hover state. There is no `bg-card` role; `bg-inset` is for recessed content such as inputs or code blocks.
+- Cards group widgets, gallery items, or settings. They sit on `bg-panel` with spacing or a hairline and have no default fill. Use `bg-hover` only for an interactive card's hover state. There is no `bg-card` role; `bg-inset` is for recessed content such as inputs. Shared Markdown code follows the content exception in [Semantic colors](#semantic-colors).
 - Use native thin scrollbars: `scrollbar-width: thin` and `scrollbar-color: var(--scrollbar-thumb-quiet) transparent`. Use the sidebar’s subtle gray thumb in both modes. Load the shared recipe into vendor shadow roots and let the browser control scrolling and visibility.
 
 ## Motion
@@ -1836,7 +1849,7 @@ after release, and prevent a drag from selecting text it passes over.
 
 Keep blur fixed during general surface transitions; animate opacity instead.
 The form dropdown, menu, popover, and tooltip sections document narrow,
-designer-requested blur exceptions. Respect each component’s keyboard and
+designer-requested blur exceptions. The front desktop toast also sharpens from 2px blur on entry and returns to 2px on ordinary dismissal. This treatment requires a fine pointer, hover, and full motion. On Linux WebKitGTK the toast uses slide, scale, and opacity only because animating blur can crash the renderer. Respect each component’s keyboard and
 reduced-motion treatment.
 
 ## Colour structure
@@ -2242,15 +2255,18 @@ Inline search settings use the search variant of PreferenceRow with a gear icon 
 ### Conversation identity icons (proposed)
 
 Proposed pending designer sign-off, as a narrow exception to the chat and
-conversation icon rule under Icons. Use `ChatCircleIcon` for a Solo chat in navigation, headers, tabs and chat cards.
-Use `ThreadIcon` (Tabler Message2) for thread tabs, thread links and Reply actions.
-Its text lines identify a conversation without the forward-like arrow in MessageReply.
+conversation icon rule under Icons. Use `ChatCircleIcon` for a Solo chat in
+navigation, headers, tabs and inline chat links.
+Use `ThreadIcon` (Tabler Message2) for message links, thread links, thread tabs,
+and Reply actions. The text lines identify links to messages and threads.
 Keep private Team channels' lock icon; privacy alone does not
-replace a Solo chat's identity icon. Accessible chat cards end with a right
-chevron. Unavailable chat cards retain a lock and unavailable accessible text;
-unknown access does not earn a chevron. Display chat cards as **Chat:**, while
-accepting legacy **Session:** and **Session ·** authored links without rewriting
-historical messages or their receipts.
+replace a Solo chat’s identity icon. A withheld link uses the lock.
+
+Chat links use the ordinary inline link treatment in the composer and messages;
+keep their authored position and label. New shares use the chat title as the label.
+Legacy **Chat:**, **Session:** and **Session ·** labels remain authored text without
+rewriting historical messages or their receipts. Rich previews use the existing
+link/preview contribution boundaries rather than chat-specific attachment chrome.
 
 
 ### Mobile-aligned onboarding

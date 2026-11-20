@@ -632,6 +632,75 @@ describe("saving and History", () => {
     ).toBe("edited");
   });
 
+  it("refuses a stale settings-only save, and keeps notes a later save leaves out", async () => {
+    const typed = {
+      ...agent,
+      schema: { model: "string" },
+      config: { instructions: "local text", model: "a" },
+    } as const;
+    const f = setup();
+    await f.configs.attach([typed]);
+    const d = await artifactD("buzz.agent.settings", channel);
+    const opened = f.heads.get(d);
+    if (!opened) throw new Error("No settings head");
+    // Another device moves settings on first.
+    f.heads.set(
+      d,
+      sign(
+        artifactTemplate({
+          channel,
+          type: "buzz.agent.settings",
+          d,
+          op: "update",
+          prev: opened.id,
+          title: "Agent settings",
+          content: JSON.stringify({
+            version: 1,
+            agentType: typed.type,
+            settings: { model: "b" },
+          }),
+        }),
+      ),
+    );
+    const notes = { "org.example": { data: 1, tag: "auto" } };
+    const config = {
+      instructions: "local text",
+      preset: "recommended",
+      pluginNotes: notes,
+    };
+    const stale = await f.configs.save(typed, config, { settings: opened.id });
+    expect(stale.settings?.status).toBe("conflict");
+    expect(stale.instructions).toBeUndefined();
+    expect(f.heads.get(d)?.content).toContain('"model":"b"');
+    const head = () => {
+      const event = f.heads.get(d);
+      if (!event) throw new Error("No settings head");
+      return event;
+    };
+    const ok = await f.configs.save(typed, config, { settings: head().id });
+    expect(ok.settings?.status).toBe("saved");
+    expect(JSON.parse(head().content)).toMatchObject({
+      preset: "recommended",
+      pluginNotes: notes,
+    });
+    expect(head().tags).toContainEqual(["note", "org.example", "auto"]);
+    // A later save with no notes, as from a settings form, keeps them.
+    await f.configs.save(
+      typed,
+      { instructions: "local text", model: "c" },
+      { settings: head().id },
+    );
+    expect(JSON.parse(head().content).pluginNotes).toEqual(notes);
+    // Clearing the last note leaves no empty map behind.
+    await f.configs.save(
+      typed,
+      { instructions: "local text", model: "c", pluginNotes: {} },
+      { settings: head().id },
+    );
+    expect(JSON.parse(head().content)).not.toHaveProperty("pluginNotes");
+    expect(head().tags.some((tag) => tag[0] === "note")).toBe(false);
+  });
+
   it("saves only a changed side, on the head the editor opened", async () => {
     const f = setup();
     await f.configs.attach([agent]);

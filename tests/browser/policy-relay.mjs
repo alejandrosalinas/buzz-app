@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { isSidebarPreferencesBatch } from "../../src/features/relay/sidebar-preferences.ts";
 import { verifyEvent } from "nostr-tools";
 import { createHash } from "node:crypto";
 
@@ -16,6 +17,8 @@ export function policyRelay({
   acceptPublication,
   latencyMs = 0,
   holdOlder = true,
+  // Release each held older page after this delay instead of on demand.
+  olderPageDelayMs = null,
 }) {
   const sockets = [];
   // A page can close between sending a publication and its acceptance. The
@@ -428,15 +431,15 @@ export function policyRelay({
           );
         }
         if (filters.length !== 1) {
-          // Sidebar preferences read only these five exact own-author coordinates.
-          expect(filters).toHaveLength(5);
-          expect(filters.map((filter) => filter["#d"]?.[0]).sort()).toEqual([
-            "channel-filter",
-            "channel-mutes",
-            "channel-sections",
-            "channel-sort",
-            "channel-stars",
-          ]);
+          const legacySortAndFilter =
+            filters.length === 2 &&
+            filters
+              .map((filter) => filter["#d"]?.[0])
+              .sort()
+              .join() === "channel-filter,channel-sort";
+          expect(
+            legacySortAndFilter || isSidebarPreferencesBatch(filters),
+          ).toBe(true);
           for (const filter of filters) {
             expect(filter.kinds).toEqual([30078]);
             expect(filter.authors).toEqual([viewer]);
@@ -584,7 +587,7 @@ export function policyRelay({
           return new Promise((resolve, reject) => {
             const abort = () => reject(init.signal.reason);
             init.signal.addEventListener("abort", abort, { once: true });
-            pending.push({
+            const receipt = {
               community,
               channel,
               filter,
@@ -593,7 +596,10 @@ export function policyRelay({
                 init.signal.removeEventListener("abort", abort);
                 resolve(Response.json(result));
               },
-            });
+            };
+            pending.push(receipt);
+            if (olderPageDelayMs !== null)
+              setTimeout(() => receipt.release(), olderPageDelayMs);
           });
         return Response.json(result);
       } catch (error) {

@@ -140,6 +140,9 @@ export const sectionTitle = (tag: string) => TITLES.get(tag) ?? tag;
 export const STEER = "new-message-arrived-while-you-were-working";
 const EVENT_TAGS = new Set(["buzz-event", STEER]);
 
+/** Wrappers inside a base section's text: part of that text, not framing. */
+const INLINE = new Set(["owner-section"]);
+
 /** Split top-level `<tag attrs>` … `</tag>` prompt framing; other text is kept. */
 export function promptSections(text: string): PromptSection[] {
   const sections: PromptSection[] = [];
@@ -154,7 +157,8 @@ export function promptSections(text: string): PromptSection[] {
       continue;
     }
     const start = /^<([a-z][a-z0-9-]*)(?:\s[^<>]*)?>$/.exec(line);
-    if (start?.[1]) open = { tag: start[1], lines: [] };
+    if (start?.[1] && !INLINE.has(start[1]))
+      open = { tag: start[1], lines: [] };
     else loose.push(line);
   }
   // An unterminated section is ordinary text, not a silently dropped body.
@@ -351,6 +355,22 @@ export function activityTranscript(
   return transcript;
 }
 
+// Each new record replaces the array, so a transcript is rebuilt from every
+// retained record. Frozen records never change: parse each one once.
+const unparsable = Symbol("unparsable");
+const parsedPlaintext = new WeakMap<object, unknown>();
+function parsed(record: Source) {
+  if (parsedPlaintext.has(record)) return parsedPlaintext.get(record);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(record.plaintext);
+  } catch {
+    raw = unparsable;
+  }
+  if (Object.isFrozen(record)) parsedPlaintext.set(record, raw);
+  return raw;
+}
+
 function buildTranscript(
   records: readonly Source[],
   scope: TranscriptScope,
@@ -359,12 +379,8 @@ function buildTranscript(
   const events: { id: string; at: number; order: number; event: Json }[] = [];
   for (const record of records) {
     if (record.agent !== scope.agent) continue;
-    let raw: unknown;
-    try {
-      raw = JSON.parse(record.plaintext);
-    } catch {
-      continue;
-    }
+    const raw = parsed(record);
+    if (raw === unparsable) continue;
     const envelope = object(raw);
     const children =
       envelope?.kind === "batch" ? object(envelope.payload)?.events : [raw];

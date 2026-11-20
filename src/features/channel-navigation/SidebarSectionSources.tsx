@@ -103,7 +103,10 @@ export function SidebarSectionSources({
   environment: SidebarSectionEnvironment;
   children(
     slots: readonly SidebarSectionSlot[],
-    sources: (scope?: string) => ReactNode,
+    sources: (
+      scope?: string,
+      include?: (source: RegisteredSidebarSectionSource) => boolean,
+    ) => ReactNode,
   ): ReactNode;
   onReady?:
     | ((
@@ -119,10 +122,16 @@ export function SidebarSectionSources({
     registry?.sourceSnapshot ?? snapshot,
   );
   const [store] = useState(createSlotStore);
-  const components = (scope?: string) =>
+  const components = (
+    scope?: string,
+    include?: (source: RegisteredSidebarSectionSource) => boolean,
+  ) =>
     registry &&
     sources
-      .filter((source) => !scope || source.scope === scope)
+      .filter(
+        (source) =>
+          (!scope || source.scope === scope) && (!include || include(source)),
+      )
       .map((source) => (
         <SectionSource
           key={contributionKey(source)}

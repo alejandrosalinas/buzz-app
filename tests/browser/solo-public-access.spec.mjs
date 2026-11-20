@@ -98,7 +98,7 @@ test.describe("owner", () => {
     app,
   }, info) => {
     await openChat(page, app, own);
-    const row = page.locator(`[data-solo-channel-id="${own}"]`);
+    const row = page.locator(`[data-solo-destination-id="${own}"]`);
     const { dialog, audience, openAccess, confirm } = accessControls(page);
     let saves = 0;
     for (const presentation of presentations) {
@@ -377,7 +377,7 @@ test.describe("visitor", () => {
         page.getByRole("button", { name: "Join", exact: true }),
       ).toBeVisible();
       await expect(
-        page.locator(`[data-solo-channel-id="${shared}"]`),
+        page.locator(`[data-solo-destination-id="${shared}"]`),
       ).toHaveCount(0);
       await hoverMessage(message);
       await message
@@ -490,7 +490,7 @@ test.describe("visitor", () => {
       name: "Conversation",
       exact: true,
     });
-    const row = page.locator(`[data-solo-channel-id="${shared}"]`);
+    const row = page.locator(`[data-solo-destination-id="${shared}"]`);
     await expect(row).toHaveCount(0);
     const join = page.getByRole("button", { name: "Join", exact: true });
     await present(page, presentations[0]);

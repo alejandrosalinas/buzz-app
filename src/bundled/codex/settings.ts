@@ -6,20 +6,29 @@ import {
   type SettingsSchema,
   withSynced,
 } from "../../features/agents/agent-config";
-import { type Config, defaults } from "./config";
+import { type Config, defaults, config as readConfig } from "./config";
 
 export const syncedSettingsSchema = {
+  voice: "string",
   model: "string",
   effort: "string",
-  scope: ["thread", "channel"],
+  scope: ["thread", "channel", "community"],
 } as const satisfies SettingsSchema;
 
 export const syncedSettings = (config: Config) =>
-  pickSettings(syncedSettingsSchema, config);
+  pickSettings(syncedSettingsSchema, readConfig(config));
 
 /** Synced fields come only from `settings`, a left-out one from the default;
  * everything else stays this device's. */
 export const withSyncedSettings = (
   config: Config,
   settings: Readonly<Record<string, string>>,
-): Config => withSynced(syncedSettingsSchema, defaults, config, settings);
+): Config =>
+  readConfig(
+    withSynced(
+      syncedSettingsSchema,
+      { ...defaults, voice: "" },
+      config,
+      settings,
+    ),
+  );

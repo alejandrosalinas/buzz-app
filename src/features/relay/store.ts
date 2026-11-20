@@ -143,6 +143,9 @@ export type ChannelStoreOptions = {
   initialChannelId?: string | undefined;
   /** Warm every roster channel's head in the background before it is opened. */
   warm?: boolean;
+  /** A reload: skips the saved startup roster, so nothing saved authorizes
+   * a channel before the relay does. */
+  revalidate?: boolean;
   persistence?: HeadPersistence;
   maxDiscoveryBytes?: number;
   maxHeadBytes?: number;
@@ -3687,7 +3690,9 @@ export function createChannelStore(
   }
   function restore() {
     if (!prepared || !persistence?.readStartup) return Promise.resolve();
-    startup ??= restoreStartup();
+    // A reload skips the saved roster but keeps the profile mirror, which
+    // only a restore lets it write.
+    startup ??= options.revalidate ? restoreProfiles() : restoreStartup();
     return startup;
   }
   const queries: ChannelQueries = Object.freeze({

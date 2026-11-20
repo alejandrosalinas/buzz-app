@@ -97,7 +97,7 @@ test.describe("Solo layout", () => {
     await newChat(page);
     const workspace = page;
     const sidebar = page.getByRole("navigation", {
-      name: "Solo conversations",
+      name: "Subscribed channels",
     });
     const composer = workspace.getByRole("textbox", {
       name: "Message your agents",
