@@ -20,6 +20,7 @@ import {
   useState,
 } from "react";
 import { SoloRegions } from "../../bundled/channels/SoloRegions";
+import { TeamRowChannelGroup } from "./RegionChannelGroup";
 import { SoloInventory } from "../../bundled/channels/SoloInventory";
 import {
   ChannelNavigationProvider,
@@ -102,6 +103,8 @@ function mount(
           toggle,
           retryReveal,
           revealAgain,
+          adjustScrollAnchor: () => {},
+          captureScrollAnchor: { current: undefined },
         }}
       />
     );
@@ -2930,6 +2933,65 @@ it("channel groups separate selection from disclosure, preserve children, and re
   expect(
     screen.queryByRole("button", { name: "Source channel" }),
   ).not.toBeInTheDocument();
+});
+
+it("gives a Team row to the first channel group that asks and the next one when it leaves", async () => {
+  const h = fixture();
+  const viewer = h.session.viewer;
+  assert(viewer);
+  h.roster([
+    { id: "source", name: "Source", channelType: "stream", members: [viewer] },
+  ]);
+  function Body({ ui }: SoloRegionProps) {
+    const [first, setFirst] = useState(true);
+    const Group = ui.ChannelGroup;
+    assert(Group);
+    const group = (name: string) => (
+      <Group
+        key={name}
+        channelId="source"
+        placement="team-row"
+        onSelect={() => {}}
+        expanded
+        controls={`${name}-tasks`}
+        disclosureLabel={`Hide ${name} tasks`}
+        onToggle={() => {}}
+      >
+        {name} tasks
+      </Group>
+    );
+    return (
+      <>
+        <button type="button" onClick={() => setFirst(false)}>
+          Remove first
+        </button>
+        {first && group("First")}
+        {group("Second")}
+      </>
+    );
+  }
+  await h.register({ component: Body });
+  mount(h);
+  // No Team row is mounted yet: the holder waits, the other stays in the region.
+  expect(screen.queryByText("First tasks")).not.toBeInTheDocument();
+  expect(
+    screen.getByText("Second tasks").closest("[data-solo-channel-group]"),
+  ).not.toBeNull();
+  const row = render(
+    <TeamRowChannelGroup session={h.session} channelId="source">
+      <button type="button">Team row</button>
+    </TeamRowChannelGroup>,
+  );
+  const inRow = (text: string) =>
+    row.container.contains(screen.queryByText(text));
+  expect(inRow("First tasks")).toBe(true);
+  expect(inRow("Second tasks")).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Remove first" }));
+  expect(screen.queryByText("First tasks")).not.toBeInTheDocument();
+  expect(inRow("Second tasks")).toBe(true);
+  expect(row.container.querySelector("[data-solo-channel-group]")).toBeNull();
+  row.unmount();
+  expect(screen.queryByText("Second tasks")).not.toBeInTheDocument();
 });
 
 it("channel groups share a 3,000-record roster and retain the complete native menu", async () => {

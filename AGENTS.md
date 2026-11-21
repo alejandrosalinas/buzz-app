@@ -88,6 +88,14 @@ When changing a shipped plugin to default-off, follow the
 [plugin-defaults decision](docs/plugin-defaults.md): apply it to fresh installs
 and preserve existing installs' effective states, including implicit defaults.
 
+Build a new public feature that fits the plugin API as a plugin listed in the
+public [plugin directory](https://github.com/block/buzz-plugins) first.
+Organization-specific work goes in a private plugin instead; see
+[Open-source boundary](#open-source-boundary). Bundling a new plugin into this
+repository needs explicit agreement from a core maintainer, each time. Bringing
+new people to Buzz, as agent harness integrations do, is one reason maintainers
+may consider, since the directory only reaches people who already use Buzz.
+
 When changing user-facing Buzz behavior, update [the agent help guide](docs/buzz-help.md)
 if the change affects how someone uses or understands the app. Keep it concise,
 describe implemented behavior, and distinguish optional or platform-dependent

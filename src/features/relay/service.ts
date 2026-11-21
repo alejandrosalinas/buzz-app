@@ -20,6 +20,7 @@ import { isTransientFailure, ReadError, readErrorKind } from "./errors";
 import { RECOVERY_DELAYS_MS } from "./recovery";
 import { mediaUrl, type ReadTransport } from "./transport";
 import { retryFailedImages } from "../../shared/design-system/useReadyImage";
+import { createOwnerMentionStore } from "./owner-mentions";
 import { refusalOfError, type CommunityRefusal } from "./http-admission";
 /** The snapshot's error for a refusal heard after connecting, for logs and
  * diagnostics; what it offers follows `refusal`, never this text. */
@@ -129,6 +130,8 @@ export function provideRelay(
   let asking: (() => Promise<void>) | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let store = createRelaySession(null, { identityNames });
+  let mentionScope: string | undefined;
+  let ownerMentionStore: ReturnType<typeof createOwnerMentionStore> | undefined;
   let snapshot: RelaySnapshot = Object.freeze({
     status: "disconnected",
     generation,
@@ -293,7 +296,10 @@ export function provideRelay(
       !signal.aborted &&
       current === generation &&
       signal === controller?.signal;
+    if (!live()) return;
     if (kind !== "sign-in") {
+      // A reconnect may already have replaced the session with an empty one.
+      ownerMentionStore?.clear();
       await store.clearCache().catch(() => {});
       if (resume) {
         // Saved images are optional; failing to forget them keeps the rest.
@@ -417,10 +423,16 @@ export function provideRelay(
             signal !== controller?.signal
           )
             return;
+          const scope = transportPartition(transport);
+          if (mentionScope !== scope) {
+            mentionScope = scope;
+            ownerMentionStore = createOwnerMentionStore(transport.viewer);
+          }
           const successor = createRelaySession(transport, {
             identityNames,
             agentChoices,
             localAgents,
+            ...(ownerMentionStore ? { ownerMentionStore } : {}),
             ...(presenceActivity ? { presenceActivity } : {}),
             prepared: true,
             // Keep intent preparation, but do not fetch every unopened channel.
@@ -557,6 +569,8 @@ export function provideRelay(
       const current = generation;
       const reconnect = connecting || snapshot.cached;
       const retainedStore = store;
+      if (snapshot.status !== "ready" || snapshot.cached)
+        ownerMentionStore?.clear();
       controller?.abort();
       clearTimeout(deadline);
       connecting = false;

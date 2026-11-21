@@ -1,7 +1,8 @@
 import { interestPaused } from "./attention";
-import type {
-  AgentSessionAssociation,
-  AgentSessionSource,
+import {
+  hasInvocationIntent,
+  type AgentSessionAssociation,
+  type AgentSessionSource,
 } from "./session-admission";
 import { onAutomatic } from "./recommended";
 // The agent runner: one queue per agent, its rate limit, mention and watch
@@ -19,7 +20,9 @@ import type {
   AgentVoicePipe,
   AgentType,
   AgentHandle,
-  SoloWorkspaces,
+  Workspaces,
+  WorkspaceAudience,
+  WorkspaceChat,
   AgentCreationInput,
   AgentReadout,
   AgentUpdateInput,
@@ -121,6 +124,7 @@ import {
   fallbackNotice,
   gatewayRoutes,
   TURN_READINESS_WAIT_MS,
+  SELECTION_PENDING_NOTICE,
   unattributedNotice,
 } from "./gateway/route";
 import { turnContextFor } from "./gateway/turn";
@@ -656,7 +660,7 @@ export type RunnerHost = {
   ): ReturnType<NonNullable<AgentHandle["promptSections"]>>;
   /** The owner's channel templates as the agent's handle offers them. */
   templates(agent: Agent): ReturnType<AgentHandle["templates"]>;
-  soloWorkspaces?(agent: Agent): SoloWorkspaces | undefined;
+  workspaces?(agent: Agent): Workspaces | undefined;
   /** The owner's thread tabs as the agent's handle offers them. */
   tabs(agent: Agent): ReturnType<AgentHandle["tabs"]>;
   /** Buzz settings on this device, where there are any. */
@@ -3131,7 +3135,13 @@ export class AgentRunners {
    * replayed. A turn whose access is revoked after dispatch is the harness's
    * to fail visibly. An `attribution` type's turn never waits or fails here:
    * it takes the route as it stands, and any blocked route, `auth` and
-   * `readiness_pending` included, runs it unattributed with a notice. */
+   * `readiness_pending` included, runs it unattributed with a notice. A
+   * harness a plugin's list leaves out (`GatewayRoutes.excludes`) runs with
+   * its own configuration, without a notice, whatever the route: a turn
+   * waits for the list first, within the same cap, and then neither waits
+   * for nor rechecks an access check. An `attribution` turn doesn't wait for
+   * the list either: while it is unknown, the turn runs unattributed with
+   * `SELECTION_PENDING_NOTICE`, unless its route is already external. */
   private async gatewayRouting(
     agent: Agent,
     type: RegisteredAgentType,
@@ -3143,17 +3153,46 @@ export class AgentRunners {
     const upstream = harness && gatewayRoutes.upstream(harness);
     if (!upstream) return {};
     const attribution = type.gateway?.mode === "attribution";
-    // Attribution never holds a turn for an access check: it takes the
-    // route as it stands, while any check carries on for later turns.
-    const route = await gatewayRoutes.routeForTurn(
-      agent.key,
-      attribution
-        ? undefined
-        : AbortSignal.any([
-            signal,
-            AbortSignal.timeout(TURN_READINESS_WAIT_MS),
-          ]),
-    );
+    // Attribution never holds a turn, for the plugin's list or an access
+    // check. A list that leaves this harness out, or a route already
+    // external, runs it on its own configuration without a notice. While the
+    // list is unknown, it runs unattributed with a notice that says only
+    // that, since no access check has gone out yet.
+    if (attribution) {
+      if (gatewayRoutes.excludes(harness)) return {};
+      if (gatewayRoutes.selecting) {
+        if (gatewayRoutes.routeFor(agent.key).kind === "external") return {};
+        const notice = SELECTION_PENDING_NOTICE;
+        job.work?.notice(notice);
+        return {
+          gatewayFallback: Object.freeze({
+            reason: "readiness_pending" as const,
+            notice,
+          }),
+        };
+      }
+    }
+    // One cap for the list and the access check together.
+    const wait = attribution
+      ? undefined
+      : AbortSignal.any([signal, AbortSignal.timeout(TURN_READINESS_WAIT_MS)]);
+    // The list first, so a harness it leaves out never waits for, or
+    // rechecks, an access check. A route already external, such as an
+    // unlisted community's, doesn't wait for the list.
+    if (
+      wait &&
+      gatewayRoutes.selecting &&
+      gatewayRoutes.routeFor(agent.key).kind !== "external"
+    ) {
+      await gatewayRoutes.selectionForTurn(wait);
+      signal.throwIfAborted();
+    }
+    // A harness the plugin's list leaves out keeps its own configuration
+    // whatever the route, so a partial list never fails its turns.
+    if (gatewayRoutes.excludes(harness)) return {};
+    // Attribution takes the route as it stands, while any check carries on
+    // for later turns.
+    const route = await gatewayRoutes.routeForTurn(agent.key, wait);
     signal.throwIfAborted();
     if (route.kind === "external") return {};
     if (route.kind === "blocked") {
@@ -3234,6 +3273,29 @@ export class AgentRunners {
     };
     const completion = Promise.resolve().then(async () => {
       this.assertProtected(agent, type, handle);
+      if (
+        trigger.type === "mention" &&
+        !(type.invocationRouting && this.host.routeConversation)
+      ) {
+        const { event } = trigger;
+        const thread = threadReference(event);
+        const channelId =
+          job.channelId ?? event.tags.find(([tag]) => tag === "h")?.[1];
+        if (
+          thread &&
+          channelId &&
+          hasInvocationIntent({
+            agent: agent.key,
+            owner: agent.owner,
+            invocationId: event.id,
+            event,
+            source: { channelId, root: thread.rootId },
+          })
+        )
+          throw new Error(
+            "Invocation routing is unavailable for this agent. Restore it and retry.",
+          );
+      }
       // Before any type code (its models included) runs for this turn.
       const routing = await this.gatewayRouting(
         agent,
@@ -3531,7 +3593,7 @@ export class AgentRunners {
     const lifetime = runner.controller.signal;
     const protection = this.host.protection?.(agent);
     const settings = run ? this.host.settings?.() : undefined;
-    const workspaces = run ? this.host.soloWorkspaces?.(agent) : undefined;
+    const workspaces = run ? this.host.workspaces?.(agent) : undefined;
     const creations = new Map<string, (event: RelayEvent) => void>();
     const handle = guarded(
       {
@@ -3702,14 +3764,34 @@ export class AgentRunners {
           },
         }),
         ...(workspaces && {
-          soloWorkspaces: {
+          workspaces: {
             list: (signal?: AbortSignal) =>
               workspaces.list(
                 AbortSignal.any([lifetime, ...(signal ? [signal] : [])]),
               ),
+            defaults: (
+              workspace: string,
+              chat: WorkspaceChat,
+              signal?: AbortSignal,
+            ) =>
+              workspaces.defaults(
+                workspace,
+                chat,
+                AbortSignal.any([lifetime, ...(signal ? [signal] : [])]),
+              ),
+            move: (
+              id: string,
+              workspace: string | undefined,
+              signal?: AbortSignal,
+            ) =>
+              workspaces.move(
+                id,
+                workspace,
+                AbortSignal.any([lifetime, ...(signal ? [signal] : [])]),
+              ),
             prepare: async (
               workspace: string,
-              members: readonly string[],
+              audience: WorkspaceAudience,
               channelId: string,
               signal?: AbortSignal,
             ) => {
@@ -3717,7 +3799,11 @@ export class AgentRunners {
                 lifetime,
                 ...(signal ? [signal] : []),
               ]);
-              const file = await workspaces.prepare(workspace, members, active);
+              const file = await workspaces.prepare(
+                workspace,
+                audience,
+                active,
+              );
               // Each overlapping call owns one exact future create, consumed once.
               let created: RelayEvent | undefined;
               if (creations.has(channelId))
@@ -3729,7 +3815,7 @@ export class AgentRunners {
               return async (id: string) => {
                 active.throwIfAborted();
                 if (attempted)
-                  throw new Error("Solo placement was already attempted");
+                  throw new Error("Workspace placement was already attempted");
                 const event = created;
                 if (id !== channelId || !event)
                   throw new Error("No new chat from this run to file");

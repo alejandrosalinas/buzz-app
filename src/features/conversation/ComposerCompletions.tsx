@@ -1,3 +1,4 @@
+import { withHumanMentionSelection } from "../messages/mention-draft";
 import {
   readComposerSnapshot,
   composerMarkdownContext,
@@ -19,7 +20,10 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type Dispatch,
+  type ReactNode,
   type RefObject,
+  type SetStateAction,
 } from "react";
 import type { Contribution } from "../../plugins/contributions";
 import type {
@@ -37,14 +41,14 @@ import { IdentityMarks } from "./IdentityMarks";
 import {
   completionResult,
   matchCompletion,
+  type CompletionMatch,
   type HostCompletionEdit,
   type HostCompletionResult,
+  type HostCompletionSuggestion,
 } from "./completion";
 import type { CompletionEditor } from "./useCompletionEditor";
 import styles from "./Completions.module.css";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
-
-const RETRY = Symbol("retry-completion");
 
 /** The editor retains focus, so keyboard selection must open its own hint. */
 function EmojiCompletionName({
@@ -94,16 +98,23 @@ function EmojiCompletionName({
  * clears it. A query opened elsewhere, by another provider, or after the
  * popup closed starts empty: `ComposerCompletions` evicts the store in its
  * closed render, so a carried result means only a continuing open query. */
+type Shown = Readonly<Record<number, HostCompletionResult>>;
 function createDisplay() {
-  let shown: { key: string; result: HostCompletionResult | undefined } = {
+  let shown: { key: string; results: Shown | undefined } = {
     key: "",
-    result: undefined,
+    results: undefined,
   };
   const listeners = new Set<() => void>();
   return {
-    read: (key: string) => (shown.key === key ? shown.result : undefined),
-    set(key: string, result: HostCompletionResult | undefined) {
-      shown = { key, result };
+    read: (key: string) => (shown.key === key ? shown.results : undefined),
+    set(key: string, source?: number, result?: HostCompletionResult) {
+      const results: Record<number, HostCompletionResult> =
+        shown.key === key ? { ...shown.results } : {};
+      if (source !== undefined) {
+        if (result) results[source] = result;
+        else delete results[source];
+      }
+      shown = { key, results: key ? results : undefined };
       for (const listener of listeners) listener();
     },
     subscribe(listener: () => void) {
@@ -191,6 +202,8 @@ export function ComposerCompletions({
     registry.snapshot,
   );
   const [display] = useState(createDisplay);
+  // Only user navigation pins an ID; automatic selection follows the first result.
+  const [pin, setPin] = useState<{ scope: string; row?: string | undefined }>();
   // Query owners remount on typing. Keep the last physical position with the
   // host, recording after row handlers have compared the previous position.
   const pointerPosition =
@@ -217,6 +230,26 @@ export function ComposerCompletions({
       ...(resolved.pending ?? []),
       ...(resolved.tokens ?? []),
     ]);
+  const scope = JSON.stringify(
+    match && observation
+      ? [
+          contributionKey(match.provider),
+          observation.revision,
+          match.query.start,
+          match.query.end,
+          match.query.query,
+        ]
+      : null,
+  );
+  const select = useCallback(
+    (row: SetStateAction<string | undefined>) =>
+      setPin((previous) => {
+        const held = previous?.scope === scope ? previous.row : undefined;
+        const next = typeof row === "function" ? row(held) : row;
+        return next === held ? previous : { scope, row: next };
+      }),
+    [scope],
+  );
   const open =
     !!match &&
     !!observation &&
@@ -231,17 +264,18 @@ export function ComposerCompletions({
   // that returned to text, starts empty as a first query does; its provider's
   // first publication fills it in the same task.
   useEffect(() => {
-    if (!open) display.set("", undefined);
+    if (!open) display.set("");
   }, [open, display]);
   if (!open || !match || !observation) return null;
   return (
     <ContributionBoundary
       key={JSON.stringify([
-        contributionKey(match.provider),
-        observation.revision,
-        match.query.start,
-        match.query.end,
-        match.query.query,
+        scope,
+        match.supplements.map(({ provider, query }) => [
+          contributionKey(provider),
+          query.end,
+          query.query,
+        ]),
       ])}
       fallback={
         <span role="status">
@@ -255,18 +289,32 @@ export function ComposerCompletions({
         identityMarks={identityMarks}
         display={display}
         provider={match.provider}
+        sources={match.sources}
         query={match.query}
         observation={observation}
         editor={editor}
         input={input}
         replace={replace}
         pointerPosition={pointerPosition}
+        selected={pin?.scope === scope ? pin.row : undefined}
+        setSelected={select}
       />
     </ContributionBoundary>
   );
 }
+type Row = Readonly<{
+  source: CompletionMatch;
+  key: string;
+  item?: HostCompletionSuggestion;
+  heading?: string;
+}>;
+const slot = ({ provider }: CompletionMatch) => contributionKey(provider);
+const rowKey = (source: CompletionMatch, id?: string) =>
+  JSON.stringify([slot(source), id ?? null]);
+
 function OwnedCompletion({
   provider,
+  sources: matched,
   registry,
   identityMarks,
   display,
@@ -276,9 +324,14 @@ function OwnedCompletion({
   input,
   replace,
   pointerPosition,
+  selected,
+  setSelected,
   ...context
 }: CompletionContext & {
+  selected: string | undefined;
+  setSelected: Dispatch<SetStateAction<string | undefined>>;
   provider: Contribution<ComposerCompletion>;
+  sources: readonly CompletionMatch[];
   registry: ContributionReader<ComposerCompletion>;
   identityMarks?: ContributionReader<IdentityMark> | undefined;
   display: ReturnType<typeof createDisplay>;
@@ -315,15 +368,16 @@ function OwnedCompletion({
   );
   const list = useRef<HTMLDivElement>(null);
   const trigger = `${contributionKey(provider)}:${query.start}`;
-  const result = useSyncExternalStore(
+  const [sources] = useState(matched);
+  const results = useSyncExternalStore(
     display.subscribe,
     () => display.read(trigger),
     () => display.read(trigger),
   );
+  const result = results?.[contributionKey(provider)];
   // This lifetime's own publication; a carried display is never acted on.
-  const latest = useRef<HostCompletionResult | undefined>(undefined);
-  // Only user navigation pins an ID; automatic selection follows the first result.
-  const [selected, setSelected] = useState<string | typeof RETRY>();
+  const latest = useRef(new Map<number, HostCompletionResult>());
+  const failed = useRef(new Set<number>());
   const [keyboardSelection, setKeyboardSelection] = useState<string>();
   const pointerMoved = useCallback(
     (event: Pick<PointerEvent, "clientX" | "clientY">) => {
@@ -354,63 +408,132 @@ function OwnedCompletion({
     current.current = { editor, replace };
   });
   const active = useCallback(
-    () =>
+    (candidate: Contribution<ComposerCompletion>) =>
       live.current &&
-      registry.snapshot().includes(provider) &&
+      !failed.current.has(contributionKey(candidate)) &&
+      registry.snapshot().includes(candidate) &&
       current.current.editor.valid(observation),
-    [provider, registry, observation],
+    [registry, observation],
   );
-  const [publish, setPublish] = useState<ComposerCompletionProps["publish"]>();
+  const [publishers, setPublishers] =
+    useState<readonly ComposerCompletionProps["publish"][]>();
   useLayoutEffect(() => {
     live.current = true;
     let owned = true;
-    setPublish(() => (incoming: CompletionResult) => {
-      if (!owned || !active()) return false;
-      const next = completionResult(incoming, provider);
-      latest.current = next;
-      revealSelection.current = true;
-      display.set(trigger, next);
-      setSelected((previous) =>
-        next.items.some((item) => item.id === previous)
-          ? previous
-          : previous === RETRY && next.retry
-            ? RETRY
-            : undefined,
-      );
-      return () => {
-        if (latest.current !== next) return;
-        latest.current = undefined;
-        if (live.current) display.set(trigger, undefined);
-      };
-    });
+    const published = latest.current;
+    setPublishers(
+      sources.map((source) => (incoming: CompletionResult) => {
+        if (!owned || !active(source.provider)) return false;
+        const next = completionResult(incoming, source.provider);
+        published.set(slot(source), next);
+        revealSelection.current = true;
+        display.set(trigger, slot(source), next);
+        setSelected((previous) => {
+          if (!previous?.startsWith(`[${slot(source)},`)) return previous;
+          const kept =
+            previous === rowKey(source)
+              ? !!next.retry
+              : next.items.some((item) => previous === rowKey(source, item.id));
+          return kept ? previous : undefined;
+        });
+        return () => {
+          if (published.get(slot(source)) !== next) return;
+          published.delete(slot(source));
+          if (live.current) display.set(trigger, slot(source));
+        };
+      }),
+    );
     return () => {
       owned = false;
       live.current = false;
-      latest.current = undefined;
+      published.clear();
     };
-  }, [active, display, provider, trigger]);
+  }, [active, display, sources, trigger, setSelected]);
   // A carried result stands only until this query's provider has run its
   // mount effects, which precede this one; a provider that has not published
   // by then leaves the popup closed, as for a first query, so a stale display
   // is never painted.
   useEffect(() => {
-    if (publish && !latest.current) display.set(trigger, undefined);
-  }, [publish, display, trigger]);
-  const items = result?.items ?? [];
+    if (!publishers) return;
+    for (const key of Object.keys(display.read(trigger) ?? {}))
+      if (!latest.current.has(Number(key))) display.set(trigger, Number(key));
+  }, [publishers, display, trigger]);
+  const held = () =>
+    sources.some((source) => {
+      const published = latest.current.get(slot(source));
+      return (
+        source.provider !== provider &&
+        !failed.current.has(slot(source)) &&
+        published?.holdAutoSelect === true
+      );
+    });
+  const isolate = (source: CompletionMatch, node: ReactNode) =>
+    source.provider === provider ? (
+      node
+    ) : (
+      <ContributionBoundary
+        key={slot(source)}
+        fallback={null}
+        onFailedChange={(failure) => {
+          if (!failure) return;
+          failed.current.add(slot(source));
+          display.set(trigger, slot(source));
+        }}
+      >
+        {node}
+      </ContributionBoundary>
+    );
+  const rows: Row[] = [];
+  for (const source of sources) {
+    const shown = results?.[slot(source)];
+    const own: Row[] = [
+      ...(shown?.items ?? []).map((item) => ({
+        source,
+        key: rowKey(source, item.id),
+        item,
+      })),
+      ...(shown?.retry ? [{ source, key: rowKey(source) }] : []),
+    ];
+    const first = own[0];
+    if (
+      first &&
+      (source.provider !== provider || (rows.length > 0 && !first.item?.group))
+    )
+      own[0] = { ...first, heading: source.provider.title };
+    rows.push(...own);
+  }
+  const statuses = sources.flatMap((source) => {
+    const status = results?.[slot(source)]?.status;
+    return status ? [{ source, status }] : [];
+  });
+  const lines = rows.map((row, i) => {
+    const { item, source } = row;
+    const lead = rows.findIndex((other) => other.source === source);
+    const group = item?.group;
+    return {
+      ...row,
+      heading:
+        row.heading ?? (group !== rows[i - 1]?.item?.group ? group : undefined),
+      described: group
+        ? `${id}-group-${rows.findIndex((other) => other.item?.group === group)}`
+        : rows[lead]?.heading
+          ? `${id}-group-${lead}`
+          : undefined,
+    };
+  });
   // Matching syntax is not evidence of pending work. Providers publish their
   // own status when needed; an empty/unpublished result must not flash a portal.
-  const visible = !!(items.length || result?.status || result?.retry);
-  const count = items.length + (result?.retry ? 1 : 0);
-  const index =
-    selected === RETRY && result?.retry
-      ? items.length
-      : items.findIndex((item) => item.id === selected);
+  const visible = !!(rows.length || statuses.length);
+  const count = rows.length;
+  const index = rows.findIndex((row) => row.key === selected);
   const selectedIndex = index < 0 ? 0 : index;
-  const status = result?.status;
-  function accept(index: number, key = "click") {
-    const published = latest.current;
-    if (!active() || !published) return false;
-    if (index === items.length && result?.retry) {
+  function accept(index: number, event: Event, key = "click") {
+    const terminator = terminates(key);
+    const row = terminator ? undefined : rows[index];
+    const source = row?.source ?? { provider, query };
+    const published = latest.current.get(slot(source));
+    if (!active(source.provider) || !published) return false;
+    if (row && !row.item) {
       if (!published.retry) return false;
       published.retry();
       return true;
@@ -418,14 +541,11 @@ function OwnedCompletion({
     // Publication is synchronous; React may still be displaying the previous
     // result. Keep the user's chosen ID, but use only its current evidence/edit.
     // The terminator names its own item, which that display may not have yet.
-    const id = terminates(key) ? published.spaceId : items[index]?.id;
+    const id = terminator ? published.spaceId : row?.item?.id;
     const item = published.items.find((item) => item.id === id);
     if (!item || item.disabled || item.canSelect?.(key) === false) return false;
-    const accepted = current.current.replace(
-      item.edit,
-      query,
-      observation,
-      key,
+    const accepted = withHumanMentionSelection(event, () =>
+      current.current.replace(item.edit, source.query, observation, key),
     );
     if (accepted) current.current.editor.invalidate();
     return accepted;
@@ -435,7 +555,8 @@ function OwnedCompletion({
     // Escape must still dismiss an unpublished provider without advertising a
     // nonexistent listbox. A settled empty result leaves ordinary keys alone;
     // an undecided one still owns the terminator, with nothing to show yet.
-    if (!element || (!visible && result && !result.spacePending)) return;
+    if (!element || (!visible && result && !result.spacePending && !held()))
+      return;
     if (visible) {
       element.setAttribute("aria-autocomplete", "list");
       element.setAttribute("aria-haspopup", "listbox");
@@ -466,7 +587,7 @@ function OwnedCompletion({
         (event.key === " " || !terminates(event.key))
       )
         return false;
-      if (!active()) {
+      if (!active(provider)) {
         // A displayed choice owns plain acceptance even when its final evidence
         // was revoked. Never turn a rejected edit into an unintended send.
         if ((event.key === "Enter" || event.key === "Tab") && count) {
@@ -482,14 +603,16 @@ function OwnedCompletion({
       // redirected away from an exact match the display showed: a publication
       // that moves it to another id leaves Space literal. The displayed row
       // is never accepted on its own; only the publication selects.
-      const published = latest.current;
+      const published = held()
+        ? undefined
+        : latest.current.get(contributionKey(provider));
       if (
         terminates(event.key) &&
         published?.spaceId &&
         (!result?.spaceId || result.spaceId === published.spaceId)
       ) {
         // Selected by ID, so no displayed row is needed.
-        if (accept(-1, event.key)) {
+        if (accept(-1, event.nativeEvent, event.key)) {
           event.preventDefault();
           event.stopPropagation();
           return true;
@@ -501,15 +624,18 @@ function OwnedCompletion({
       // This includes a display whose exact match the publication withdrew
       // as undecided: no other recipient overrules what the user saw, the
       // decision is deferred to the resolver under the full rule.
+      const spacePending = published?.spacePending;
       if (
         terminates(event.key) &&
-        published?.spacePending &&
-        !published.spaceId &&
-        current.current.replace(
-          { pending: published.spacePending },
-          query,
-          observation,
-          event.key,
+        spacePending &&
+        !published?.spaceId &&
+        withHumanMentionSelection(event.nativeEvent, () =>
+          current.current.replace(
+            { pending: spacePending },
+            query,
+            observation,
+            event.key,
+          ),
         )
       ) {
         event.preventDefault();
@@ -523,14 +649,14 @@ function OwnedCompletion({
         const next =
           (selectedIndex + (event.key === "ArrowDown" ? 1 : count - 1)) % count;
         revealSelection.current = true;
-        if (compact) setKeyboardSelection(items[next]?.id);
-        setSelected(next === items.length ? RETRY : items[next]?.id);
+        if (compact) setKeyboardSelection(rows[next]?.key);
+        setSelected(rows[next]?.key);
         return true;
       }
       if ((event.key === "Enter" || event.key === "Tab") && count) {
         event.preventDefault();
         event.stopPropagation();
-        accept(selectedIndex, event.key);
+        accept(selectedIndex, event.nativeEvent, event.key);
         return true;
       }
       return false;
@@ -550,17 +676,24 @@ function OwnedCompletion({
       element.removeAttribute("aria-activedescendant");
     };
   });
-  const Provider = provider.component;
   return (
     <>
-      {publish && (
-        <Provider
-          {...context}
-          observation={observation}
-          query={query}
-          publish={publish}
-        />
-      )}
+      {publishers &&
+        sources.map((source, i) => {
+          const Provider = source.provider.component;
+          const publish = publishers[i];
+          if (!publish) return null;
+          return isolate(
+            source,
+            <Provider
+              key={slot(source)}
+              {...context}
+              observation={observation}
+              query={source.query}
+              publish={publish}
+            />,
+          );
+        })}
       {visible &&
         input.current &&
         createPortal(
@@ -579,16 +712,16 @@ function OwnedCompletion({
               ref={list}
               className={styles.list}
             >
-              {items.flatMap((item, i) => [
-                item.group && item.group !== items[i - 1]?.group && (
+              {lines.flatMap(({ item, source, key, heading, described }, i) => [
+                heading && (
                   // Read as the description of each row it heads.
                   <div
-                    key={`group:${item.id}`}
+                    key={`group:${key}`}
                     id={`${id}-group-${i}`}
                     aria-hidden="true"
                     className={styles.group}
                   >
-                    {item.group}
+                    {heading}
                   </div>
                 ),
                 // The textarea owns keyboard focus/selection via aria-activedescendant.
@@ -597,21 +730,18 @@ function OwnedCompletion({
                   role="option"
                   tabIndex={-1}
                   aria-selected={i === selectedIndex}
-                  aria-disabled={!!item.disabled}
+                  aria-disabled={item && !!item.disabled}
                   aria-label={
-                    compact && item.detail
+                    compact && item?.detail
                       ? `${item.label} ${item.detail}`
                       : undefined
                   }
                   id={`${id}-${i}`}
                   // The provider's identity for the row (a mention's key),
                   // which its label no longer spells out.
-                  data-completion-id={item.id}
-                  key={item.id}
-                  aria-describedby={
-                    item.group &&
-                    `${id}-group-${items.findIndex((row) => row.group === item.group)}`
-                  }
+                  data-completion-id={item?.id}
+                  key={key}
+                  aria-describedby={described}
                   onPointerDown={(event) => {
                     if (event.button === 0) event.preventDefault();
                   }}
@@ -623,87 +753,79 @@ function OwnedCompletion({
                           if (compact && !pointerMoved(event)) return;
                           revealSelection.current = false;
                           setKeyboardSelection(undefined);
-                          setSelected(item.id);
+                          setSelected(key);
                         }
                       : undefined
                   }
-                  onClick={() => accept(i)}
+                  onClick={(event) => accept(i, event.nativeEvent)}
                   className={styles.option}
                 >
-                  {item.preview && (
+                  {item?.preview && (
                     <span aria-hidden="true" className={styles.preview}>
-                      {item.preview}
+                      {isolate(source, item.preview)}
                     </span>
                   )}
-                  <span className={styles.label} data-completion-label>
-                    {compact ? (
-                      <EmojiCompletionName
-                        label={item.label}
-                        selected={i === selectedIndex}
-                        keyboardSelected={keyboardSelection === item.id}
-                      />
-                    ) : named ? (
-                      // Only the name ellipsizes; the agent mark stays visible.
-                      <span className={styles.nameRow}>
-                        <span className={styles.name}>{item.label}</span>
-                        {mention && item.edit.mention && (
-                          <IdentityMarks
-                            registry={identityMarks}
-                            pubkey={item.edit.mention.pubkey}
-                            profiles={context.session.profiles}
-                            className={styles.identityMarks}
-                          />
-                        )}
-                        {item.agent && (
-                          <span aria-hidden="true" className={styles.agentMark}>
-                            <RobotIcon />
-                          </span>
-                        )}
-                        {item.agent && <span className="sr-only"> Agent</span>}
-                      </span>
-                    ) : (
-                      item.label
-                    )}
-                    {item.detail && (
-                      <small aria-hidden={compact || undefined}>
-                        {item.detail}
-                      </small>
-                    )}
-                  </span>
-                  {channel && i === selectedIndex && (
+                  {item && (
+                    <span className={styles.label} data-completion-label>
+                      {compact ? (
+                        <EmojiCompletionName
+                          label={item.label}
+                          selected={i === selectedIndex}
+                          keyboardSelected={keyboardSelection === key}
+                        />
+                      ) : named ? (
+                        // Only the name ellipsizes; the agent mark stays visible.
+                        <span className={styles.nameRow}>
+                          <span className={styles.name}>{item.label}</span>
+                          {mention &&
+                            source.provider === provider &&
+                            item.edit.mention && (
+                              <IdentityMarks
+                                registry={identityMarks}
+                                pubkey={item.edit.mention.pubkey}
+                                profiles={context.session.profiles}
+                                className={styles.identityMarks}
+                              />
+                            )}
+                          {item.agent && (
+                            <span
+                              aria-hidden="true"
+                              className={styles.agentMark}
+                            >
+                              <RobotIcon />
+                            </span>
+                          )}
+                          {item.agent && (
+                            <span className="sr-only"> Agent</span>
+                          )}
+                        </span>
+                      ) : (
+                        item.label
+                      )}
+                      {item.detail && (
+                        <small aria-hidden={compact || undefined}>
+                          {item.detail}
+                        </small>
+                      )}
+                    </span>
+                  )}
+                  {channel && item && i === selectedIndex && (
                     <span aria-hidden="true" className={styles.acceptKey}>
                       Enter
                     </span>
                   )}
+                  {!item &&
+                    (source.provider === provider
+                      ? "Retry suggestions"
+                      : `Retry ${source.provider.title} suggestions`)}
                 </div>,
               ])}
-              {result?.retry && (
-                // biome-ignore lint/a11y/useKeyWithClickEvents: Keyboard acceptance belongs to the focused textarea.
-                <div
-                  role="option"
-                  tabIndex={-1}
-                  id={`${id}-${items.length}`}
-                  aria-selected={selectedIndex === items.length}
-                  className={styles.option}
-                  onPointerDown={(event) => {
-                    if (event.button === 0) event.preventDefault();
-                  }}
-                  onPointerMove={
-                    compact || named
-                      ? (event) => {
-                          if (compact && !pointerMoved(event)) return;
-                          revealSelection.current = false;
-                          setSelected(RETRY);
-                        }
-                      : undefined
-                  }
-                  onClick={() => accept(items.length)}
-                >
-                  Retry suggestions
-                </div>
-              )}
             </div>
-            {status && <p role="status">{status}</p>}
+            {statuses.map(({ source, status }) => (
+              <p role="status" key={slot(source)}>
+                {status}
+              </p>
+            ))}
           </section>,
           // A body sibling would sit behind a fullscreen modal and outside its
           // accessibility boundary. Ordinary composers keep the body portal.

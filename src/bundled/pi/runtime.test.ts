@@ -7,7 +7,11 @@ import {
 } from "../../features/agents/activity-transcript";
 import type { AddedTool } from "../../buzz-mcp/session-tools";
 import { pubkeyOf } from "../../features/agents/membership";
-import { PROMPTS_PREFIX } from "../../features/agents/session-prompts";
+import {
+  PROMPTS_PREFIX,
+  sessionPrompts,
+} from "../../features/agents/session-prompts";
+import { STANDALONE_PREFIX } from "../../features/agents/standalone-sessions";
 import { type AgentStore, localStore } from "../../features/agents/store";
 import { memoryStorage } from "../../features/agents/test-fakes";
 import { assignConversationFolder } from "../../features/agents/conversation-folders";
@@ -28,6 +32,8 @@ import { turnContext } from "../../features/agents/gateway/turn";
 import { deferred, fakeHost, type Handler, PI_UPSTREAM } from "./pi-testing";
 import { type Config, DEFAULT_CONFIG, PiRuntime } from "./runtime";
 import type { GatewayRoute, GatewaySeam } from "./gateway";
+
+type MemoryStorage = ReturnType<typeof memoryStorage>;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -3083,6 +3089,7 @@ it("runs a standalone turn in a one-off conversation", async () => {
 async function standaloneUsage(
   answered: (started: number) => number,
   since: (started: number) => number,
+  usageOn = true,
 ) {
   const started = Date.now();
   const answer = {
@@ -3099,16 +3106,6 @@ async function standaloneUsage(
       },
     ],
   };
-  const kept = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => kept.get(key) ?? null,
-    setItem: (key: string, value: string) => void kept.set(key, value),
-    removeItem: (key: string) => void kept.delete(key),
-    key: (index: number) => [...kept.keys()][index] ?? null,
-    get length() {
-      return kept.size;
-    },
-  });
   const { runtime, runOnce } = setup({
     wait: () => ({ status: "done", answer: 5, text: "" }),
     places: () => ({ places: [] }),
@@ -3117,22 +3114,28 @@ async function standaloneUsage(
       entries: conversation === 99 ? [answer] : [],
     }),
   });
-  try {
-    runtime.sync([
-      { key: self, pubkey: self, config: DEFAULT_CONFIG },
-    ] as never);
-    await runOnce("timer/t1", "Run t1");
-    // Later sessions push every saved prompt out; the turn stays the agent's.
-    for (const key of [...kept.keys()])
-      if (key.startsWith(PROMPTS_PREFIX)) kept.delete(key);
-    return await runtime.usage(
-      self,
-      since(started),
-      new AbortController().signal,
-    );
-  } finally {
-    vi.unstubAllGlobals();
-  }
+  runtime.usageOn = () => usageOn;
+  const kept = (runtime as unknown as { storage: MemoryStorage }).storage;
+  runtime.sync([{ key: self, pubkey: self, config: DEFAULT_CONFIG }] as never);
+  await runOnce("timer/t1", "Run t1");
+  // Pi keeps no prompt for a one-off turn, so one is kept here as a session
+  // started by the agent would be, for the step below to push out.
+  const prompts = sessionPrompts(kept, "pi", self);
+  await prompts.save("99", [{ label: "", text: "Run t1" }], {
+    at: started,
+    title: "",
+    conversation: null,
+  });
+  expect(prompts.sessions().map(({ id }) => id)).toEqual(["99"]);
+  // Later sessions push every saved prompt out; the turn stays the agent's.
+  for (const key of kept.keys())
+    if (key.startsWith(PROMPTS_PREFIX)) await kept.set(key, null);
+  expect(prompts.sessions()).toEqual([]);
+  return await runtime.usage(
+    self,
+    since(started),
+    new AbortController().signal,
+  );
 }
 
 it("reads a standalone turn's conversation as the agent's usage, with no channel", async () => {
@@ -3142,7 +3145,44 @@ it("reads a standalone turn's conversation as the agent's usage, with no channel
   );
   expect(sessions.map((session) => session.id)).toEqual(["99"]);
   expect(sessions[0]).not.toHaveProperty("channelId");
+  expect(sessions[0]?.wake).toBe("timer/t1");
   expect(sessions[0]?.observations).toHaveLength(1);
+});
+
+it("reads a standalone turn run while Usage was off as the agent's, without its timer", async () => {
+  // Kept as on main, so once Usage is on, it counts the turn, under no routine.
+  const sessions = await standaloneUsage(
+    (started) => started,
+    () => 0,
+    false,
+  );
+  expect(sessions.map((session) => session.id)).toEqual(["99"]);
+  expect(sessions[0]).not.toHaveProperty("wake");
+  expect(sessions[0]?.observations).toHaveLength(1);
+});
+
+it("removes what was kept past keeping at a standalone turn while Usage is off", async () => {
+  const old = `${STANDALONE_PREFIX}pi:${self}:0`;
+  const { runtime, runOnce } = setup({
+    wait: () => ({ status: "done", answer: 5, text: "" }),
+  });
+  const kept = (runtime as unknown as { storage: MemoryStorage }).storage;
+  await kept.set(
+    old,
+    JSON.stringify({ version: 1, sessions: [["7", 1, "timer/t1"]] }),
+  );
+  runtime.sync([{ key: self, pubkey: self, config: DEFAULT_CONFIG }] as never);
+  await runOnce("timer/t1", "Run t1");
+  // The old day goes; this turn is kept, without its timer.
+  await vi.waitFor(() =>
+    expect(
+      kept
+        .keys()
+        .filter((key) => key.startsWith(STANDALONE_PREFIX))
+        .flatMap((key) => JSON.parse(kept.get(key) ?? "").sessions),
+    ).toEqual([["99", expect.any(Number)]]),
+  );
+  expect(kept.get(old)).toBeNull();
 });
 
 it("reads a standalone turn begun before the cutoff by when it answered", async () => {

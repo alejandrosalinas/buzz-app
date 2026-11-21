@@ -101,13 +101,48 @@ retain the physical root and use the invocation as their reply parent. Explicit
 other destinations retain their existing behavior. Prompts retain source context
 for the initial request and identify the source thread for later reads.
 
+When `ctx.agents.invocationTurnContext === true`, a successful route can
+include optional text `turnContext`. Codex, Claude and the shared harness
+kit include it in the prompt for that request. The host saves only the
+route's root and parent. The router can supply fresh text for each
+invocation, follow-up or retry. A failed start leaves no text for another
+request. Use this field for invocation-specific instructions.
+
 Return `undefined` only for a positively unrouted turn. Throw on incomplete
 ancestry or unconfirmed task publication; rejection stops admission without a
 fallback to the source session. The plugin owns task ancestry and shared binding
 publication. It must confirm that binding before returning a new route.
+
+An agent type declares `invocationRouting: true` when it resolves
+`Delivery.routeConversation` before selecting the provider session. Codex
+and Claude declare this capability. A signed invocation intent addressed to
+an agent whose type lacks this capability remains retryable in Buzz. The
+provider starts after a compatible type and its router are available.
 Local host receipts do not establish cross-device task identity. Existing admitted
 invocations keep their previous placement. Older plugins without `route` keep
 the existing behavior.
+
+Hosts with `ctx.agents.invocationIntentVersion === 1` include `communityOrigin`
+in router admission. It is the normalized HTTPS origin of the actual runner's
+community. The router can also implement a synchronous, read-only
+`invocationIntent({ communityOrigin, owner, source, agentPubkey })` predicate.
+`source` contains the channel ID and physical thread root. Return `true` only
+for recipients this router can admit. The host calls active routers for
+addressed agents the sending viewer owns in a writable stream or forum with a
+verified reply target.
+
+The host appends `["buzz:invocation-intent", "1", agentPubkey]` to the signed
+kind-9 reply before computing its ID. The recipient is lowercase 64-digit hex
+and must also be present in a signed `p` tag. Retry keeps the original signed
+event. The tag carries no authority or task identity. To read intent, verify
+the author, community, recipients and reply ancestry. Unknown versions,
+malformed tags and unmarked replies supply no pending-intent evidence. Reuse
+confirmed bindings for older replies. A marked ancestor without a confirmed
+binding can be a continuation of an earlier invocation. Reconcile against that
+ancestor chain with a bounded wait. Throw on an unconfirmed outcome so retry
+can try the same invocation again. A marked reply for its owner's agent needs
+a matching router that implements `invocationIntent`. If that router is
+unavailable, admission fails and the same invocation can retry.
 
 A page-owned `Workspace` can select `{ channelId, threadId: sourceRoot,
 subthreadId: invocationId }`. It shows and composes within that branch. Drafts
@@ -1168,19 +1203,52 @@ Regression source: `features/agents/choices.test.ts`, plus the chooser, composer
 and Solo chat admission tests. They exercise shared selection and Solo chat admission,
 not native execution.
 
-## Creating a Solo chat in a personal workspace
+## Filing conversations in the owner's workspaces
 
-Only locally hosted agent runs can call `solo_workspace_list` for the host-bound
-owner's personal workspace IDs and names in that community. Pass an exact ID as
-`workspace` to `channel_create` with `solo: true`, and name the owner explicitly
-in `members`. This files only that new confirmed Solo chat. It does not enroll
-members implicitly, copy default agents/Canvas, or change agent authorship.
-Unknown targets and missing owner membership fail before creation. A target
-removed later or a failed preference write leaves the created chat intact; the
-result preserves its ID. A known refusal before assignment says “created, not
-filed”; after assignment starts, failure says placement is unconfirmed and may
-have completed. Inspect or refresh the chat before using **Move to**; never
-create a duplicate. Omit `workspace` for unchanged creation.
+Only locally hosted agent runs can call `workspace_list` for the host-bound
+owner's sidebar workspace IDs and names in that community: every unified
+workspace. Pass an exact ID as `workspace` to `channel_create` for any type.
+`members` works for any type: the relay adds them in the create. The owner must
+be able to see the result: it is `open`, or it names the owner in `members`; a
+private one without the owner is refused before creation. Filing checks the relay's confirmed
+metadata and roster: the agent created it, it is in no plugin region, its named
+members joined, and the owner is a member or it is open.
+
+Without `template`, creation applies the workspace's defaults. Both flows find
+them with `loadWorkspaceDefaults`, and one rule picks their agents, as in **New
+chat** and **New channel**: a default agent not available here (archived, being
+deleted, or not in this community) is skipped and the create goes on. One not
+yet checked is neither: the create waits for a complete read.
+
+- A Solo chat uses `loadChatSetup`, as **New chat** does: the default agents
+  join in the create. Its Canvas starts with the full workspace block only when
+  every member is the owner or one of the owner's agents; otherwise it gets
+  only `shareableInstructions`.
+- A team channel uses `loadChannelSetup`, which shares `channelDefaults` with
+  **New channel**: its Canvas gets only `shareableInstructions`, and its default
+  agents are added after.
+
+The result names each skipped agent.
+
+A chosen `template` replaces the defaults, as in the dialog. Defaults that cannot
+load fail before creation. The tool adds agents with the calling agent's key,
+never the owner's, so before creating it reads each default agent's kind:10100
+`channel_add_policy` and leaves out `owner_only` and `nobody` agents, naming
+them in the result; a failed read creates nothing. The workspace capability is
+for the agent's own tools: plugin tools and provider operations never get it.
+
+Unknown targets and missing owner visibility fail before creation. A target
+removed later or a failed preference write leaves the created conversation
+intact; the result preserves its ID. A known refusal before assignment says
+“created, not filed”; after assignment starts, failure says placement is
+unconfirmed and may have completed. Check the sidebar before `channel_move`;
+never create a duplicate. Omit `workspace` for unchanged creation.
+
+`channel_move` files an existing conversation of any type, DMs included, in a
+workspace, or unfiles it with an empty `workspace`. It reads the conversation's
+relay metadata and roster as the owner and moves only what the owner can see
+(member, or open), and refuses chats a plugin region manages, as **Move to**
+does. It writes the same sidebar assignment as **Move to**.
 
 ## Exact channel-member mentions
 
@@ -2142,8 +2210,15 @@ app's record of the session it started says it is the agent's. That record is
 kept apart from saved prompts, for 32 days from the session's start, longer than
 Usage reads back, with no limit on how many sessions it holds. Each day's starts
 are saved as one value, and a day's value is removed once all of it is past
-keeping. The snapshot has no `channelId`, and a session from before that
-record was kept is not counted.
+keeping, by the agent's next standalone turn. Each session is added to the
+record whether or not Usage is on, as its id and start time only, never its
+prompt or reply; the key of the timer or watch that started it is kept with it
+only while the Usage plugin is on (its settings card is registered), so a
+Claude, Goose or Pi turn run while Usage was off is counted once Usage is on,
+under "Other" in "By routine" when that list shows; Codex keeps no session for
+such a turn, so it is not counted. Removing the agent removes the record. The
+snapshot has no `channelId`, and a session from before that record was kept is
+not counted.
 
 Codex finds the agent's threads through app-server by the agent's name in their
 thread names, keeps those whose rollout's developer instructions name the agent's
@@ -2161,6 +2236,20 @@ counts it by when it last answered.
 
 All three read only the harness's own session history; none reads Buzz's saved
 agent activity or turn metrics.
+
+A harness may also set `wake` on a session snapshot: the key of the standalone
+turn that started it (`timer/ID`, `watch/ID`, `catch-up/ID` or `source/ID`), as
+`AgentType.runOnce` was given it. Claude, Goose and Pi take it from the key
+their `runOnce` recorded with the session in the agent's standalone sessions,
+never from the prompt; Codex keeps no session for such a turn, so it sets none.
+Setting it takes the session's `revision` again, so the revision covers it. The
+Usage page groups the period's cost by agent and key under "By routine", since
+each agent names its own timers and watches, counting a watch's catch-up turns
+under `watch/ID`, with the sessions that have none under "Other", and shows no
+such list while no session has one. An agent set to one session per community
+runs its timers and watches in that shared session, not a standalone one, so
+their cost counts under "Other" there; the period's total is unchanged. A
+harness that does not set it works unchanged.
 
 Where a harness recorded no cost, Usage estimates it from the token counts at the
 provider's published API list prices, including a model's long-prompt rates and,

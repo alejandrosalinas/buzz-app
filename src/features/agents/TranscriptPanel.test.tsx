@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { Context } from "@deepseek-ai/cordis";
 import "@testing-library/jest-dom/vitest";
 import {
   act,
@@ -9,8 +10,11 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PluginRuntime } from "../../plugins/runtime";
 import { AgentsContext } from "./react";
-import type { Agents } from "./service";
+import { AgentsService, type Agents } from "./service";
+import { fakeCommunities, fakeNative, fakeRelay } from "./service-testing";
+import { memoryStorage } from "./test-fakes";
 import {
   LIVE_READ_MS,
   STEP_READ_MS,
@@ -489,4 +493,62 @@ it("reads only when work starts and ends without refreshWhileWorking", async () 
   expect(view.result.current.shown.transcript).toBe("b");
   view.rerender({ working: true });
   expect(calls).toHaveLength(3);
+});
+
+it("exposes TranscriptPanel stably on Agents.ui across renders", async () => {
+  const host = new Context();
+  const runtime = new PluginRuntime(host, async () => ({ apply() {} }));
+  const service = new AgentsService(
+    host,
+    fakeCommunities(fakeRelay()).communities,
+    fakeNative(),
+    memoryStorage(),
+  );
+  const plugin = host.extend({
+    pluginOwner: { id: "example.harness", revision: "1" },
+  });
+  try {
+    expect(plugin.agents.ui?.Transcript).toBe(TranscriptPanel);
+    let reads = 0;
+    const read = async () => {
+      reads++;
+      return { turns: [] };
+    };
+    const agent = {
+      key: "agent-1",
+      name: "Agent",
+      relay: "wss://relay.example",
+    } as Parameters<typeof TranscriptPanel>[0]["agent"];
+    const Tab = ({ title }: { title: string }) => {
+      const Transcript = plugin.agents.ui?.Transcript;
+      return Transcript ? (
+        <div title={title}>
+          <Transcript
+            agent={agent}
+            read={read}
+            readKey="chan-1"
+            working={false}
+            reading="Reading…"
+            missing={null}
+            failed="Failed"
+          />
+        </div>
+      ) : null;
+    };
+    const tree = (title: string) => (
+      <AgentsContext.Provider value={service}>
+        <Tab title={title} />
+      </AgentsContext.Provider>
+    );
+    const view = render(tree("one"));
+    await act(async () => {});
+    expect(reads).toBe(1);
+    view.rerender(tree("two"));
+    await act(async () => {});
+    expect(reads).toBe(1);
+    view.unmount();
+  } finally {
+    await runtime.dispose();
+    await host.fiber.dispose();
+  }
 });

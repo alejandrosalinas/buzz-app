@@ -392,9 +392,12 @@ test("a presence badge preserves the sidebar avatar center and header insets", a
   page,
   app,
 }) => {
+  // A second DM can move this row while its participant names load.
+  app.omitChannel("dm-group");
   await page.goto(app.origin);
   const row = page.locator('button[data-channel-id="dm-peer"]');
   await row.click();
+  await expect(row).toHaveAttribute("aria-current", "page");
   await expect
     .poll(() =>
       app.report.presenceSnapshots.some((snapshot) =>

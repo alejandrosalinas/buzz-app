@@ -127,11 +127,6 @@ These paths are relative to your working directory — start there for your own 
 The owner's text for memory.
 </owner-section>
 
-## Engineering Discipline
-<owner-section id="engineering">
-The owner's text for engineering.
-</owner-section>
-
 ## Working in the Repo
 
 - After selecting a repository or worktree, read its root `AGENTS.md` and any path-local `AGENTS.md` files that apply before planning or editing. The workspace-level file is team context; it does not replace repository-owned instructions.

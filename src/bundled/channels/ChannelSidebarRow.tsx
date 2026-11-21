@@ -1,5 +1,9 @@
 import { FadingLabel } from "./FadingLabel";
 import { activeChannelRows } from "../../features/channel-navigation/active-channel-rows";
+import {
+  captureSidebarDeparture,
+  recoverSidebarFocus,
+} from "../../features/channel-navigation/sidebar-focus-recovery";
 import { useSoloRowActivation } from "../../features/channel-navigation/useSoloRowActivation";
 import { useSpringLoaded } from "../../features/messages/spring-loaded-drag";
 import type { Navigation } from "../../features/navigation/controller";
@@ -73,7 +77,6 @@ export function ChannelSidebarRow({
     if (!button || !present) return;
     const document = button.ownerDocument;
     const section = button.closest("[data-sidebar-section]");
-    const sidebar = section?.closest("nav");
     return () => {
       if (document.activeElement !== button) return;
       const rows = [
@@ -87,7 +90,7 @@ export function ChannelSidebarRow({
       ].map((row) => row.dataset.channelId ?? "");
       // A plugin wrapper can remount this row and its neighbors. Resolve them
       // after the commit, excluding retained exits and focus moved elsewhere.
-      queueMicrotask(() => {
+      recoverSidebarFocus(captureSidebarDeparture(button), (sidebar) => {
         if (
           (document.activeElement !== document.body &&
             document.activeElement !== button) ||
@@ -97,7 +100,7 @@ export function ChannelSidebarRow({
           return;
         const liveRows = activeChannelRows(sidebar);
         const sectionRows = activeChannelRows(section);
-        const candidates = [
+        return [
           liveRows.find(
             (row) =>
               row.dataset.channelId === channel.id &&
@@ -109,12 +112,6 @@ export function ChannelSidebarRow({
           ),
           section?.querySelector<HTMLElement>("details > summary"),
         ];
-        for (const candidate of candidates) {
-          if (!candidate?.isConnected || candidate.closest("[hidden], [inert]"))
-            continue;
-          candidate.focus();
-          if (document.activeElement === candidate) break;
-        }
       });
     };
   }, [channel.id, channel.channelType, present]);
@@ -162,6 +159,7 @@ export function ChannelSidebarRow({
       icon={
         <span
           className={styles.iconSpace}
+          data-channel-row-icon=""
           data-dm-visual={dmVisualSpacing || undefined}
         >
           {icon}

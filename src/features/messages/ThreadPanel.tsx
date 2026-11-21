@@ -1,4 +1,5 @@
 // biome-ignore-all lint/a11y/noNoninteractiveTabindex: The thread region supports keyboard scrolling and Escape.
+import { hostComposerProvenance } from "./mention-draft";
 import { AgentConnectionSetup } from "../agents/AgentConnectionSetup";
 import { TypingIndicator, useLiveConversationAgents } from "./TypingIndicator";
 import { ActivityExpansion } from "./ActivityExpansion";
@@ -2513,6 +2514,7 @@ function ThreadMessages({
       )}
       {composerRoot && (
         <MessageComposer
+          evidenceOwner={hostComposerProvenance}
           onFocusedRemoval={focusArchivedHistory}
           key={`${scope}:${channelId}:${composerRoot.id}`}
           extensions={extensions}

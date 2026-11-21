@@ -1,3 +1,4 @@
+import { hostComposerProvenance } from "../messages/mention-draft";
 import { ActivityIndicatorPresentation } from "./typing-presentation";
 import {
   createContext,
@@ -311,6 +312,7 @@ export function ConversationComposer(props: Own<MessageComposerProps>) {
   );
   return (
     <MessageComposer
+      evidenceOwner={hostComposerProvenance}
       {...shared}
       {...(shared.soloConversation
         ? {

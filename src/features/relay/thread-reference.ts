@@ -1,3 +1,7 @@
+/** Message kinds that may appear as a thread root or reply. */
+export const isThreadContent = (event: { kind: number }) =>
+  [9, 40002, 40008].includes(event.kind);
+
 /** NIP-10 matches relay ingest: last valid marked root/reply wins; a lone root is not a reply. */
 export function threadReference(event: {
   readonly tags: readonly (readonly string[])[];

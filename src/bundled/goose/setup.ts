@@ -143,6 +143,7 @@ const TEST_TIMEOUT_MS = 60_000;
 
 export class GooseSetup {
   private listing: Promise<Providers> | undefined;
+  private current: Promise<string | undefined> | undefined;
   private readonly live = new Map<string, Promise<readonly ModelChoice[]>>();
   private readonly thinking = new Map<string, Promise<Efforts>>();
 
@@ -173,6 +174,7 @@ export class GooseSetup {
   check = (): Promise<void> => {
     if (this.checking) return this.checking;
     this.listing = undefined;
+    this.current = undefined;
     this.live.clear();
     this.thinking.clear();
     this.update({ readiness: "checking" });
@@ -250,6 +252,9 @@ export class GooseSetup {
           modelId,
         });
       });
+      // A read started before the save must not answer later turns, and the
+      // check below may join one already running that won't clear it.
+      this.current = undefined;
       this.defaultsChanged();
       this.checkedDefaults = undefined;
       await this.check();
@@ -306,20 +311,33 @@ export class GooseSetup {
     return { current, models };
   }
 
+  /** A forwarded turn needs the current default, including external edits:
+   * turns share only a read still running, never a finished one, which could
+   * pin goose to a provider its owner has since changed. */
+  defaultProvider(): Promise<string | undefined> {
+    if (this.current) return this.current;
+    const current = this.with(
+      async (goose) => (await readDefaults(goose)).providerId ?? undefined,
+    );
+    this.current = current;
+    const settle = () => {
+      if (this.current === current) this.current = undefined;
+    };
+    current.then(settle, settle);
+    return current;
+  }
+
   /** goose's providers, read once until something is saved. */
   providers(): Promise<Providers> {
     this.listing ??= this.with(async (goose) => {
-      const [{ entries }, defaults] = (await Promise.all([
+      const [{ entries }, defaults] = await Promise.all([
         goose.request(
           "_goose/unstable/providers/list",
           { providerIds: [] },
           REQUEST_TIMEOUT_MS,
-        ),
-        goose.request("_goose/unstable/defaults/read", {}, REQUEST_TIMEOUT_MS),
-      ])) as [
-        { entries: Entry[] },
-        { providerId?: string | null; modelId?: string | null },
-      ];
+        ) as Promise<{ entries: Entry[] }>,
+        readDefaults(goose),
+      ]);
       return {
         // Providers that are other agents (`claude-acp`, …) are not offered.
         providers: entries
@@ -610,6 +628,7 @@ export class GooseSetup {
       }),
     );
     this.listing = undefined;
+    this.current = undefined;
     this.live.delete(id);
     this.thinking.clear();
   }
@@ -706,6 +725,17 @@ export async function briefly<T>(
   } finally {
     await goose.kill();
   }
+}
+
+function readDefaults(goose: GooseProcess) {
+  return goose.request(
+    "_goose/unstable/defaults/read",
+    {},
+    REQUEST_TIMEOUT_MS,
+  ) as Promise<{
+    providerId?: string | null;
+    modelId?: string | null;
+  }>;
 }
 
 function provider(entry: Entry): Provider {

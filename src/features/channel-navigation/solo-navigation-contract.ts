@@ -90,6 +90,8 @@ export type SoloRegionHandle = Readonly<{
   label: string;
   /** Keyed draft context is retained in navigation and the saved start record. */
   draftContext: true;
+  /** `ui.ChannelGroup` accepts `placement: "team-row"`. */
+  teamRowChannelGroups: true;
   /** The same device state as component props, available before mount. */
   state(binding: SoloRegionBinding): SoloRegionProps["state"];
   /** Open New chat for this region. Its first send creates the chat with this
@@ -153,6 +155,9 @@ export type SoloChannelGroupProps = Readonly<{
   headerAccessory?: ReactNode;
   /** Compact, non-interactive content shown in place of quiet header actions. */
   headerMetadata?: ReactNode;
+  /** Shows the disclosure, task action and content with the channel's Team
+   * sidebar row, which stays the heading, instead of in the region. */
+  placement?: "team-row";
   children?: ReactNode;
 }>;
 export type SoloWorkspaceProps = Readonly<{

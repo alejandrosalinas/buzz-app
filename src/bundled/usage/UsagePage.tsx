@@ -864,6 +864,38 @@ function Dashboard({
               )}
             </section>
           </div>
+          {!progress && result.routines.length > 0 && (
+            <section className={styles.section} aria-label="By routine">
+              <InlineHeader title="By routine" />
+              <ul className={styles.list}>
+                {result.routines.map(
+                  ({ agent, wake, cost: total, sessions }) => (
+                    <li
+                      key={agent && wake ? `${agent.pubkey}:${wake}` : "other"}
+                    >
+                      <div className={styles.staticRow}>
+                        <span className={styles.sessionText}>
+                          <span className={styles.name}>{wake ?? "Other"}</span>
+                          <span className={styles.label}>
+                            {[agent?.name, count(sessions, "session")]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                        </span>
+                        <Amount total={total} />
+                      </div>
+                    </li>
+                  ),
+                )}
+              </ul>
+              <p className={styles.footnote} role="note">
+                <InfoIcon size="0.875rem" aria-hidden="true" />
+                Other includes Claude Code, goose and Pi turns run while Usage
+                was off, and the timers and watches of an agent with one session
+                per community.
+              </p>
+            </section>
+          )}
         </>
       )}
     </div>

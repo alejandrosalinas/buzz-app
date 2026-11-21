@@ -2813,3 +2813,70 @@ it.each([
     }
   },
 );
+/** Whether any hook state of a mounted fiber, current or alternate, holds `target`. */
+function fibersHold(container: HTMLElement, target: object) {
+  const key = Object.keys(container).find((name) =>
+    name.startsWith("__reactContainer$"),
+  );
+  type Hook = {
+    memoizedState: unknown;
+    baseState: unknown;
+    queue: unknown;
+    next: Hook | null;
+  };
+  type Fiber = {
+    child: Fiber | null;
+    sibling: Fiber | null;
+    alternate: Fiber | null;
+    memoizedState: unknown;
+  };
+  const holds = (value: unknown): boolean =>
+    value === target ||
+    (Array.isArray(value) && value.some((item) => holds(item))) ||
+    (!!value &&
+      typeof value === "object" &&
+      ("value" in value || "lastRenderedState" in value) &&
+      (holds((value as { value?: unknown }).value) ||
+        holds((value as { lastRenderedState?: unknown }).lastRenderedState)));
+  const seen = new Set<Fiber>();
+  const visit = (fiber: Fiber | null): boolean => {
+    for (let node = fiber; node; node = node.sibling) {
+      for (const each of [node, node.alternate]) {
+        if (!each || seen.has(each)) continue;
+        seen.add(each);
+        for (
+          let hook = each.memoizedState as Hook | null;
+          hook && typeof hook === "object" && "next" in hook;
+          hook = hook.next
+        )
+          if (
+            holds(hook.memoizedState) ||
+            holds(hook.baseState) ||
+            holds(hook.queue)
+          )
+            return true;
+      }
+      if (visit(node.child) || (node.alternate && visit(node.alternate.child)))
+        return true;
+    }
+    return false;
+  };
+  const root = (container as unknown as Record<string, Fiber>)[key ?? ""];
+  return visit(root ?? null);
+}
+it("releases the activity snapshot once hidden work on a row ends", () => {
+  const f = fixture();
+  const view = render(<ActivityAccessory {...f.props} canOpen={() => false} />);
+  try {
+    f.send(A, "a", 1, "turn_started", { triggeringEventIds: [root] });
+    const working = f.activity.queries.snapshot("c");
+    expect(fibersHold(view.container, working)).toBe(true);
+    f.send(A, "a", 2, "turn_completed");
+    f.send(B, "b", 1, "turn_started", { triggeringEventIds: [next] });
+    expect(f.activity.queries.snapshot("c")).not.toBe(working);
+    expect(fibersHold(view.container, working)).toBe(false);
+  } finally {
+    view.unmount();
+    f.dispose();
+  }
+});

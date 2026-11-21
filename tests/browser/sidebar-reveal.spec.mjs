@@ -194,6 +194,251 @@ test("late contributed rows retry the sidebar reveal without moving the owner", 
   expect(errors).toEqual([]);
 });
 
+test("a focus scroll survives a layout change before its scroll event", async ({
+  page,
+}) => {
+  await open(page);
+  await update(page, { mounted: true, anchored: true });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const destination = sidebar.locator('[data-row="20"]');
+  await sidebar.evaluate(async (viewport) => {
+    const scrolled = new Promise((resolve) =>
+      viewport.addEventListener("scroll", resolve, { once: true }),
+    );
+    viewport.scrollTop = 160;
+    await scrolled;
+  });
+  await expect(destination).not.toBeInViewport();
+
+  await destination.evaluate((row) => {
+    const viewport = row.closest("nav");
+    const scrolled = new Promise((resolve) =>
+      viewport.addEventListener("scroll", resolve, { once: true }),
+    );
+    row.tabIndex = -1;
+    row.focus();
+    viewport.querySelector('[data-row="0"]').style.height = "72px";
+    return scrolled;
+  });
+
+  await expect(destination).toBeFocused();
+  await expect(destination).toBeInViewport({ ratio: 1 });
+});
+
+test("a delayed reveal that lands in place takes precedence over the old anchor", async ({
+  page,
+}) => {
+  const { errors } = watchPageErrors(page);
+  await open(page);
+  await update(page, { mounted: true, anchored: true });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const current = sidebar.locator('[data-row="0"]');
+  await expect(current).toHaveAttribute("aria-current", "page");
+  const baseline = await sidebar.evaluate((viewport) => {
+    const row = viewport.querySelector('[data-row="4"]');
+    viewport.scrollTop +=
+      row.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+    return viewport.scrollTop;
+  });
+  expect(baseline).toBeGreaterThan(0);
+  await settle(page);
+  await update(page, { at: "row:55" });
+  await expect(current).not.toHaveAttribute("aria-current", "page");
+  await page.evaluate(() => {
+    const rows = window.sidebar.rows(50);
+    rows.splice(4, 0, 55);
+    window.sidebar.update({ rows });
+  });
+  const destination = sidebar.locator('[data-row="55"]');
+  await expect(destination).toHaveAttribute("aria-current", "page");
+  await settle(page);
+  expect(await sidebar.evaluate((viewport) => viewport.scrollTop)).toBe(
+    baseline,
+  );
+  await expect(destination).toBeInViewport({ ratio: 1 });
+  expect(errors).toEqual([]);
+});
+
+test("a refresh does not follow the only sampled row when it leaves view", async ({
+  page,
+}) => {
+  await open(page);
+  await update(page, { mounted: true, anchored: true });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const nearby = sidebar.locator('[data-row="7"]');
+  await expect(nearby).toBeAttached();
+  const before = await sidebar.evaluate((viewport) => {
+    viewport.scrollTop = 160;
+    return viewport.scrollTop;
+  });
+  await settle(page);
+  await expect(nearby).toBeInViewport({ ratio: 1 });
+
+  await page.evaluate(() => {
+    const rows = window.sidebar.rows(50);
+    rows.splice(4, 3);
+    window.sidebar.update({ rows: [6, ...rows] });
+  });
+  await expect(sidebar.locator("[data-row]").first()).toHaveText("Row 6");
+  await settle(page);
+  expect(await sidebar.evaluate((viewport) => viewport.scrollTop)).toBe(before);
+  await expect(nearby).toBeInViewport({ ratio: 1 });
+});
+
+for (const count of [2, 3]) {
+  test(`a refresh keeps the nearby row when ${count} rows move to the top`, async ({
+    page,
+  }) => {
+    await open(page);
+    await update(page, { mounted: true, anchored: true });
+    const sidebar = page.getByRole("navigation", {
+      name: "Subscribed channels",
+    });
+    const nearby = sidebar.locator(`[data-row="${4 + count}"]`);
+    await expect(nearby).toBeAttached();
+    const before = await sidebar.evaluate((viewport) => {
+      viewport.scrollTop = 160;
+      return viewport.scrollTop;
+    });
+    await settle(page);
+
+    await page.evaluate((count) => {
+      const rows = window.sidebar.rows(50);
+      const promoted = rows.splice(4, count);
+      window.sidebar.update({ rows: [...promoted, ...rows] });
+    }, count);
+    await expect(sidebar.locator("[data-row]").first()).toHaveText("Row 4");
+    await settle(page);
+    expect(await sidebar.evaluate((viewport) => viewport.scrollTop)).toBe(
+      before,
+    );
+    await expect(nearby).toBeInViewport({ ratio: 1 });
+  });
+}
+
+test("a height change above the viewport keeps the visible row in place", async ({
+  page,
+}) => {
+  await open(page);
+  await update(page, { mounted: true, anchored: true });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const row = sidebar.locator('[data-row="4"]');
+  await expect(row).toBeAttached();
+  await sidebar.evaluate((viewport) => {
+    viewport.scrollTop = 160;
+  });
+  await settle(page);
+  const position = () =>
+    row.evaluate(
+      (row) =>
+        row.getBoundingClientRect().top -
+        row.closest("nav").getBoundingClientRect().top,
+    );
+  const before = await position();
+
+  await sidebar.locator('[data-row="0"]').evaluate((row) => {
+    row.style.height = "280px";
+  });
+  await settle(page);
+  expect(await position()).toBe(before);
+});
+
+test("a refresh anchors to a surviving Team row while removed rows fade", async ({
+  page,
+}) => {
+  await open(page);
+  await update(page, { mounted: true, anchored: true, animated: true });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  const survivor = sidebar.locator('[data-row="6"]');
+  await expect(survivor).toBeAttached();
+  await sidebar.evaluate((viewport) => {
+    viewport.scrollTop = 160;
+  });
+  await settle(page);
+  const offset = () =>
+    survivor.evaluate(
+      (row) =>
+        row.getBoundingClientRect().top -
+        row.closest("nav").getBoundingClientRect().top,
+    );
+  const before = await offset();
+
+  await page.evaluate(() => {
+    const rows = window.sidebar.rows(50);
+    rows.splice(4, 2, 60);
+    window.sidebar.update({ rows });
+  });
+  await expect(sidebar.locator('[data-row="4"]')).toHaveCount(0);
+  await expect(sidebar.locator('[data-row="5"]')).toHaveCount(0);
+  expect(await offset()).toBe(before);
+});
+
+test("a wheel scroll during a row slide stays put through the next reorder", async ({
+  page,
+}) => {
+  await open(page);
+  await update(page, { mounted: true, anchored: true, animated: true });
+  const sidebar = page.getByRole("navigation", { name: "Subscribed channels" });
+  await expect(sidebar.locator('[data-row="4"]')).toBeAttached();
+  const initial = await sidebar.evaluate((viewport) => {
+    viewport.scrollTop = 160;
+    return viewport.scrollTop;
+  });
+  await settle(page);
+  await sidebar.evaluate((viewport) => {
+    const observer = new MutationObserver(() => {
+      const moving = [...viewport.querySelectorAll("[data-moving]")];
+      if (!moving.length) return;
+      observer.disconnect();
+      for (const row of moving) {
+        for (const slide of row.getAnimations()) {
+          slide.pause();
+          slide.currentTime = 20;
+        }
+      }
+    });
+    observer.observe(viewport, {
+      subtree: true,
+      attributeFilter: ["data-moving"],
+    });
+    const rows = window.sidebar.rows(50);
+    rows.splice(4, 6, 6, 4, 5, 9, 7, 8);
+    window.sidebar.update({ rows });
+  });
+  const moving = sidebar.locator("[data-moving]");
+  await expect(moving).toHaveCount(6);
+  await sidebar.hover();
+  const preWheel = await sidebar.evaluate((viewport) => viewport.scrollTop);
+  await page.mouse.wheel(0, 8);
+  await expect
+    .poll(() => sidebar.evaluate((viewport) => viewport.scrollTop))
+    .toBe(preWheel + 8);
+  await settle(page);
+  const afterWheel = await sidebar.evaluate((viewport) => {
+    for (const row of viewport.querySelectorAll("[data-moving]")) {
+      for (const slide of row.getAnimations()) slide.finish();
+    }
+    return viewport.scrollTop;
+  });
+  expect(initial).toBeGreaterThan(0);
+  await expect(moving).toHaveCount(0);
+  await settle(page);
+  expect(await sidebar.evaluate((viewport) => viewport.scrollTop)).toBe(
+    afterWheel,
+  );
+  await page.evaluate(() => {
+    const rows = window.sidebar.rows(50);
+    rows.splice(4, 6, 6, 4, 7, 9, 5, 8);
+    window.sidebar.update({ rows });
+  });
+  await expect(sidebar.locator("[data-row]").nth(6)).toHaveText("Row 7");
+  await expect(moving).toHaveCount(0);
+  await settle(page);
+  expect(await sidebar.evaluate((viewport) => viewport.scrollTop)).toBe(
+    afterWheel,
+  );
+});
+
 test("a user scroll before contributed rows arrive cancels their reveal", async ({
   page,
 }) => {

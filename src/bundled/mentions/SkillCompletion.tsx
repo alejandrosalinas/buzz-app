@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useContext, useLayoutEffect } from "react";
+import { useContext, useLayoutEffect, useSyncExternalStore } from "react";
+import { AgentsContext } from "../../features/agents/react";
 import { useAgentChoices } from "../../features/agents/use-choices";
 import type { HostCompletionResult } from "../../features/conversation/completion";
 import type {
@@ -10,12 +11,7 @@ import { AddressedAgentsContext } from "../../features/messages/selected-mention
 import { BookIcon } from "../../shared/design-system/icons";
 import { useHeldListing } from "./held-listing";
 
-/** The folders each bundled local harness reads its own skills from, by
- * agent type. The host resolves `$CODEX_HOME` as Codex's launcher does. */
-const SKILL_FOLDERS: Readonly<Record<string, readonly string[]>> = {
-  "buzz.claude-code/claude-code": ["~/.claude/skills"],
-  "buzz.codex/codex": ["$CODEX_HOME/skills", "~/.agents/skills"],
-};
+const noSubscribe = () => () => {};
 /** The chip keeps a short description for its details. */
 const DESCRIPTION_LIMIT = 300;
 
@@ -39,9 +35,9 @@ export function skillQuery(text: string, caret: number) {
   return { start, end: caret, query };
 }
 
-/** `/` on desktop offers the skills of the one local Claude or Codex agent
- * the viewer's message addresses, from its skill folders on this machine, as
- * skill chips for that agent. */
+/** `/` on desktop offers the skills of the one local agent the viewer's
+ * message addresses, from its type's skill folders on this machine, as skill
+ * chips for that agent. */
 export function SkillCompletion({
   session,
   scope,
@@ -51,6 +47,10 @@ export function SkillCompletion({
   publish,
 }: ComposerCompletionProps) {
   const addressed = useContext(AddressedAgentsContext);
+  const service = useContext(AgentsContext);
+  const types = useSyncExternalStore(service?.subscribe ?? noSubscribe, () =>
+    service?.types(),
+  );
   const choices = useAgentChoices(session, false);
   const agents = choices.identities.filter((choice) =>
     addressed.includes(choice.pubkey),
@@ -60,7 +60,11 @@ export function SkillCompletion({
     agents.length === 1 && agents[0]?.managed && agents[0].execution === "local"
       ? agents[0]
       : undefined;
-  const folders = (agent?.type && SKILL_FOLDERS[agent.type]) || undefined;
+  const declared = agent?.type
+    ? types?.find((type) => type.key === agent.type)?.skillFolders
+    : undefined;
+  const cleaned = declared?.map((folder) => folder.trim()).filter(Boolean);
+  const folders = cleaned?.length ? cleaned : undefined;
   // One `/` token in one composer, for one agent, lists the skills once.
   const skills = useHeldListing(
     JSON.stringify([
@@ -70,6 +74,7 @@ export function SkillCompletion({
       threadRootId,
       query.start,
       agent?.pubkey ?? null,
+      folders ?? null,
     ]),
     async () =>
       folders

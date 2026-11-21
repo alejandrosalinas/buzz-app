@@ -61,10 +61,16 @@ function harness(
 ) {
   let shown = current;
   const checkGit = vi.fn<PluginImports["checkGit"]>(async () => checked);
+  const checkPath = vi.fn<PluginImports["checkPath"]>(
+    async () => checked && { ...checked, source: "/src/plugins", commit: null },
+  );
+  const checkFolder = vi.fn<PluginImports["checkFolder"]>(async () => ({
+    revision: "example.local-2",
+  }));
   const change = vi.fn(async () => true);
   const requests = createPluginRequests({
     catalog: () => shown,
-    imports: { checkGit } as unknown as PluginImports,
+    imports: { checkGit, checkPath, checkFolder } as unknown as PluginImports,
     change,
     error: () => null,
     managed: () => managed,
@@ -73,6 +79,8 @@ function harness(
     requests,
     agent: requests.forAgent(AGENT),
     checkGit,
+    checkPath,
+    checkFolder,
     change,
     show: (next: Catalog) => {
       shown = next;
@@ -333,6 +341,50 @@ describe("install requests", () => {
     );
   });
 
+  it("queue a local folder as the native reader resolved it", async () => {
+    const { requests, agent, checkGit, checkPath } = harness();
+    await agent.request(install({ repository: "/src/plugins/" }));
+    expect(checkPath).toHaveBeenCalledWith("/src/plugins/");
+    expect(checkGit).not.toHaveBeenCalled();
+    expect(requests.pending()[0]).toMatchObject({
+      pluginId: "example.tasks",
+      source: { folder: "/src/plugins", path: "tasks" },
+    });
+  });
+
+  it.each([
+    [{ repository: "~/plugins" }, "Enter an absolute folder path, without ~"],
+    [
+      { repository: "/src/\u0007plugins" },
+      "The folder path must not contain control characters",
+    ],
+    [
+      { repository: "/src/plugins", reference: "main" },
+      "reference and commit apply only to Git repositories",
+    ],
+  ])("refuse folder %o", async (extra, message) => {
+    const { requests, agent, checkPath } = harness();
+    await expect(agent.request(install(extra))).rejects.toThrow(message);
+    expect(checkPath).not.toHaveBeenCalled();
+    expect(requests.pending()).toEqual([]);
+  });
+
+  it("refuse a folder without built plugins", async () => {
+    const { agent, checkPath } = harness();
+    checkPath.mockResolvedValueOnce({
+      token: "",
+      source: "/src/empty",
+      commit: null,
+      candidates: [],
+      warnings: ["Selected folder: Missing file: plugin.js"],
+    });
+    await expect(
+      agent.request(install({ repository: "/src/empty" })),
+    ).rejects.toThrow(
+      "No built plugins found. Selected folder: Missing file: plugin.js",
+    );
+  });
+
   it("refuse an agent that is no longer available", async () => {
     const { requests } = harness();
     const gone = requests.forAgent({ ...AGENT, live: () => false });
@@ -409,10 +461,31 @@ describe("update, enable and remove requests", () => {
     expect(checkGit).not.toHaveBeenCalled();
   });
 
+  it("queue a folder update when its saved folder has changed", async () => {
+    const { requests, agent, checkFolder, checkGit } = harness(disabled);
+    await agent.request({ action: "update", id: "example.local", reason });
+    expect(checkFolder).toHaveBeenCalledWith("example.local");
+    expect(checkGit).not.toHaveBeenCalled();
+    expect(requests.pending()[0]).toMatchObject({
+      action: "update",
+      pluginId: "example.local",
+      source: { folder: "/src", path: "." },
+    });
+  });
+
+  it("refuse a folder update when the folder has not changed", async () => {
+    const { requests, agent, checkFolder } = harness(disabled);
+    checkFolder.mockResolvedValueOnce({ revision: "example.local-1" });
+    await expect(
+      agent.request({ action: "update", id: "example.local", reason }),
+    ).rejects.toThrow("example.local is already at its folder's version");
+    expect(requests.pending()).toEqual([]);
+  });
+
   it.each([
     [
-      { action: "update", id: "example.local" },
-      "example.local was not installed from Git",
+      { action: "update", id: "example.local", reference: "main" },
+      "reference and commit apply only to Git repositories",
     ],
     [
       { action: "update", id: "buzz.channels" },

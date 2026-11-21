@@ -40,10 +40,18 @@ export function eventVisibility(
     return channel;
   }
   function visible(event: EventData): boolean {
-    if (channelRowKind(event.kind) && !channelRowChannel(event)) return false;
+    const isRow = channelRowKind(event.kind);
+    const rowChannel = isRow ? channelRowChannel(event) : undefined;
+    if (isRow && !rowChannel) return false;
     const cached = memo.get(event.id);
     if (cached !== undefined) return cached;
     if (visiting.has(event.id) || visiting.size >= 32) return false;
+    // Row membership already checked every tag and found exactly one home.
+    if (rowChannel) {
+      const allowed = canAccess(rowChannel);
+      memo.set(event.id, allowed);
+      return allowed;
+    }
     visiting.add(event.id);
     // The relay stores kind 0 globally and ignores a stray h tag
     // (is_global_only_kind), so a profile is never a channel's evidence.

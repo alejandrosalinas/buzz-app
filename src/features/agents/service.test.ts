@@ -166,7 +166,9 @@ import {
   recommendationReady,
   recommendedSetup,
   setRuntimeRecommendation,
+  SOURCE_MS,
 } from "./recommended";
+import { projectTemplateId, workspaceCanvas } from "../solo/workspace";
 
 /** The tag that the echo type's default watch matches. */
 const DEPLOY = ["t", "deploy"];
@@ -4362,6 +4364,209 @@ it("asks the first plugin that recommends, and waits for plugins to start before
   }
 });
 
+it("gives the first bundled plugin's harness list to gateway routes, and keeps the access check's when none calls", async () => {
+  const select = vi.spyOn(gatewayRoutes, "selectHarnesses");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const start = () => {
+    const ctx = new Context();
+    let settled = false;
+    const listeners = new Set<() => void>();
+    ctx.provide("pluginStatus", {
+      isActive: () => true,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      settled: () => settled,
+    });
+    const client = fakeCommunities(fakeRelay());
+    new AgentsService(ctx, client.communities, fakeNative(), memoryStorage());
+    const selection = select.mock.lastCall?.[0];
+    if (!selection) throw new Error("No harness selection");
+    const owner = (id: string) =>
+      ctx.extend({
+        pluginOwner: bundledOwner(Object.freeze({ id, revision: "bundled" })),
+      });
+    const settle = () => {
+      settled = true;
+      for (const listener of listeners) listener();
+    };
+    return { owner, settle, selection };
+  };
+  try {
+    // The first plugin to call is asked at once; its list, deduplicated.
+    const first = start();
+    const other = vi.fn();
+    first
+      .owner("org.example")
+      .agents.gatewayHarnesses(() => ["codex", "goose", "codex"]);
+    first.owner("org.other").agents.gatewayHarnesses(other);
+    await expect(first.selection).resolves.toEqual(["codex", "goose"]);
+    expect(other).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("org.other's gateway harnesses are ignored"),
+    );
+    expect(() =>
+      first.owner("org.bad").agents.gatewayHarnesses("nope" as never),
+    ).toThrow(/needs a function/);
+    // Only the runtime's bundled mark counts.
+    expect(() =>
+      first
+        .owner("org.example")
+        .extend({
+          pluginOwner: Object.freeze({ id: "org.poser", revision: "bundled" }),
+        })
+        .agents.gatewayHarnesses(other),
+    ).toThrow(/only to bundled plugins/);
+
+    // None calling once plugins have started: the access check's list
+    // stands, and a later call is too late.
+    const second = start();
+    second.settle();
+    await expect(second.selection).resolves.toBeUndefined();
+    second.owner("org.late").agents.gatewayHarnesses(other);
+    expect(other).not.toHaveBeenCalled();
+
+    // Anything but a list of harness names, or a failure, enables none.
+    for (const answer of [
+      () => "codex",
+      () => ["Codex"],
+      () => Array.from({ length: 33 }, (_, i) => `h${i}`),
+      () => Promise.reject(new Error("unreadable")),
+      () => undefined,
+    ]) {
+      const next = start();
+      next.owner("org.example").agents.gatewayHarnesses(answer);
+      await expect(next.selection).resolves.toEqual([]);
+    }
+
+    // A late answer enables none, and its signal aborts; plugins that never
+    // finish starting with none calling keep the access check's list. Both
+    // are bounded by one deadline from start-up.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stuck = start();
+    await vi.advanceTimersByTimeAsync(SOURCE_MS);
+    await expect(stuck.selection).resolves.toBeUndefined();
+    stuck.owner("org.late").agents.gatewayHarnesses(other);
+    expect(other).not.toHaveBeenCalled();
+    const sparse = start();
+    // biome-ignore lint/suspicious/noSparseArray: a hole must not pass
+    sparse.owner("org.example").agents.gatewayHarnesses(() => [, "codex"]);
+    await expect(sparse.selection).resolves.toEqual([]);
+    const late = start();
+    let signal!: AbortSignal;
+    late.owner("org.example").agents.gatewayHarnesses((given) => {
+      signal = given;
+      return new Promise(() => {});
+    });
+    await vi.advanceTimersByTimeAsync(SOURCE_MS);
+    await expect(late.selection).resolves.toEqual([]);
+    expect(signal.aborted).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    select.mockRestore();
+    warn.mockRestore();
+  }
+});
+
+/** A promise and its resolver, for a test to settle when it chooses. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+it("waits for a gateway harness list only through bundled start-up, and gives a late call's answer its own time", async () => {
+  const select = vi.spyOn(gatewayRoutes, "selectHarnesses");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const start = () => {
+    const ctx = new Context();
+    let bundled = false;
+    const listeners = new Set<() => void>();
+    ctx.provide("pluginStatus", {
+      isActive: () => true,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      // An installed plugin never finishes starting.
+      settled: () => false,
+      bundledSettled: () => bundled,
+    });
+    const client = fakeCommunities(fakeRelay());
+    new AgentsService(ctx, client.communities, fakeNative(), memoryStorage());
+    const selection = select.mock.lastCall?.[0];
+    if (!selection) throw new Error("No harness selection");
+    const owner = ctx.extend({
+      pluginOwner: bundledOwner(
+        Object.freeze({ id: "org.example", revision: "bundled" }),
+      ),
+    });
+    const settleBundled = () => {
+      bundled = true;
+      for (const listener of listeners) listener();
+    };
+    return { ctx, owner, settleBundled, selection };
+  };
+  try {
+    // Bundled plugins started with none calling: the access check's list
+    // stands at once, whatever installed plugins are doing.
+    const quick = start();
+    let known = false;
+    void quick.selection.then(() => {
+      known = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(known).toBe(false);
+    quick.settleBundled();
+    await expect(quick.selection).resolves.toBeUndefined();
+
+    // A call late in start-up still gets `SOURCE_MS` for its answer.
+    const late = start();
+    await vi.advanceTimersByTimeAsync(SOURCE_MS - 1_000);
+    const answer = deferred<string[]>();
+    let signal!: AbortSignal;
+    late.owner.agents.gatewayHarnesses((given) => {
+      signal = given;
+      return answer.promise;
+    });
+    await vi.advanceTimersByTimeAsync(SOURCE_MS - 1);
+    expect(signal.aborted).toBe(false);
+    answer.resolve(["pi"]);
+    await expect(late.selection).resolves.toEqual(["pi"]);
+    expect(signal.aborted).toBe(true);
+
+    // But no more than that.
+    const slow = start();
+    let slowSignal!: AbortSignal;
+    slow.owner.agents.gatewayHarnesses((given) => {
+      slowSignal = given;
+      return new Promise(() => {});
+    });
+    await vi.advanceTimersByTimeAsync(SOURCE_MS);
+    await expect(slow.selection).resolves.toEqual([]);
+    expect(slowSignal.aborted).toBe(true);
+
+    // Stopped while its answer is pending: the wait is over at once.
+    const stopped = start();
+    let stoppedSignal!: AbortSignal;
+    stopped.owner.agents.gatewayHarnesses((given) => {
+      stoppedSignal = given;
+      return new Promise(() => {});
+    });
+    void stopped.ctx.fiber.dispose();
+    await expect(stopped.selection).resolves.toEqual([]);
+    expect(stoppedSignal.aborted).toBe(true);
+  } finally {
+    vi.useRealTimers();
+    select.mockRestore();
+    warn.mockRestore();
+  }
+});
+
 describe("an agent on Automatic and the recommended harness", () => {
   // A synthetic recommendation: codex first, then goose.
   const recommendation = {
@@ -8426,6 +8631,77 @@ it("refuses a blank name before making anything", async () => {
   ).rejects.toThrow("Name the agent");
   expect(native.create).not.toHaveBeenCalled();
   expect(service.snapshot().agents).toEqual([]);
+});
+
+it("refuses an agent type with more skill folders than the composer can list", async () => {
+  const { plugin, service } = await setup();
+  const type = {
+    id: "skills",
+    title: "Skills",
+    defaults: () => ({ config: {} }),
+    run: vi.fn(),
+  };
+  expect(() =>
+    plugin.agents.register({
+      ...type,
+      skillFolders: Array.from({ length: 9 }, (_, n) => `~/.skills/${n}`),
+    }),
+  ).toThrow("skillFolders");
+  const skillFolders = Array.from({ length: 8 }, (_, n) => `~/.skills/${n}`);
+  plugin.agents.register({ ...type, skillFolders });
+  expect(
+    service.types().find((entry) => entry.key === "example/skills")
+      ?.skillFolders,
+  ).toEqual(skillFolders);
+});
+
+it("keeps the skill folders an agent type registered when the caller changes its list later", async () => {
+  const { plugin, service } = await setup();
+  const skillFolders = ["~/.skills/a"];
+  plugin.agents.register({
+    id: "skills",
+    title: "Skills",
+    defaults: () => ({ config: {} }),
+    run: vi.fn(),
+    skillFolders,
+  });
+  skillFolders.push("~/.skills/b");
+  expect(
+    service.types().find((entry) => entry.key === "example/skills")
+      ?.skillFolders,
+  ).toEqual(["~/.skills/a"]);
+});
+
+it("drops blank skill folder entries on registration and refuses sparse lists", async () => {
+  const { plugin, service } = await setup();
+  const type = {
+    id: "skills",
+    title: "Skills",
+    defaults: () => ({ config: {} }),
+    run: vi.fn(),
+  };
+  const sparse = new Array<string>(2);
+  sparse[0] = "~/.skills/a";
+  expect(() =>
+    plugin.agents.register({ ...type, skillFolders: sparse }),
+  ).toThrow("skillFolders");
+  plugin.agents.register({
+    ...type,
+    skillFolders: [" ~/.skills/a ", "", "   ", "~/.skills/b"],
+  });
+  expect(
+    service.types().find((entry) => entry.key === "example/skills")
+      ?.skillFolders,
+  ).toEqual(["~/.skills/a", "~/.skills/b"]);
+  plugin.agents.register({
+    ...type,
+    id: "blank-skills",
+    skillFolders: [" ", ""],
+  });
+  expect(
+    service.types().find((entry) => entry.key === "example/blank-skills")
+      ?.skillFolders,
+  ).toEqual([]);
 });
 
 it("returns the created agent after the community changes mid-create", async () => {
@@ -15563,6 +15839,76 @@ it("shows a request whose run failed before handing anything over as failed, wit
   }
 });
 
+it("keeps signed task requests retryable without starting an incompatible adapter", async () => {
+  const owner = keypair();
+  const f = await setup({
+    resumes: true,
+    identities: [{ ...echo, owner: owner.pubkey }],
+  });
+  const snapshot = f.communities.snapshot.bind(f.communities);
+  vi.spyOn(f.communities, "snapshot").mockImplementation(() => ({
+    ...snapshot(),
+    viewer: owner.pubkey,
+  }));
+  f.signIn(owner.pubkey);
+  f.confirm(channel, [owner.pubkey, bot]);
+  await vi.waitFor(() =>
+    expect(f.service.snapshot().running.map((agent) => agent.pubkey)).toContain(
+      bot,
+    ),
+  );
+  const root = message(owner, channel, "Discussion", nowSeconds());
+  const request = eventDto(
+    message(owner, channel, "Take this task", root.created_at + 1, [
+      ["e", root.id, "", "reply"],
+      ["p", bot],
+      ["buzz:invocation-intent", "1", bot],
+    ]),
+  );
+  try {
+    f.emit({ events: [request], channelId: channel });
+    await vi.waitFor(() =>
+      expect(f.activity.reader.work()[0]).toMatchObject({
+        messageId: request.id,
+        state: "error",
+        retryable: true,
+        error: expect.stringContaining("Invocation routing is unavailable"),
+      }),
+    );
+    expect(f.run).not.toHaveBeenCalled();
+    const failed = f.activity.reader.work()[0];
+    if (!failed) throw new Error("Missing task failure");
+    f.activity.reader.retry?.(failed);
+    expect(f.activity.reader.work()[0]).toMatchObject({
+      messageId: request.id,
+      state: "waiting",
+    });
+    await vi.waitFor(() =>
+      expect(f.activity.reader.work()[0]).toMatchObject({
+        messageId: request.id,
+        state: "error",
+        retryable: true,
+      }),
+    );
+    expect(f.run).not.toHaveBeenCalled();
+
+    const ordinary = eventDto(
+      message(owner, channel, "Ordinary mention", root.created_at + 2, [
+        ["e", root.id, "", "reply"],
+        ["p", bot],
+      ]),
+    );
+    f.emit({ events: [ordinary], channelId: channel });
+    await vi.waitFor(() => expect(f.run).toHaveBeenCalledOnce());
+    expect(f.run.mock.calls[0]?.[0].trigger).toMatchObject({
+      type: "mention",
+      event: { id: ordinary.id },
+    });
+  } finally {
+    await f.ctx.fiber.dispose();
+  }
+});
+
 it("retries a failed request as the same mention, which stays seen and is saved as working only while it runs", async () => {
   const f = await setup({ resumes: true });
   await f.service.create({ type: "example/echo", name: "Echo" });
@@ -16833,7 +17179,10 @@ it("gives a run its owner's channel templates with the owner's agents each adds"
   ]);
 });
 
-it("binds run-only Solo placement to the owner, community and just-created confirmed chat", async () => {
+/** A new private conversation that names the owner. */
+const withOwner = { members: [viewer], open: false };
+
+it("binds run-only placement to the owner, community and just-created confirmed chat", async () => {
   const f = await setup();
   const preferences = {
     refresh: vi.fn(async () => {}),
@@ -16874,18 +17223,18 @@ it("binds run-only Solo placement to the owner, community and just-created confi
   });
   await f.service.create({ type: "example/echo", name: "Echo" });
   const handle = await handleOf(f.run, f.emit);
-  const workspace = handle.soloWorkspaces;
+  const workspace = handle.workspaces;
   if (!workspace) throw new Error("Missing run workspace capability");
   try {
-    expect(f.plugin.agents.handle(bot)?.soloWorkspaces).toBeUndefined();
+    expect(f.plugin.agents.handle(bot)?.workspaces).toBeUndefined();
     expect(await workspace.list()).toEqual([{ id: "work", name: "Work" }]);
-    await expect(workspace.prepare("work", [], "new-chat")).rejects.toThrow(
-      "Include your owner",
-    );
     await expect(
-      workspace.prepare("unknown", [viewer], "new-chat"),
-    ).rejects.toThrow("No such Solo workspace");
-    const file = await workspace.prepare("work", [viewer], "new-chat");
+      workspace.prepare("work", { members: [], open: false }, "new-chat"),
+    ).rejects.toThrow("Your owner can't see");
+    await expect(
+      workspace.prepare("unknown", withOwner, "new-chat"),
+    ).rejects.toThrow("No such workspace");
+    const file = await workspace.prepare("work", withOwner, "new-chat");
     await expect(file("old-chat")).rejects.toThrow("No new chat from this run");
     await handle.publish({
       kind: 9007,
@@ -16915,7 +17264,7 @@ it("binds run-only Solo placement to the owner, community and just-created confi
       { signal: expect.any(AbortSignal) },
     );
     await expect(file("new-chat")).rejects.toThrow("already attempted");
-    const stale = await workspace.prepare("work", [viewer], "new-chat");
+    const stale = await workspace.prepare("work", withOwner, "new-chat");
     f.connect(false);
     await expect(stale("new-chat")).rejects.toThrow();
     await expect(workspace.list()).rejects.toThrow();
@@ -16925,17 +17274,118 @@ it("binds run-only Solo placement to the owner, community and just-created confi
   }
 });
 
+/** A session with workspace `work` and relay state for conversation `chat`. */
+function workspaceSession(
+  f: Awaited<ReturnType<typeof setup>>,
+  members: readonly string[] = [bot, viewer],
+) {
+  const authority = "f".repeat(64);
+  const assign = vi.fn(async () => {});
+  const kit = { status: "ready", entries: [] as unknown[] };
+  Object.assign(f.session.agentChoices, {
+    snapshot: () => ({ identities: [] }),
+  });
+  Object.assign(f.session, {
+    channelKit: {
+      available: true,
+      refresh: async () => {},
+      snapshot: () => kit,
+    },
+    relayAuthor: authority,
+    snapshotRead: vi.fn(async (filters: readonly ReadFilter[]) => {
+      const d = ["d", filters[0]?.["#d"]?.[0] ?? ""];
+      return [
+        event("meta", {
+          kind: 39000,
+          pubkey: authority,
+          tags: [d, ["t", "stream"], ["private"], ["P", bot]],
+        }),
+        event("roster", {
+          kind: 39002,
+          pubkey: authority,
+          tags: [d, ...members.map((key) => ["p", key])],
+        }),
+      ];
+    }),
+    sidebarPreferences: {
+      refresh: async () => {},
+      writable: true,
+      snapshot: () => ({
+        status: "ready",
+        data: { sections: [{ id: "work", name: "Work" }], assignments: {} },
+      }),
+      assign,
+    },
+  });
+  return { assign, kit };
+}
+
+it("keeps a workspace's local folders out of a Solo chat with anyone else", async () => {
+  const f = await setup();
+  const { kit } = workspaceSession(f);
+  const marked = workspaceCanvas({ folders: ["/repo"], canvas: "Rules" });
+  kit.entries = [
+    {
+      eventId: "head",
+      record: {
+        value: {
+          type: "template",
+          id: await projectTemplateId("work"),
+          canvas: marked,
+          agents: [],
+          teamIds: [],
+        },
+      },
+    },
+  ];
+  await f.service.create({ type: "example/echo", name: "Echo" });
+  const handle = await handleOf(f.run, f.emit);
+  try {
+    const canvas = async (members: string[]) =>
+      (await handle.workspaces?.defaults("work", { solo: true, members }))
+        ?.canvas;
+    expect(await canvas([viewer, bot])).toBe(marked);
+    expect(await canvas([viewer, other])).toBe("Rules");
+  } finally {
+    await f.ctx.fiber.dispose();
+  }
+});
+
+it.each([
+  ["a channel its owner is in", [bot, viewer], "filed"],
+  ["a private channel its owner isn't in", [bot], "Your owner can't see"],
+])(
+  "moves only conversations its owner can see: %s",
+  async (_, members, outcome) => {
+    const f = await setup();
+    const { assign } = workspaceSession(f, members);
+    await f.service.create({ type: "example/echo", name: "Echo" });
+    const handle = await handleOf(f.run, f.emit);
+    try {
+      const moving = handle.workspaces?.move("chat", "work");
+      if (outcome === "filed") {
+        await expect(moving).resolves.toEqual({ status: "filed" });
+        expect(assign).toHaveBeenCalledOnce();
+      } else {
+        await expect(moving).rejects.toThrow(outcome);
+        expect(assign).not.toHaveBeenCalled();
+      }
+    } finally {
+      await f.ctx.fiber.dispose();
+    }
+  },
+);
+
 it.each([
   "cached preferences",
   "read-only preferences",
   "owner missing",
   "caller missing",
   "wrong creator",
-  "not Solo",
   "region",
   "wrong authority",
   "wrong coordinate",
-])("refuses Solo placement for unconfirmed authority: %s", async (failure) => {
+])("refuses placement for unconfirmed authority: %s", async (failure) => {
   const f = await setup();
   const authority = "f".repeat(64);
   const assign = vi.fn(async () => {});
@@ -16966,8 +17416,6 @@ it.each([
     metadata.tags = metadata.tags.map((tag) =>
       tag[0] === "P" ? ["P", other] : tag,
     );
-  if (failure === "not Solo")
-    metadata.tags = metadata.tags.filter(([, value]) => value !== "buzz.solo");
   if (failure === "region")
     metadata.tags.push(["t", "buzz.region:example:work"]);
   if (failure === "wrong authority") roster.pubkey = other;
@@ -16994,19 +17442,19 @@ it.each([
       failure === "cached preferences" ||
       failure === "read-only preferences"
     ) {
-      await expect(handle.soloWorkspaces?.list()).rejects.toThrow(
-        "Solo workspaces are unavailable",
+      await expect(handle.workspaces?.list()).rejects.toThrow(
+        "Workspaces are unavailable",
       );
       await expect(
-        handle.soloWorkspaces?.prepare("work", [viewer], "new-chat"),
-      ).rejects.toThrow("Solo workspaces are unavailable");
+        handle.workspaces?.prepare("work", withOwner, "new-chat"),
+      ).rejects.toThrow("Workspaces are unavailable");
       expect(f.session.snapshotRead).not.toHaveBeenCalled();
       expect(assign).not.toHaveBeenCalled();
       return;
     }
-    const file = await handle.soloWorkspaces?.prepare(
+    const file = await handle.workspaces?.prepare(
       "work",
-      [viewer],
+      withOwner,
       "new-chat",
     );
     await handle.publish({
@@ -17050,7 +17498,7 @@ it("fences workspace discovery when its community binding changes during the rea
   });
   await f.service.create({ type: "example/echo", name: "Echo" });
   const handle = await handleOf(f.run, f.emit);
-  const pending = handle.soloWorkspaces?.list();
+  const pending = handle.workspaces?.list();
   const refused = expect(pending).rejects.toThrow();
   try {
     await started.promise;
@@ -17112,7 +17560,7 @@ it("keeps overlapping prepared creates independently fileable through the run", 
   });
   await f.service.create({ type: "example/echo", name: "Echo" });
   const handle = await handleOf(f.run, f.emit);
-  const ws = handle.soloWorkspaces;
+  const ws = handle.workspaces;
   if (!ws) throw new Error("Missing run capability");
   const create = (id: string) =>
     handle.publish({
@@ -17125,10 +17573,10 @@ it("keeps overlapping prepared creates independently fileable through the run", 
       ],
     });
   try {
-    const first = await ws.prepare("work", [viewer], "first");
+    const first = await ws.prepare("work", withOwner, "first");
     await create("first");
     // First tool is still confirming metadata when the second publishes.
-    const second = await ws.prepare("work", [viewer], "second");
+    const second = await ws.prepare("work", withOwner, "second");
     await create("second");
     const pending = first("first");
     await Promise.race([
@@ -17205,9 +17653,9 @@ it.each(["authority", "assignment"])(
     await f.service.create({ type: "example/echo", name: "Echo" });
     const handle = await handleOf(f.run, f.emit);
     try {
-      const file = await handle.soloWorkspaces?.prepare(
+      const file = await handle.workspaces?.prepare(
         "work",
-        [viewer],
+        withOwner,
         "chat",
         signal.signal,
       );
@@ -17302,9 +17750,9 @@ it.each(["filed", "deleted", "retired"])(
     await f.service.create({ type: "example/echo", name: "Echo" });
     const handle = await handleOf(f.run, f.emit);
     try {
-      const file = await handle.soloWorkspaces?.prepare(
+      const file = await handle.workspaces?.prepare(
         "work",
-        [viewer],
+        withOwner,
         "new-chat",
         call.signal,
       );
@@ -20850,16 +21298,16 @@ describe("full external agent access", () => {
     };
   }
 
-  it("withholds local-run Solo workspace filing from external connections", async () => {
+  it("withholds local-run workspace filing from external connections", async () => {
     const f = await fixture();
     try {
       const names = await f.names();
       expect(names).toContain("settings_set");
       const publish = vi.spyOn(f.native, "publish");
-      const discover = await f.call("solo_workspace_list", {});
+      const discover = await f.call("workspace_list", {});
       expect(discover.result.isError).toBe(true);
       expect(discover.result.content[0]?.text).toBe(
-        "Solo workspaces are unavailable on this host",
+        "Workspaces are unavailable on this host",
       );
       const create = await f.call("channel_create", {
         name: "Triage",
@@ -20870,7 +21318,7 @@ describe("full external agent access", () => {
       });
       expect(create.result.isError).toBe(true);
       expect(create.result.content[0]?.text).toBe(
-        "Solo workspaces are unavailable on this host",
+        "Workspaces are unavailable on this host",
       );
       expect(publish).not.toHaveBeenCalled();
     } finally {
@@ -23961,8 +24409,13 @@ describe("agent gateway gate", () => {
     });
   });
 
-  /** Live routes for `bot`, probing through a request the test answers. */
-  function liveRoutes() {
+  /** Live routes for `bot`, probing through a request the test answers.
+   * `prepare` runs before the membership is fed, such as to give the routes
+   * a plugin's selection; `origin` is the membership's community. */
+  function liveRoutes(
+    prepare?: (routes: GatewayRoutes) => void,
+    origin = "wss://relay.example.test",
+  ) {
     const id = "22222222-2222-4222-8222-222222222222";
     const routes = new GatewayRoutes(() => ({
       version: 2,
@@ -23986,10 +24439,11 @@ describe("agent gateway gate", () => {
           ),
         ),
     );
+    prepare?.(routes);
     routes.bindRequest(request);
     routes.setMembership({
       key: bot as never,
-      origin: "wss://relay.example.test",
+      origin,
       owner: viewer,
       pubkey: bot,
       community: { id, session: {} },
@@ -24018,6 +24472,228 @@ describe("agent gateway gate", () => {
 
   const PENDING =
     "Buzz is still checking this agent's gateway access. Try again in a moment.";
+
+  /** `liveRoutes` with this launch's plugin selection pending until the
+   * test settles it, the runner reading the selection from these routes. */
+  function selectedRoutes(origin?: string) {
+    const selection = deferred<readonly string[] | undefined>();
+    const live = liveRoutes(
+      (routes) => routes.selectHarnesses(selection.promise),
+      origin,
+    );
+    const { routes } = live;
+    const spies = [
+      vi
+        .spyOn(gatewayRoutes, "selecting", "get")
+        .mockImplementation(() => routes.selecting),
+      vi
+        .spyOn(gatewayRoutes, "selectionForTurn")
+        .mockImplementation((wait) => routes.selectionForTurn(wait)),
+      vi
+        .spyOn(gatewayRoutes, "excludes")
+        .mockImplementation((harness) => routes.excludes(harness)),
+      vi
+        .spyOn(gatewayRoutes, "routeFor")
+        .mockImplementation((key) => routes.routeFor(key)),
+    ];
+    return {
+      ...live,
+      select: selection.resolve,
+      restore: () => {
+        for (const spy of spies) spy.mockRestore();
+      },
+    };
+  }
+  /** Lets pending promise callbacks run. */
+  const flushed = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("waits for the plugin's list first, then runs a harness it leaves out at once, while its access check stalls", async () => {
+    const live = selectedRoutes();
+    try {
+      // No check goes out before the list is known.
+      expect(live.request).not.toHaveBeenCalled();
+      const f = await mentioned(true);
+      await flushed();
+      expect(f.run).not.toHaveBeenCalled();
+      live.select(["pi"]);
+      // The list leaves `relay` out: the turn runs without waiting for the
+      // check, which is still unanswered.
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      expect(live.request).toHaveBeenCalledTimes(1);
+      expect(ready).not.toHaveBeenCalled();
+      const delivery = f.run.mock.calls[0]?.[0];
+      expect(delivery).not.toHaveProperty("gateway");
+      expect(delivery).not.toHaveProperty("gatewayFallback");
+      expect(f.activity.reader.work()[0]).not.toHaveProperty("notice");
+    } finally {
+      live.restore();
+    }
+  });
+
+  it("neither waits for nor rechecks an access check after a 403 for a harness the plugin's list leaves out", async () => {
+    const live = selectedRoutes();
+    try {
+      live.select(["pi"]);
+      await vi.waitFor(() => expect(live.request).toHaveBeenCalledTimes(1));
+      live.answer(403);
+      await vi.waitFor(() =>
+        expect(live.routes.routeFor(bot as never)).toMatchObject({
+          reason: "auth",
+        }),
+      );
+      const f = await mentioned(true);
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      await flushed();
+      expect(live.request).toHaveBeenCalledTimes(1);
+      expect(ready).not.toHaveBeenCalled();
+      const delivery = f.run.mock.calls[0]?.[0];
+      expect(delivery).not.toHaveProperty("gateway");
+      expect(delivery).not.toHaveProperty("gatewayFallback");
+      expect(f.activity.reader.work()[0]).not.toHaveProperty("error");
+    } finally {
+      live.restore();
+    }
+  });
+
+  it("routes a harness the plugin's list names once the list and then its access check settle, within the turn's wait", async () => {
+    const live = selectedRoutes();
+    try {
+      const f = await mentioned(true);
+      await flushed();
+      live.select(["relay"]);
+      await vi.waitFor(() => expect(live.request).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+      expect(f.run).not.toHaveBeenCalled();
+      live.answer(200, "{}");
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      expect(f.run.mock.calls[0]?.[0]?.gateway?.route).toMatchObject({
+        kind: "eligible",
+        harnesses: ["relay"],
+      });
+    } finally {
+      live.restore();
+    }
+  });
+
+  it("fails a turn whose plugin list is still unknown when the wait ends, without sending an access check", async () => {
+    const cap = capReached();
+    const live = selectedRoutes();
+    try {
+      const f = await mentioned(true);
+      await vi.waitFor(() =>
+        expect(f.activity.reader.work()[0]).toMatchObject({
+          state: "error",
+          error: PENDING,
+        }),
+      );
+      expect(f.run).not.toHaveBeenCalled();
+      expect(live.request).not.toHaveBeenCalled();
+    } finally {
+      live.restore();
+      cap.mockRestore();
+    }
+  });
+
+  it("doesn't hold an unlisted community's turn for the plugin's list", async () => {
+    const live = selectedRoutes("wss://unlisted.example.test");
+    try {
+      expect(live.routes.routeFor(bot as never).kind).toBe("external");
+      const f = await mentioned(true);
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      expect(gatewayRoutes.selectionForTurn).not.toHaveBeenCalled();
+      expect(f.run.mock.calls[0]?.[0]).not.toHaveProperty("gateway");
+      expect(f.activity.reader.work()[0]).not.toHaveProperty("notice");
+    } finally {
+      live.restore();
+    }
+  });
+
+  const SELECTION_PENDING =
+    "Ran without gateway attribution: Buzz was still deciding which agents use the gateway.";
+  /** Mentions the attribution-only agent again, as `id`. */
+  const mentionAgain = (f: Awaited<ReturnType<typeof mentioned>>, id: string) =>
+    f.emit({
+      events: [
+        event(id, {
+          pubkey: viewer,
+          tags: [
+            ["h", channel],
+            ["p", bot],
+          ],
+        }),
+      ],
+      channelId: channel,
+    });
+
+  it("runs an attribution-only turn at once while the plugin's list is unknown, noting that, and quietly once the list enables none", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const live = selectedRoutes();
+    try {
+      const f = await mentioned("attribution");
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      expect(timeout).not.toHaveBeenCalledWith(TURN_READINESS_WAIT_MS);
+      expect(ready).not.toHaveBeenCalled();
+      const first = f.run.mock.calls[0]?.[0];
+      expect(first).not.toHaveProperty("gateway");
+      // Says only that the list was unknown: no access check went out.
+      expect(first?.gatewayFallback).toEqual({
+        reason: "readiness_pending",
+        notice: SELECTION_PENDING,
+      });
+      expect(f.activity.reader.work()[0]).toMatchObject({
+        notice: SELECTION_PENDING,
+      });
+      expect(live.request).not.toHaveBeenCalled();
+      // The list, late, enables none: nothing went to the gateway, and the
+      // next turn is quiet.
+      live.select([]);
+      await vi.waitFor(() =>
+        expect(live.routes.routeFor(bot as never).kind).toBe("external"),
+      );
+      expect(live.request).not.toHaveBeenCalled();
+      mentionAgain(f, "attr-after-empty");
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(2));
+      expect(f.run.mock.calls[1]?.[0]).not.toHaveProperty("gatewayFallback");
+      expect(
+        f.activity.reader
+          .work()
+          .filter((work) => "notice" in work)
+          .map((work) => work.messageId),
+      ).toEqual([mention.id]);
+    } finally {
+      live.restore();
+      timeout.mockRestore();
+    }
+  });
+
+  it("runs an attribution-only turn quietly once the plugin's list leaves its harness out, whatever the access check", async () => {
+    const live = selectedRoutes();
+    try {
+      live.select(["pi"]);
+      await vi.waitFor(() => expect(live.request).toHaveBeenCalledTimes(1));
+      // The check is still unanswered: the route is pending.
+      const f = await mentioned("attribution");
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      expect(ready).not.toHaveBeenCalled();
+      expect(f.run.mock.calls[0]?.[0]).not.toHaveProperty("gatewayFallback");
+      expect(f.activity.reader.work()[0]).not.toHaveProperty("notice");
+    } finally {
+      live.restore();
+    }
+  });
+
+  it("runs an unlisted community's attribution-only turn quietly while the plugin's list is unknown", async () => {
+    const live = selectedRoutes("wss://unlisted.example.test");
+    try {
+      expect(live.routes.selecting).toBe(true);
+      const f = await mentioned("attribution");
+      await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+      expect(f.run.mock.calls[0]?.[0]).not.toHaveProperty("gatewayFallback");
+      expect(f.activity.reader.work()[0]).not.toHaveProperty("notice");
+    } finally {
+      live.restore();
+    }
+  });
 
   it("fails a turn whose access check outlasts the wait, before any type code runs, so a late 403 finds nothing dispatched", async () => {
     const cap = capReached();
@@ -24430,6 +25106,31 @@ describe("agent gateway gate", () => {
     await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
     expect(f.run.mock.calls[0]?.[0]).not.toHaveProperty("gateway");
     expect(f.run.mock.calls[0]?.[0]).not.toHaveProperty("gatewayFallback");
+  });
+
+  it("runs a harness the plugin's list leaves out unchanged, even when the access check refused", async () => {
+    const excludes = vi.spyOn(gatewayRoutes, "excludes").mockReturnValue(true);
+    try {
+      for (const capable of [true, "attribution"] as const)
+        for (const route of [
+          { ...blockedRoute, reason: "auth" as const },
+          { ...blockedRoute, reason: "readiness_pending" as const },
+          blockedRoute,
+          eligible,
+        ]) {
+          ready.mockResolvedValue(route);
+          const f = await mentioned(capable);
+          await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1));
+          expect(excludes).toHaveBeenCalledWith("relay");
+          const delivery = f.run.mock.calls[0]?.[0];
+          expect(delivery).not.toHaveProperty("gateway");
+          expect(delivery).not.toHaveProperty("gatewayFallback");
+          expect(f.activity.reader.work()[0]).not.toHaveProperty("notice");
+          gatewayRoutes.removeMembership(bot as never);
+        }
+    } finally {
+      excludes.mockRestore();
+    }
   });
 
   it("hands an eligible route and the turn's frozen context to a type that routes through the gateway", async () => {

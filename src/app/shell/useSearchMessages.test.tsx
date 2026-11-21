@@ -11,6 +11,7 @@ import {
   scriptedTransport,
   signed,
 } from "../../features/relay/testing";
+import { eventDto } from "../../features/relay/events";
 import { useSearchMessages } from "./useSearchMessages";
 
 it.each([
@@ -191,6 +192,84 @@ it.each([
     }
   },
 );
+
+it("marks hits that mention the viewer, as unread counts them", async () => {
+  const viewer = keypair();
+  const other = keypair();
+  const relay = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  const discovery = [
+    metadata(relay, "crew", "crew"),
+    roster(relay, "crew", [viewer.pubkey, other.pubkey]),
+  ];
+  const owner = createRelaySession({
+    ...wire.transport,
+    archiveAuthority: relay.pubkey,
+    query(filters, signal) {
+      if (filters.some((filter) => filter.kinds?.includes(9)))
+        return wire.transport.query(filters, signal);
+      return Promise.resolve(
+        discovery.filter((event) =>
+          filters.some((filter) => filter.kinds?.includes(event.kind)),
+        ),
+      );
+    },
+  });
+  // The relay p-tags a workflow's owner; only its explicit target mentions.
+  const workflow = (text: string, created_at: number, mention: boolean) =>
+    eventDto(
+      message(relay, "crew", text, created_at, [
+        ["buzz:workflow", "true"],
+        ["buzz:workflow-owner", viewer.pubkey],
+        ["p", viewer.pubkey],
+        ...(mention ? [["buzz:workflow-mention", viewer.pubkey]] : []),
+      ]),
+    );
+  try {
+    owner.session.channels.ensureList();
+    await waitFor(() =>
+      expect(owner.session.channels.get?.("crew")).toBeDefined(),
+    );
+    const { result } = renderHook(() =>
+      useSearchMessages(owner.session, "deploy"),
+    );
+    await waitFor(() => expect(wire.pending).toHaveLength(1));
+    await act(async () =>
+      wire
+        .next()
+        .respond([
+          message(other, "crew", "deploy tagged", 1700000005, [
+            ["p", viewer.pubkey],
+          ]),
+          message(other, "crew", "deploy other", 1700000004, [
+            ["p", other.pubkey],
+          ]),
+          message(other, "crew", "deploy untagged", 1700000003),
+          workflow("deploy owner attribution", 1700000002, false),
+          workflow("deploy workflow mention", 1700000001, true),
+        ]),
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(
+      result.current.messages.map(
+        ({ preview, mentionsViewer, workflowOwnerId }) => [
+          preview,
+          mentionsViewer,
+          workflowOwnerId,
+        ],
+      ),
+    ).toEqual([
+      ["deploy tagged", true, undefined],
+      ["deploy other", undefined, undefined],
+      ["deploy untagged", undefined, undefined],
+      ["deploy owner attribution", undefined, viewer.pubkey],
+      ["deploy workflow mention", true, viewer.pubkey],
+    ]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
 
 it("shows one page when the wider first read exceeds the read budget", async () => {
   const viewer = keypair();

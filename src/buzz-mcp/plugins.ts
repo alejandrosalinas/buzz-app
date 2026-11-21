@@ -57,14 +57,17 @@ export const PLUGIN_TOOLS: readonly Tool[] = [
   ),
   tool(
     "plugin_request",
-    "Ask your owner to install, update, enable or remove a plugin. This posts a card with Review and Decline in this conversation, and nothing changes until they confirm it there (or in Settings → Manage plugins). install takes repository, and path when plugin_discover finds several; the others take id. update reads the plugin's recorded repository at reference.",
+    "Ask your owner to install, update, enable or remove a plugin. This posts a card with Review and Decline in this conversation, and nothing changes until they confirm it there (or in Settings → Manage plugins). install takes repository, and path when plugin_discover finds several; the others take id. update reads the plugin's recorded repository at reference, or its folder again.",
     {
       action: { type: "string", enum: ACTIONS },
       id: {
         ...str,
         description: "Plugin id; checked against what install finds.",
       },
-      repository,
+      repository: {
+        ...repository,
+        description: `${repository.description} Or an absolute local folder path, which installs linked to the folder as Settings' Browse does.`,
+      },
       reference,
       path: str,
       commit: {

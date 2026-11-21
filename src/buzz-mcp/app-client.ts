@@ -6,7 +6,12 @@ import type { BuzzClient, Memories } from "./client";
 import { nativeToolClient } from "../features/agents/tool-operation";
 import { prepareAttachment } from "../features/messages/prepare-attachment";
 import { imageType } from "../features/relay/attachment-limits";
-import type { AgentHandle, AgentHandoff } from "../features/agents/service";
+import type {
+  AgentHandle,
+  AgentHandoff,
+  WorkspaceAudience,
+  WorkspaceChat,
+} from "../features/agents/service";
 import type {
   HostProcess,
   HostProcessOptions,
@@ -78,7 +83,7 @@ export function appClient(
   const threadsApart = agent.threadsApart;
   const isTaskThread = agent.isTaskThread;
   const plugins = agent.plugins;
-  const { settings, soloWorkspaces } = agent;
+  const { settings, workspaces } = agent;
   const signal = options.callSignal ?? options.signal;
   const client: BuzzClient = {
     ...(signal ? { signal } : {}),
@@ -135,23 +140,33 @@ export function appClient(
           ...(options.nativeToolGate ? { nativeToolGate: true as const } : {}),
         }
       : {}),
-    ...(soloWorkspaces && {
-      soloWorkspaces: {
+    ...(workspaces && {
+      workspaces: {
         list: async () => {
           check();
-          const result = await soloWorkspaces.list(options.signal);
+          const result = await workspaces.list(options.signal);
+          check();
+          return result;
+        },
+        defaults: async (workspace: string, chat: WorkspaceChat) => {
+          check();
+          const result = await workspaces.defaults(
+            workspace,
+            chat,
+            options.signal,
+          );
           check();
           return result;
         },
         prepare: async (
           workspace: string,
-          members: readonly string[],
+          audience: WorkspaceAudience,
           channelId: string,
         ) => {
           check();
-          const file = await soloWorkspaces.prepare(
+          const file = await workspaces.prepare(
             workspace,
-            members,
+            audience,
             channelId,
             options.signal,
           );
@@ -162,6 +177,12 @@ export function appClient(
             check();
             return result;
           };
+        },
+        move: async (id: string, workspace?: string) => {
+          check();
+          const result = await workspaces.move(id, workspace, options.signal);
+          check();
+          return result;
         },
       },
     }),

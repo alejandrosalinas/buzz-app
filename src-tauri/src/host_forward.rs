@@ -13,8 +13,9 @@
 //! - Upstreams are fixed: the build's gateway origin plus the harness's base
 //!   path, both from the build's private descriptor. The route allowlist is
 //!   compiled, never configured: a request path must exactly match it, so no
-//!   encoded, dotted or doubled segment, absolute form or query reaches the
-//!   gateway, and redirects are never followed or passed on.
+//!   encoded, dotted or doubled segment or absolute form reaches the gateway.
+//!   Only the Databricks v2 catalogs accept query parameters. Redirects are
+//!   never followed or passed on.
 //! - Admission mirrors the page's reference reducer (`ADMISSION_VECTORS`): per
 //!   route, the highest eligibility revision wins, a generation opens only at
 //!   the current revision while it admits, and a higher revision terminally
@@ -118,7 +119,7 @@ impl Harness {
             Harness::Goose => "agent-session-id",
         }
     }
-    /// What the request is, from the exact routes goose-acp 1.57.0 sends.
+    /// What the request is, from the exact routes the bundled goose sends.
     fn classify(self, method: &Method, path: &str, query: Option<&str>) -> Option<Class> {
         let segments: Vec<&str> = path.strip_prefix('/')?.split('/').collect();
         match (self, method, segments.as_slice(), query) {
@@ -139,9 +140,57 @@ impl Harness {
             (Harness::Goose, &Method::POST, ["serving-endpoints", "responses"], None) => {
                 Some(Class::Inference)
             }
+            (Harness::Goose, &Method::GET, ["api", "ai-gateway", "v2", "endpoints"], query)
+                if catalog_query(query, "page_size=100") =>
+            {
+                Some(Class::Discovery)
+            }
+            (
+                Harness::Goose,
+                &Method::GET,
+                ["api", "2.1", "unity-catalog", "model-services"],
+                query,
+            ) if catalog_query(query, "page_size=100&view=FULL") => Some(Class::Discovery),
+            (Harness::Goose, &Method::POST, ["ai-gateway", "openai", "v1", "responses"], None)
+            | (
+                Harness::Goose,
+                &Method::POST,
+                ["ai-gateway", "anthropic", "v1", "messages"],
+                None,
+            )
+            | (
+                Harness::Goose,
+                &Method::POST,
+                ["ai-gateway", "mlflow", "v1", "chat", "completions"],
+                None,
+            ) => Some(Class::Inference),
             _ => None,
         }
     }
+}
+
+/// The bundled goose appends a URL-encoded cursor to its first-page query.
+fn catalog_query(query: Option<&str>, first_page: &str) -> bool {
+    let Some(rest) = query.and_then(|query| query.strip_prefix(first_page)) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(token) = rest.strip_prefix("&page_token=") else {
+        return false;
+    };
+    let mut bytes = token.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'%' if bytes.next().is_some_and(|b| b.is_ascii_hexdigit())
+                && bytes.next().is_some_and(|b| b.is_ascii_hexdigit()) => {}
+            b'-' | b'.' | b'_' | b'~' => {}
+            byte if byte.is_ascii_alphanumeric() => {}
+            _ => return false,
+        }
+    }
+    !token.is_empty()
 }
 
 /// A serving-endpoint name: no separator, dot segment or escape.

@@ -21,6 +21,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useTeamMentions } from "./use-team-mentions";
 import { useMentionChoices } from "./use-mention-choices";
 import type { ComposerSession } from "../../features/messages/composer-session";
+import { withHumanMentionSelection } from "../../features/messages/mention-draft";
 import {
   outsideMentionDetail,
   remoteMentionDetail,
@@ -323,7 +324,11 @@ export function MentionPicker({
               onKeyDown={(event) => {
                 if (event.key === "Enter") event.preventDefault();
                 // Shift+Enter and Shift+arrows stay text keys, as before.
-                const handled = !event.shiftKey && highlight.keyDown(event);
+                const handled =
+                  !event.shiftKey &&
+                  withHumanMentionSelection(event.nativeEvent, () =>
+                    highlight.keyDown(event),
+                  );
                 // Keep these keys from the composer behind the popup.
                 if (handled || event.key === "Enter") event.stopPropagation();
               }}
@@ -430,7 +435,11 @@ export function MentionPicker({
                       aria-current={false}
                       aria-pressed={audience ? addressed : undefined}
                       disabled={disabled || !!reason}
-                      onClick={() => chooseRecipient(recipient)}
+                      onClick={(event) =>
+                        withHumanMentionSelection(event.nativeEvent, () =>
+                          chooseRecipient(recipient),
+                        )
+                      }
                       label={
                         <span className="flex flex-col whitespace-normal">
                           {/* One element, so the flex column keeps the
@@ -530,7 +539,11 @@ export function MentionPicker({
                     </span>
                   }
                   aria-label={`${team.name} · ${team.detail}`}
-                  onClick={() => chooseTeam(team)}
+                  onClick={(event) =>
+                    withHumanMentionSelection(event.nativeEvent, () =>
+                      chooseTeam(team),
+                    )
+                  }
                 />
               ))}
               {members && !candidates.length && !teams.choices.length && (

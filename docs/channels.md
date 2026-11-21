@@ -188,8 +188,8 @@ palette; legacy sidebar filters are ignored. Each section's ellipsis menu offers
 manually marked unread messages or unread thread activity. Muted channels with
 retained unread backlog remain eligible even when their ordinary sidebar cues
 are quiet: mute does not mark messages read. Active opens the compact
-**Active in the last** dialog with 1-, 7-, 30-, and 90-day text-only radio tiles
-in two columns.
+**Active in the last** dialog with 1-, 3-, 7-, 30-, and 90-day text-only radio
+tiles in two columns; the odd last tile spans the row.
 Apply saves the selected rolling window and activates the filter;
 Cancel leaves the saved choice unchanged. The dialog retains its draft after a
 failed save, and the menu shows the selected window. Activity uses verified timestamps, including your own messages once the relay accepts them. Channels with unknown activity remain visible until their activity is read. Activity applies in one update when a read finishes; a read that fails partway still applies what it read, and channels it did not reach stay available alongside the activity Retry warning. These filters are encrypted account preferences on the current relay, using a

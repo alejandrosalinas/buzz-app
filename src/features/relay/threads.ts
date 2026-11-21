@@ -7,7 +7,7 @@ import {
   threadBounds,
   type ThreadCursor,
 } from "./thread-window";
-import { threadReference } from "./thread-reference";
+import { isThreadContent, threadReference } from "./thread-reference";
 export { threadReference } from "./thread-reference";
 import type { ChannelMessage } from "./contracts";
 import type { EventData, ReadFilter, RelayEvent } from "./events";
@@ -29,8 +29,6 @@ const MAX_EVENTS = 2000;
 const MAX_BYTES = 4 * 1024 * 1024;
 /** The relay's `thread_window` row allowlist excludes legacy diffs (kind 40008). */
 const STRICT_WINDOW_KINDS = [9, 40002];
-const contentKind = (event: EventData) =>
-  [9, 40002, 40008].includes(event.kind);
 const inChannel = (event: EventData, channelId: string) =>
   event.tags.some(([name, value]) => name === "h" && value === channelId);
 /** Relay thread-cursor order (seconds, id); rendered order is `compareMessages`. */
@@ -393,7 +391,7 @@ export function createThreadView({
     const operations = (canAccess() ? (local?.snapshot() ?? []) : []).filter(
       // Failed reply intent stays visible for same-event retry, just like channel
       // messages; failed edits/reactions must not change the rendered content.
-      (item) => item.delivery !== "failed" || contentKind(item.event),
+      (item) => item.delivery !== "failed" || isThreadContent(item.event),
     );
     const events = new Set(related(operations.map((item) => item.event)));
     return operations.filter((item) => events.has(item.event));
@@ -582,7 +580,7 @@ export function createThreadView({
     !subthreadId &&
     seed &&
     canAccess() &&
-    contentKind(seed) &&
+    isThreadContent(seed) &&
     inChannel(seed, channelId)
   ) {
     rootId = threadReference(seed)?.rootId ?? seed.id;
@@ -681,7 +679,9 @@ export function createThreadView({
     // Only the complete target/overlay fold enters shared admission below.
     const event = visible(response).find(
       (event) =>
-        event.id === id && contentKind(event) && inChannel(event, channelId),
+        event.id === id &&
+        isThreadContent(event) &&
+        inChannel(event, channelId),
     );
     if (!active()) return "cancelled";
     if (!event) return "unavailable";
@@ -917,7 +917,7 @@ export function createThreadView({
         const event = selected.find(
           (event) =>
             event.id === messageId &&
-            contentKind(event) &&
+            isThreadContent(event) &&
             inChannel(event, channelId),
         );
         if (!event) throw new Error("The selected message is unavailable.");
@@ -976,7 +976,7 @@ export function createThreadView({
           !root.some(
             (event) =>
               event.id === rootId &&
-              contentKind(event) &&
+              isThreadContent(event) &&
               inChannel(event, channelId) &&
               !threadReference(event),
           )
@@ -1063,7 +1063,7 @@ export function createThreadView({
           !events.some(
             (event) =>
               event.id === rootId &&
-              contentKind(event) &&
+              isThreadContent(event) &&
               inChannel(event, channelId) &&
               !threadReference(event),
           )

@@ -587,13 +587,22 @@ Quitting Buzz also turns it off.
   that represents it.
   Plugins can keep separate unsent drafts in the same workspace. Where supported,
   each draft keeps its text, files, settings, model, and effort when you return.
-  A locally hosted agent can list your personal workspace IDs with
-  `solo_workspace_list` and explicitly choose one when creating a Solo chat,
-  provided it includes you in the chat’s members. This only files the new chat;
-  it does not copy workspace defaults or Canvas. A known pre-write refusal
-  reports “created, not filed.” A write that cannot be
-  confirmed reports that placement may have completed: inspect or refresh the
-  reported chat before **Move to**, and never create it again.
+  A locally hosted agent can list your sidebar workspaces with `workspace_list`
+  and choose one when it creates a chat, channel or forum, if you can see the
+  result: it must be open or include you in its members. A channel or forum
+  can start with members, as a Solo chat does. Unless the agent picks a template, the
+  workspace’s defaults apply as from its **New chat** or **New channel**: its
+  default agents and Canvas. Only a chat of you and your own agents gets the
+  workspace folders and worktree settings; a team channel, or a chat with anyone
+  else, gets only the Canvas instructions. A default agent that is archived or
+  not in this community is skipped, as **New chat** and **New channel** skip it,
+  and the agent says so. A default agent that only you can add is left out too,
+  and the agent says so; add it yourself. A known pre-write refusal reports
+  “created, not filed.” A write that cannot be confirmed reports that placement
+  may have completed: check the sidebar before moving it, and never create it
+  again. The agent can also move any conversation you can see, including a DM,
+  to a workspace with `channel_move`, or unfile it with an empty workspace, as
+  **Move to** does. Chats a plugin manages stay where the plugin puts them.
   Solo chats can also be shared with other people; do not describe every Solo
   chat as visible only to its creator. In a Solo chat, including its first
   message, **@** can name anyone in the community. A tagged agent of yours joins
@@ -683,6 +692,12 @@ Quitting Buzz also turns it off.
   does not choose where the agent works. A chip someone else
   sends, or a folder no longer in your repositories folder, grants nothing.
   A bare **!**, or **!** before a space, stays text.
+- **Skill chips.** In the desktop app, when a message addresses one of your own
+  local agents whose harness declares skill folders, type **/** and part of a
+  skill name in the composer to list matching skills from those folders on this
+  device. Choosing one adds a skill chip targeted at that agent; if a message
+  addresses more than one agent, the picker asks you to mention one agent first.
+  A query that matches no skill stays plain text.
 - **Activity** (the bell at the top of the Messages sidebar) collects DMs, ordinary responses in Solo chats, mentions of you, and
   replies in threads you started, replied in, or follow. Solo chats appear under All, not DMs; their nested
   threads stay separate. Agent-only coordination stays out. The tabs (All, Threads, Mentions, DMs, Reactions) narrow it by
@@ -932,9 +947,13 @@ Quitting Buzz also turns it off.
   you typed. The keyword order shows first; the reordered list replaces it a
   moment later, and a small sparkle appears at the end of the Messages heading
   (hover it to see **Reranked**). If you've already moved the
-  highlight or chosen a result, the order stays as it is. The provider sees the query and those
-  messages' text, conversation names and authors. Newest-first and filter-only
-  searches aren't reranked.
+  highlight or chosen a result, the order stays as it is. Other things equal,
+  it favors messages people wrote over agent or workflow output, then ones
+  that mention you, then ones in conversations you're in. The provider sees
+  the query and those messages' text, dates, conversation names and authors,
+  and whether each is a direct message, yours, from an agent or workflow,
+  mentions you, or is in a conversation you're in. Newest-first and filter-only searches aren't
+  reranked.
 - **Ask an agent**: start with `ask:` to write a question for your default
   agent, or choose **Ask** under a long query. Enter opens New chat with the
   question addressed to that agent; press Enter again to send it. If New chat
@@ -1709,11 +1728,11 @@ If an agent reports incompatible synced settings, choose the **Previous Versions
   from this device only; it may stay in that community's channels.
 - **Settings → Agent setup → Base instructions** shows what Buzz tells every
   agent on this device before the agent's own instructions, one section per
-  topic. For Publishing, Progress, Etiquette, Agent Memory, Engineering
-  Discipline, Commit identity and Autonomy, choose **Default**, **Off**, or
-  **Custom** with your own text of up to 4 KiB, then **Save**. Default shows
-  the section's text to read and copy; choose Custom to edit it. The other
-  sections are always on, or Buzz sets them for the conversation; **All
+  topic. For Publishing, Progress, Etiquette, Agent Memory, Commit identity
+  and Autonomy, choose **Default**, **Off**, or **Custom** with your own text
+  of up to 4 KiB, then **Save**. Default shows the section's text to read and
+  copy; choose Custom to edit it. The other sections are always on, or Buzz
+  sets them for the conversation; **All
   sections** shows the default text of each. A plugin that is on can declare
   sections that it replaces in the chats it manages: its install review lists
   them. For example, such a plugin can set where an agent's work happens in a
@@ -1893,7 +1912,8 @@ If an agent reports incompatible synced settings, choose the **Previous Versions
   "Ran without the agent gateway" beside its prompt only while the app keeps
   running; goose compacting the conversation can remove the prompt and its
   note. A wake run outside a conversation shows no note.
-  If Buzz routes a Goose turn through the gateway, choose Thread or Channel
+  Eligible local Goose agents can use the gateway with either the Databricks
+  or Databricks AI Gateway provider. For these turns, choose Thread or Channel
   session scope. A gateway-routed Goose turn in Community scope shows an error.
   While goose uses the gateway, compaction requires gateway access. If access
   is still being checked, try again once the check finishes.
@@ -2111,7 +2131,7 @@ tab, asks **Discard changes?** first; **Keep editing** keeps them.
   development** plugin is on (it is by default). It gives them
   `plugin_authoring_guide`, `plugin_status` and `plugin_reload`. The person
   installs a new plugin first: **Manage plugins → Add → Browse** under Add from
-  folder. After that the agent can reload it from that folder. A reload that
+  folder, or by approving the agent's install request for the folder. After that the agent can reload it from that folder. A reload that
   fails to start restores the previous version. Changed host access still needs
   the person's review through the plugin's **Update**.
 - **Performance diagnostics** starts off and is unlisted in the Plugins catalog.
@@ -2128,7 +2148,10 @@ tab, asks **Discard changes?** first; **Keep editing** keeps them.
   message in the conversation shows a card with **Review** and **Decline**, and the
   change waits until the person reviews and confirms it there (or under **Requested
   by agents** in **Settings → Plugins → Manage plugins**). A restart discards it. An agent cannot
-  install plugin code by itself.
+  install plugin code by itself. An install request can name a Git repository or
+  a local folder; a folder installs linked, as **Browse** does, so anything that
+  can write to the folder can change the plugin's code and reload it without
+  another review while its access stays the same.
 - A `buzz://plugin-install` link, or a plugin's request to install another
   plugin from a URL, can update a plugin with that ID installed from Git in
   place: review the source change and choose **Update**, with no removal. It is

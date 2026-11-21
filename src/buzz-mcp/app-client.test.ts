@@ -574,7 +574,7 @@ it("forwards workspace discovery and one-use filing only while the app client is
   const list = vi.fn(async () => [{ id: "work", name: "Work" }]);
   const prepare = vi.fn(async () => file);
   const client = appClient(
-    { soloWorkspaces: { list, prepare } } as unknown as AgentHandle,
+    { workspaces: { list, prepare } } as unknown as AgentHandle,
     {
       read: async () => new Uint8Array(),
       memories: async () => ({ entries: [], partial: false }),
@@ -583,20 +583,21 @@ it("forwards workspace discovery and one-use filing only while the app client is
       },
     },
   );
-  expect(await client.soloWorkspaces?.list()).toEqual([
+  expect(await client.workspaces?.list()).toEqual([
     { id: "work", name: "Work" },
   ]);
-  const place = await client.soloWorkspaces?.prepare("work", ["owner"], "chat");
+  const audience = { members: ["owner"], open: false };
+  const place = await client.workspaces?.prepare("work", audience, "chat");
   expect(prepare).toHaveBeenCalledExactlyOnceWith(
     "work",
-    ["owner"],
+    audience,
     "chat",
     undefined,
   );
   live = false;
   await expect(place?.("chat")).rejects.toThrow("retired");
   expect(file).not.toHaveBeenCalled();
-  await expect(client.soloWorkspaces?.list()).rejects.toThrow("retired");
+  await expect(client.workspaces?.list()).rejects.toThrow("retired");
 });
 
 it("rejects app retirement after a completed placement without undoing it", async () => {
@@ -612,7 +613,7 @@ it("rejects app retirement after a completed placement without undoing it", asyn
   });
   const client = appClient(
     {
-      soloWorkspaces: { list: async () => [], prepare: async () => file },
+      workspaces: { list: async () => [], prepare: async () => file },
     } as unknown as AgentHandle,
     {
       read: async () => new Uint8Array(),
@@ -622,7 +623,11 @@ it("rejects app retirement after a completed placement without undoing it", asyn
       },
     },
   );
-  const place = await client.soloWorkspaces?.prepare("work", ["owner"], "chat");
+  const place = await client.workspaces?.prepare(
+    "work",
+    { members: ["owner"], open: false },
+    "chat",
+  );
   const pending = place?.("chat");
   const refused = expect(pending).rejects.toThrow("retired");
   try {
@@ -642,7 +647,7 @@ it("does not expose workspace capability on unsupported handles", () => {
     appClient({} as AgentHandle, {
       read: async () => new Uint8Array(),
       memories: async () => ({ entries: [], partial: false }),
-    }).soloWorkspaces,
+    }).workspaces,
   ).toBeUndefined();
 });
 

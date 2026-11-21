@@ -429,6 +429,11 @@ details:not([open]) > summary .sectionChevron {
 .timelinePlaceholder {
   flex: 1;
 }
+/* The loading mark fills the timeline's slot, so it sits centered in it. */
+.timelineLoading {
+  display: flex;
+  flex-direction: column;
+}
 .panelStack {
   width: max(
     var(--split-floor, 19.75rem),
@@ -531,7 +536,7 @@ details:not([open]) > summary .sectionChevron {
   .board,
   .board:has(> [data-panel-dock]:not([hidden], [data-closing])) {
     grid-template-columns: minmax(0, 1fr);
-    overflow: hidden;
+    overflow: clip;
   }
   .panelStack > [data-panel-resize] {
     display: none;
@@ -554,7 +559,7 @@ details:not([open]) > summary .sectionChevron {
   .board,
   .board:has(> [data-panel-dock]:not([hidden], [data-closing])) {
     grid-template-columns: minmax(0, 1fr);
-    overflow: hidden;
+    overflow: clip;
   }
   .panelStack > [data-panel-resize] {
     display: none;
@@ -577,7 +582,7 @@ details:not([open]) > summary .sectionChevron {
   .board,
   .board:has(> [data-panel-dock]:not([hidden], [data-closing])) {
     grid-template-columns: minmax(0, 1fr);
-    overflow: hidden;
+    overflow: clip;
   }
   .panelStack {
     grid-column: 1 / -1;

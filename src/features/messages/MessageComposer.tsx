@@ -126,6 +126,7 @@ import {
   type RefObject,
 } from "react";
 import { fullSession, type ComposerSession } from "./composer-session";
+import { sendWithOwnerMentions } from "../relay/owner-mentions";
 import {
   draftTokens,
   messageTokenTags,
@@ -154,6 +155,9 @@ import {
   MAX_DRAFT_GIFS,
   mentionBoundary,
   mentionDraft,
+  editorMention,
+  hasHumanMentionSelection,
+  hostComposerProvenance,
   stageableGif,
   type MentionDraft,
   type MentionRecipient,
@@ -204,6 +208,7 @@ import { avatarMedia } from "../../shared/avatar-source";
 import { followUpBehaviorPreference } from "./follow-up-preference";
 import { followUpQueue } from "./follow-up-queue";
 import { followUpMessage } from "./follow-up-message";
+import { heldBySendGate } from "./outgoing-message";
 import { QueuedFollowUps } from "./QueuedFollowUps";
 
 const noChannels: ReturnType<ComposerSession["channels"]["list"]> = {
@@ -433,12 +438,17 @@ export type MessageComposerProps = {
       picks?: MentionPicks,
       draftPicks?: DraftPicks,
       draftPicksRevision?: string | null,
+      explicitRecipientIds?: readonly string[],
     ) => void;
   };
 };
 
 /** Safe to retarget through ordinary props; callers do not own internal remount keys. */
-export function MessageComposer(props: MessageComposerProps) {
+export function MessageComposer({
+  evidenceOwner,
+  ...props
+}: MessageComposerProps & { evidenceOwner?: typeof hostComposerProvenance }) {
+  const ownerProvenance = evidenceOwner === hostComposerProvenance;
   const key = `${props.submission?.draftKey ?? ""}:${messageViewKey(
     props.session,
     props.scope,
@@ -449,16 +459,17 @@ export function MessageComposer(props: MessageComposerProps) {
     <TypingPresentation active key={key}>
       <TargetOpenerProvider canOpen={props.canOpenLink} open={props.onOpenLink}>
         {props.ownSoloConversation ? (
-          <PersonalComposer {...props} />
+          <PersonalComposer {...props} ownerProvenance={ownerProvenance} />
         ) : (
-          <Composer {...props} />
+          <Composer {...props} ownerProvenance={ownerProvenance} />
         )}
       </TargetOpenerProvider>
     </TypingPresentation>
   );
 }
 
-function PersonalComposer(props: MessageComposerProps) {
+type OwnedComposerProps = MessageComposerProps & { ownerProvenance: boolean };
+function PersonalComposer(props: OwnedComposerProps) {
   const { session, channelId, submission, agentFilter } = props;
   const choices = useAgentChoices(session, true, true);
   const profiles = useSyncExternalStore(
@@ -600,7 +611,8 @@ function Composer({
   inviteAgents = false,
   trailingTool,
   workspace,
-}: MessageComposerProps) {
+  ownerProvenance,
+}: OwnedComposerProps) {
   const active = useConversationPresentation();
   // Previews replace the list on every message; subscribe to this channel's facts.
   const listed =
@@ -2121,7 +2133,8 @@ function Composer({
       return false;
     }
     completion.invalidate();
-    if (!field.insertText(text, recipient, range, terminator, focus)) {
+    const selected = recipient && editorMention(recipient);
+    if (!field.insertText(text, selected, range, terminator, focus)) {
       setError("Message is too long to insert text");
       return false;
     }
@@ -2201,6 +2214,7 @@ function Composer({
       string,
       {
         resolve: CompletionPending["resolve"];
+        explicit?: true;
         controller?: AbortController | undefined;
         /** Settles with the typed name and why when the chip returned to prose. */
         settled?: Promise<PendingRefusal | undefined> | undefined;
@@ -2227,7 +2241,11 @@ function Composer({
           : undefined;
     const accepted =
       recipient && !reason
-        ? { pubkey: recipient.pubkey, name: recipient.name }
+        ? {
+            pubkey: recipient.pubkey,
+            name: recipient.name,
+            ...(entry.explicit ? { explicit: true as const } : {}),
+          }
         : null;
     const name = valueRef.current.pending?.find((chip) => chip.id === id)?.name;
     // Held through an IME composition, the outcome is a promise: the chip is
@@ -2434,7 +2452,9 @@ function Composer({
     )
       return false;
     const unique = [
-      ...new Map(recipients.map((person) => [person.pubkey, person])).values(),
+      ...new Map(
+        recipients.map((person) => [person.pubkey, editorMention(person)]),
+      ).values(),
     ];
     if (unique.length > 32) {
       setError("Choose at most 32 recipients");
@@ -2509,7 +2529,8 @@ function Composer({
     const admitted = admits();
     if (unique.length > 32 || unique.some((person) => !admitted(person.pubkey)))
       return false;
-    if (!input.current.replaceRecipients(unique)) return false;
+    if (!input.current.replaceRecipients(unique.map(editorMention)))
+      return false;
     completion.invalidate();
     setError(undefined);
     return true;
@@ -2577,7 +2598,10 @@ function Composer({
       completion.invalidate();
       const id = field.insertPendingMention(edit.pending.name, query, typed);
       if (!id) return false;
-      pendingMentions.current.set(id, { resolve: edit.pending.resolve });
+      pendingMentions.current.set(id, {
+        resolve: edit.pending.resolve,
+        ...(hasHumanMentionSelection() ? { explicit: true } : {}),
+      });
       setError(undefined);
       return true;
     }
@@ -2945,7 +2969,7 @@ function Composer({
     }
     return { recipients, references };
   }
-  async function send() {
+  async function send(human = false) {
     if (!permitted.current || voice.isCapturing() || forwarded.blocked) return;
     if (editing.target) {
       if (editDisabled || editing.locked) return;
@@ -3125,6 +3149,12 @@ function Composer({
     const attempt = new AbortController();
     sendAttempt.current = attempt;
     const captured = valueRef.current;
+    const explicit =
+      human && ownerProvenance
+        ? captured.recipients
+            .filter((person) => person.explicit)
+            .map((person) => person.pubkey)
+        : undefined;
     const capturedRecipients = routing ? recipientsNow : captured.recipients;
     const capturedAttachments = attachments.store.snapshot();
     // Mention resolution can update recipients before their picker commits.
@@ -3221,6 +3251,7 @@ function Composer({
           ownSoloConversation ? capturedRunPicks : undefined,
           ownSoloConversation ? capturedPicks : undefined,
           ownSoloConversation ? capturedPicksRevision : undefined,
+          ...(explicit ? [explicit] : []),
         );
         return;
       }
@@ -3333,6 +3364,9 @@ function Composer({
         threadRootId && mediaTimeSeconds !== undefined
           ? mediaTimeReply(mediaTimeSeconds, composerMarkdown(captured))
           : composerMarkdown(captured);
+      const explicitRecipientIds = explicit?.filter((id) =>
+        recipients.includes(id),
+      );
       // Alone with agents, the toolbar keeps the agents; the next draft starts empty.
       const next = routing
         ? mentionDraft("")
@@ -3385,11 +3419,20 @@ function Composer({
       ) {
         if (compactingNow(recipients))
           throw new Error("Wait for compaction to finish, or interrupt it.");
-        if (!tokens.length) return publishMessage(uploaded, sender);
+        const publish = () =>
+          sendWithOwnerMentions(
+            sender,
+            explicitRecipientIds,
+            () => publishMessage(uploaded, sender),
+            sourceRootId && threadRootId
+              ? { anchorId: threadRootId, threadId: sourceRootId }
+              : undefined,
+          );
+        if (!tokens.length) return publish();
         // A detached window's relay connection would drop the chips.
         const main = fullSession(sender);
         if (!main) throw new Error("Send chips from the main window.");
-        return signMessageTokens(tokens, () => publishMessage(uploaded, main));
+        return signMessageTokens(tokens, publish);
       }
       function publishMessage(
         uploaded: readonly UploadedAttachment[],
@@ -3494,8 +3537,36 @@ function Composer({
             profiles,
             knownAgentPubkeys(profiles, session.agentChoices.snapshot()),
           )
-        )
+        ) {
+          const gate =
+            host &&
+            !captured.forward &&
+            heldBySendGate(
+              extensions?.sendGates,
+              {
+                channelId,
+                ...(threadRootId
+                  ? { threadRootId: sourceRootId ?? threadRootId }
+                  : {}),
+                ...(threadRootId && replyParentId
+                  ? { parentId: replyParentId }
+                  : {}),
+                text: content,
+                recipients,
+                references,
+                attachments: uploaded,
+                picks: sentPicks,
+                ...(threadRootId && mediaTargetUrl
+                  ? { mediaTarget: mediaTargetUrl }
+                  : {}),
+                ...(tokens.length ? { tokens } : {}),
+              },
+              host,
+            );
+          if (gate === true) return undefined;
+          if (gate) throw new Error(gate.refuse);
           return publishNow(uploaded, session);
+        }
         const message = {
           channelId,
           ...(captured.forward ? { forward: captured.forward } : {}),
@@ -3504,6 +3575,7 @@ function Composer({
           attachments: uploaded,
           references,
           picks: sentPicks,
+          ...(explicitRecipientIds ? { explicitRecipientIds } : {}),
           ...(tokens.length ? { tokens } : {}),
         };
         const send = followUpMessage(
@@ -3783,6 +3855,7 @@ function Composer({
           threadRootId={threadRootId}
           canOpen={canOpenLink ?? cannotOpen}
           open={accessoryCommands.open}
+          onFocusedRemoval={toolCommands.focus}
         />
       )}
     </div>
@@ -4276,7 +4349,7 @@ function Composer({
                   )
                 ) {
                   event.preventDefault();
-                  if (!event.repeat) send();
+                  if (!event.repeat) send(event.nativeEvent.isTrusted);
                   return;
                 }
                 if (
@@ -4297,7 +4370,7 @@ function Composer({
                     event.currentTarget.insertLineBreak();
                     return;
                   }
-                  send();
+                  send(event.nativeEvent.isTrusted);
                 }
               }}
             />
@@ -4415,6 +4488,11 @@ function Composer({
               }
               size="toolbar"
               type="submit"
+              onClick={(event) => {
+                if (!event.nativeEvent.isTrusted) return;
+                event.preventDefault();
+                void send(true);
+              }}
               style={editing.target ? undefined : accentButtonStyle}
               aria-label={editing.target ? "Save changes" : "Send message"}
               aria-describedby={

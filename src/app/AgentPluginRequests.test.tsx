@@ -49,9 +49,18 @@ async function harness(plugins: PluginInfo[] = []) {
   const policy: { current: ManagedPlugins | undefined } = {
     current: undefined,
   };
+  const folderPreview = (source = "/src/plugins"): ImportPreview => ({
+    ...preview(),
+    source,
+    commit: null,
+  });
   const imports = {
     git: vi.fn(async () => preview()),
     checkGit: vi.fn(async () => preview()),
+    folder: vi.fn(async () => folderPreview("/real/plugins")),
+    checkPath: vi.fn(async () => folderPreview()),
+    previewFolder: vi.fn(async () => folderPreview("/real/plugins")),
+    checkFolder: vi.fn(async () => ({ revision: "new" })),
     discard: vi.fn(async () => {}),
   };
   const manager = {
@@ -145,6 +154,78 @@ it("installs the pinned commit only after the owner confirms, then tells the age
   expect(manager.change).toHaveBeenCalledWith("enable", "example.tasks");
   expect(agent.status(requestId).state).toBe("approved");
   expect(screen.queryByRole("region")).toBeNull();
+});
+
+it("installs a local folder through the folder review, linked to that folder", async () => {
+  const { manager, imports, agent } = await harness();
+  const { requestId } = await agent.request({
+    action: "install",
+    repository: "/src/plugins",
+    reason: "Tags my messages",
+  });
+  expect(imports.folder).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole("button", { name: "Review Tasks" }));
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review Tasks Plugin access",
+  });
+  const note = await within(dialog).findByText(
+    "Edits to the plugin in this folder update live.",
+  );
+  // Prose wraps at words; only the path above it breaks anywhere.
+  expect(note).toHaveClass("break-words");
+  expect(note).not.toHaveClass("break-all");
+  expect(imports.folder).toHaveBeenCalledExactlyOnceWith("/src/plugins");
+  expect(imports.git).not.toHaveBeenCalled();
+  // Shows the folder the review read, which is the one that installs.
+  expect(within(dialog).getByText("/real/plugins/tasks")).toBeVisible();
+  expect(within(dialog).getByText(/tasks\.example\.com/)).toBeVisible();
+  expect(agent.status(requestId).state).toBe("pending");
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Install plugin" }),
+  );
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(manager.installImport).toHaveBeenCalledExactlyOnceWith(
+    "preview",
+    "tasks",
+  );
+  expect(agent.status(requestId).state).toBe("approved");
+});
+
+it("reviews a folder update from the plugin's saved folder", async () => {
+  const { manager, imports, agent } = await harness([
+    {
+      manifest,
+      source: "external",
+      enabled: true,
+      revision: "old",
+      previous: null,
+      reloadable: true,
+      error: null,
+      updateSource: { root: "/src/plugins", path: "tasks" },
+    },
+  ]);
+  const { requestId } = await agent.request({
+    action: "update",
+    id: "example.tasks",
+    reason: "Picks up the new rules",
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Review Tasks" }));
+  const dialog = await screen.findByRole("dialog", { name: "Update Tasks" });
+  await within(dialog).findByText(
+    "Edits to the plugin in this folder update live.",
+  );
+  expect(imports.previewFolder).toHaveBeenCalledExactlyOnceWith(
+    "example.tasks",
+  );
+  expect(imports.folder).not.toHaveBeenCalled();
+  expect(within(dialog).getByText("/real/plugins/tasks")).toBeVisible();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(manager.installImport).toHaveBeenCalledExactlyOnceWith(
+    "preview",
+    "tasks",
+  );
+  expect(agent.status(requestId).state).toBe("approved");
 });
 
 it("leaves the request pending when the review is closed, and declines it on request", async () => {

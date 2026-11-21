@@ -15,6 +15,7 @@ import { foldMessages } from "./fold";
 import { PublishRejected } from "./outbox";
 import { ReadError } from "./errors";
 import {
+  completeHeads,
   flush,
   keypair,
   message,
@@ -230,6 +231,8 @@ it("reconciles retained channel reactions through confirmation and access loss",
   const root = message(member, "c", "Still visible", 1);
   h.session.channels.ensure("c");
   h.live.receive([roster(relay, "c", [viewer.pubkey], 1), root]);
+  completeHeads(h.wire, relay, [root]);
+  await flush();
   h.live.receive(
     Array.from({ length: 9 }, (_, index) =>
       message(member, "other", "x".repeat(1024 * 1024), 100 + index),

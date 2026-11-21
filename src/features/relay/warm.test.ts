@@ -58,9 +58,10 @@ const warmed = (
     filters: readonly { "#h"?: readonly string[] }[];
   }[],
 ) =>
-  pending.flatMap((entry) =>
-    entry.filters.flatMap((filter) => filter["#h"] ?? []),
-  );
+  pending.flatMap((entry) => [
+    // A head read's notice filter addresses the same channel.
+    ...new Set(entry.filters.flatMap((filter) => filter["#h"] ?? [])),
+  ]);
 
 describe("roster warming", () => {
   it("warms the roster on a cold load without any channel being opened, one background head at a time", async () => {

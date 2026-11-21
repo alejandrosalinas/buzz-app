@@ -400,7 +400,7 @@ test.describe("public preview recovery", () => {
       // No click: a scheduled retry reads the head again.
       await expect.poll(() => retryRequested, { timeout: 20_000 }).toBe(true);
       await expect(
-        history.getByText("Loading messages…", { exact: true }),
+        history.getByRole("status").filter({ hasText: "Loading messages…" }),
       ).toBeVisible();
       releaseHead();
       await expect(history.locator("[data-message-scroller]")).toBeVisible();

@@ -8,6 +8,7 @@ import {
 import {
   agentCanvas,
   validateWorkspace,
+  loadChannelSetup,
   loadChatSetup,
   readWorkspace,
   projectTemplateId,
@@ -185,6 +186,7 @@ it("loads exact project defaults and blocks when the catalog fails", async () =>
     projectId: "work",
     canvas: "Work here",
     agents: [],
+    skipped: [],
     revision: "head",
   });
   f.kit.status = "error";
@@ -252,7 +254,7 @@ it.each([
         value: {
           type: "template",
           id: await projectTemplateId("work"),
-          canvas: "",
+          canvas: workspaceCanvas({ folders: ["/repo"], canvas: "Rules" }),
           agents: [pubkey],
           teamIds: [],
         },
@@ -290,12 +292,25 @@ it.each([
   if (state === "eligible")
     expect(await loadChatSetup(f.session, "work")).toMatchObject({
       agents: [pubkey],
+      skipped: [],
     });
+  // An agent not available here is skipped, and the create still goes on.
+  else if (state === "archived" || state === "removed-legacy") {
+    expect(await loadChatSetup(f.session, "work")).toMatchObject({
+      agents: [],
+      skipped: [pubkey],
+    });
+    // A new channel gets the same agents, and only the shareable Canvas.
+    expect(await loadChannelSetup(f.session, "work")).toEqual({
+      canvas: "Rules",
+      agents: [],
+      skipped: [pubkey],
+    });
+  }
+  // One not yet checked is neither: the start waits.
   else
     await expect(loadChatSetup(f.session, "work")).rejects.toThrow(
-      state === "incomplete" || rosterIncomplete
-        ? "couldn’t load"
-        : "unavailable",
+      "couldn’t load",
     );
   if (state === "incomplete" || rosterIncomplete) {
     if (rosterIncomplete) expect(refreshRoster).toHaveBeenCalledOnce();

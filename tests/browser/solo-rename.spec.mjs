@@ -749,6 +749,7 @@ test("composable row removal respects blur and continues past a CSS-hidden neigh
   page,
   app,
 }) => {
+  await page.setViewportSize({ width: 1100, height: 400 });
   await regionFixture(page, app);
   const owned = regionRow(page, alpha);
   await owned.focus();
@@ -762,18 +763,37 @@ test("composable row removal respects blur and continues past a CSS-hidden neigh
     await page.evaluate(() => document.activeElement === document.body),
   ).toBe(true);
   await page.evaluate(() => window.fixtureSoloRegion.present([], []));
+  await page.evaluate(() => window.fixtureSoloRegion.addTransientRegion());
+  const viewport = sidebar(page);
+  const heading = viewport.locator(
+    '[data-sidebar-section^="solo-region:"] summary[aria-label="Solo"]',
+  );
+  const otherHeading = viewport.locator('summary[aria-label="Temporary"]');
+  // Leave room to scroll past the source heading even after its rows vanish.
+  await heading.evaluate((node) => {
+    node.closest("[data-sidebar-section]").style.paddingBlockEnd = "128px";
+  });
+  await otherHeading.evaluate((node) => {
+    node.closest("[data-sidebar-section]").style.paddingBlockEnd = "350px";
+  });
   await owned.focus();
+  await heading.evaluate((node) => {
+    const port = node.closest("nav");
+    port.scrollTop +=
+      node.getBoundingClientRect().bottom -
+      port.getBoundingClientRect().top +
+      100;
+  });
+  await expect(heading).not.toBeInViewport();
+  await expect(otherHeading).toBeInViewport({ ratio: 1 });
+  await expect(owned).toBeFocused();
   await page.evaluate(
     (ids) => window.fixtureSoloRegion.present([ids[0]], [ids[1]]),
     [alpha, beta],
   );
   await expect(owned).toHaveCount(0);
   await expect(regionRow(page, beta)).toBeHidden();
-  await expect(
-    sidebar(page).locator(
-      '[data-sidebar-section^="solo-region:"] summary[aria-label="Solo"]',
-    ),
-  ).toBeFocused();
+  await expect(heading).toBeFocused();
 });
 
 // A real browser must move focus off the detached summary to the remaining

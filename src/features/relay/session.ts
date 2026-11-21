@@ -147,7 +147,8 @@ import {
   browserThreadFollows,
   type ThreadFollowStorage,
 } from "./thread-follows";
-import { createMessages } from "./messages";
+import { createMessages, replyInvocationIntents } from "./messages";
+import { createOwnerMentionStore } from "./owner-mentions";
 import { retryRead } from "./read-retry";
 import { messageAuthor } from "./fold";
 import { createThreadView, resumeAfter, type ThreadResume } from "./threads";
@@ -254,6 +255,7 @@ export function createRelaySession(
     localAgents?: LocalAgentSource | undefined;
     presenceActivity?: PresenceActivity;
     outboxStorage?: OutboxStorage;
+    ownerMentionStore?: ReturnType<typeof createOwnerMentionStore>;
     readStateStorage?: ReadStateStorage;
     /** The device-local follow choices imported once into sync. */
     threadFollows?: ThreadFollowStorage;
@@ -359,6 +361,10 @@ export function createRelaySession(
    * dropped with any access change. */
   const resumes = new ByteLru<ThreadResume>(32, 8 * 1024 * 1024);
   const writer = transport?.writer;
+  const ownerMentionStore =
+    transport && writer
+      ? (options.ownerMentionStore ?? createOwnerMentionStore(transport.viewer))
+      : undefined;
   const clock = new MessageClock();
   const uploadAttachment = transport?.uploadAttachment;
   const writes =
@@ -393,7 +399,10 @@ export function createRelaySession(
               // Product feedback is accepted into a private sidecar, not queryable history.
               if (event.kind !== PRODUCT_FEEDBACK_KIND) confirm(event);
               // An `unknown` attempt waits for confirm() to read it back.
-              if (acknowledged) acceptOwnActivity(event);
+              if (acknowledged) {
+                ownerMentionStore?.confirm(event, canConfirmOwnerMentions);
+                acceptOwnActivity(event);
+              }
             },
             needsReceipt: isWorkflowOperation,
             onReceipt: (event, message) => workflows.receipt(event, message),
@@ -457,6 +466,26 @@ export function createRelaySession(
   }
   const canReadRemote = (id: string) =>
     !options.cachedOnly && canAccess(id) && !channels.queries.get?.(id)?.cached;
+  function canConfirmOwnerMentions(id: string) {
+    if (closed || revoking || cacheClearing || options.cachedOnly) return false;
+    const channel = channels.queries.get?.(id);
+    // The general history gate admits unknown channels during discovery.
+    // Only confirmed sends in a known channel can become evidence.
+    return (
+      !!channel &&
+      !channel.cached &&
+      !channel.pending &&
+      !channel.metadataPending &&
+      canAccess(id)
+    );
+  }
+  function canReadOwnerMentions(id: string) {
+    // HTTP can confirm a send during a socket drop. Keep that receipt locally
+    // and withhold it until fresh channel metadata confirms read access.
+    return (
+      canConfirmOwnerMentions(id) && !channels.queries.get?.(id)?.metadataCached
+    );
+  }
   function visibility(events: readonly EventData[] = [], remote = false) {
     const evidence = new Map(
       [...rawLocal().map((item) => item.event), ...events].map((event) => [
@@ -958,6 +987,7 @@ export function createRelaySession(
       events[0]?.id ?? "empty",
       () => {
         for (const event of visible) {
+          ownerMentionStore?.confirm(event, canConfirmOwnerMentions);
           const previous = recent.peek(event.id);
           // Replay can precede a fresh live copy. Keep alert receipt separate from content receipt.
           const incoming = [9, 40002, 40008].includes(event.kind)
@@ -1703,6 +1733,41 @@ export function createRelaySession(
       throw new Error(
         "A selected recipient is no longer a channel member; remove them or refresh membership",
       );
+  }
+  function invocationScope(
+    channelId: string,
+    root: string,
+  ): ((agentPubkey: string) => boolean) | undefined {
+    const optIn = replyInvocationIntents.get(session);
+    const owner = transport?.viewer;
+    const communityOrigin = transport?.scope;
+    if (!optIn || !owner || !communityOrigin) return;
+    const channel = channels.queries.get?.(channelId);
+    if (
+      !channel ||
+      channel.cached ||
+      channel.metadataCached ||
+      channel.metadataPending ||
+      channel.pending ||
+      channel.archived ||
+      channel.huddle ||
+      (channel.channelType !== "stream" && channel.channelType !== "forum")
+    )
+      return;
+    const scope = { agentChoices, archives: archives.queries, viewer: owner };
+    const { selectable } = agentChoices.snapshot();
+    return (agentPubkey) =>
+      !agentUnavailable(scope, agentPubkey) &&
+      (profiles.queries.owner?.(agentPubkey) === owner ||
+        selectable.some(
+          (agent) => agent.managed && agent.pubkey === agentPubkey,
+        )) &&
+      optIn({
+        communityOrigin,
+        owner,
+        source: { channelId, root },
+        agentPubkey,
+      });
   }
   function validateCanvasWrite(event: Pick<EventData, "kind" | "tags">) {
     if (event.kind !== 40100) return;
@@ -2766,6 +2831,9 @@ export function createRelaySession(
     if (connected && !liveWasConnected) recovery?.retryNow(liveRecovery);
     liveWasConnected = connected;
   });
+  function ownsMessages(messages: object): boolean {
+    return messages === session.messages;
+  }
   const session = Object.freeze({
     artifactIncremental: transport?.artifactIncremental,
     memberAdditions,
@@ -2787,6 +2855,15 @@ export function createRelaySession(
     authorizeAgentLog: transport?.authorizeAgentLog,
     authorizeGit: transport?.authorizeGit,
     scope: readScope,
+    ownerMentions:
+      writes &&
+      ownerMentionStore?.bind(
+        writes.outbox,
+        canReadOwnerMentions,
+        lifetime.signal,
+        channels.queries.subscribeList,
+        ownsMessages,
+      ),
     /** Verified new live-route messages, after reconciliation. Never history or local intent. */
     subscribeIncoming(listener: IncomingListener) {
       if (closed) return () => {};
@@ -3117,6 +3194,7 @@ export function createRelaySession(
               .map((event) => [event.id, event]),
           ).values(),
         ],
+        invocationScope,
       ),
       /** UI eligibility only; signing/publication recheck the same role proof. */
       canRetry(event: Pick<EventData, "kind" | "tags">) {
@@ -4386,6 +4464,7 @@ export function createRelaySession(
         accessEpoch++;
         cancelUploads();
         cacheClearEpoch++;
+        ownerMentionStore?.clear();
         dropHintConfirmations();
         activity.clear();
         memories.clear();

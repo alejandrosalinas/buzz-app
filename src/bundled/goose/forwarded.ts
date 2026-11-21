@@ -28,6 +28,8 @@ export const NOT_STOPPED =
 export const NOT_CLOSED =
   "Buzz couldn't confirm the agent gateway closed this turn's forwarding.";
 
+export type GatewayProvider = "databricks" | "databricks_v2";
+
 export type ForwardedTurn = Readonly<{
   /** Opens the turn's generation; it throws, spawning nothing, when it
    * can't. */
@@ -40,6 +42,8 @@ export type ForwardedTurn = Readonly<{
   ): Promise<GooseProcess>;
   launch(): Promise<Readonly<{ cwd: string; systemPrompt: string }>>;
   tools: ToolServer;
+  /** The resolved provider, even when ACP inherits the configured choice. */
+  provider: GatewayProvider;
   choice: () => Choice;
   /** The conversation (or one-off label) its Buzz tools act for. */
   conversation: string;
@@ -214,11 +218,16 @@ export const GATEWAY_TOKEN = "buzz-agent-gateway-placeholder";
 /** A forwarded goose's environment on `generation`. */
 export function forwardedEnv(
   generation: Pick<Generation, "url" | "noProxy">,
-  turn: Pick<ForwardedTurn, "model" | "choice">,
+  turn: Pick<ForwardedTurn, "model" | "provider" | "choice">,
 ): Record<string, string> {
+  const choice = turn.choice();
+  const model = turn.model || choice.model;
   return {
     DATABRICKS_HOST: generation.url,
     DATABRICKS_TOKEN: GATEWAY_TOKEN,
+    // Keep an inherited provider's configured model and freeze its provider
+    // to the one used for routing. An explicit ACP choice selects its own.
+    ...(!choice.provider && { GOOSE_PROVIDER: turn.provider }),
     // goose 1.57.0 sends even loopback requests to an inherited proxy
     // unless these name it; both, as either may be read.
     NO_PROXY: generation.noProxy,
@@ -227,24 +236,8 @@ export function forwardedEnv(
     GOOSE_DISABLE_SESSION_NAMING: "true",
     // A delegate runs on these, not a provider the model or config names
     // (goose 1.57.0 `resolve_provider_config`); a recipe's own still wins.
-    ...subagent(turn),
-  };
-}
-
-/** The provider goose forwards through: the gateway serves Databricks'
- * API. */
-export const GATEWAY_PROVIDER = "databricks";
-
-/** Pins a delegate to the gateway's provider, which a forwarded turn runs on
- * whether the agent names it or inherits goose's default, and to the turn's
- * model when it names one. */
-function subagent(
-  turn: Pick<ForwardedTurn, "model" | "choice">,
-): Record<string, string> {
-  const chosen = turn.model || turn.choice().model;
-  return {
-    GOOSE_SUBAGENT_PROVIDER: GATEWAY_PROVIDER,
-    ...(chosen ? { GOOSE_SUBAGENT_MODEL: chosen } : {}),
+    GOOSE_SUBAGENT_PROVIDER: turn.provider,
+    ...(model ? { GOOSE_SUBAGENT_MODEL: model } : {}),
   };
 }
 

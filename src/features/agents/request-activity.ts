@@ -80,6 +80,47 @@ function parseRecords(
   return parsed;
 }
 
+// Most mounted rows have no agent work: index which triggers each snapshot can
+// associate so those rows answer without replaying every turn.
+const turnTriggers = new WeakMap<
+  object,
+  ReadonlyMap<string, ReadonlySet<string>>
+>();
+const anchorTriggers = new WeakMap<object, ReadonlySet<string>>();
+
+/** Agents whose turns name each trigger, keyed by channel and trigger ID. */
+export function triggeredAgents(
+  turns: readonly Pick<
+    ActivityTurn,
+    "agent" | "channelId" | "triggeringEventIds"
+  >[],
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const cached = turnTriggers.get(turns);
+  if (cached) return cached;
+  const index = new Map<string, Set<string>>();
+  for (const turn of turns)
+    for (const id of turn.triggeringEventIds ?? []) {
+      const key = `${turn.channelId}\n${id}`;
+      const agents = index.get(key);
+      if (agents) agents.add(turn.agent);
+      else index.set(key, new Set([turn.agent]));
+    }
+  if (Object.isFrozen(turns)) turnTriggers.set(turns, index);
+  return index;
+}
+
+function anchoredTriggers(parsed: readonly Parsed[]) {
+  const cached = anchorTriggers.get(parsed);
+  if (cached) return cached;
+  const ids = new Set<string>();
+  for (const { value } of parsed)
+    if (value.kind === "turn_started" || value.kind === "turn_steered")
+      for (const id of turnTriggerIds(value.payload?.triggeringEventIds) ?? [])
+        ids.add(id);
+  anchorTriggers.set(parsed, ids);
+  return ids;
+}
+
 /** Live request association from explicit captured trigger IDs only. No time/name
  * inference, backfill, or broader channel fallback when the start is missing. */
 export function requestActivity(
@@ -104,6 +145,15 @@ export function requestActivity(
     ),
   );
   if (!triggersWanted.size) return result();
+  const anchored = anchoredTriggers(parsed);
+  const triggered = triggeredAgents(turns);
+  if (
+    ![...triggersWanted].some(
+      (id) =>
+        anchored.has(id) || triggered.get(`${channelId}\n${id}`)?.has(agent),
+    )
+  )
+    return result();
   const ambiguous = new Set(
     turns
       .filter(

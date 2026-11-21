@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { hasEventProof } from "../relay/events";
-import { keypair, signed } from "../relay/testing";
+import { keypair, nativeSignatureChecks, signed } from "../relay/testing";
 import { nativeAgents, unconfirmedAgentEvent } from "./native";
 import { importedEmojiPicture } from "./import-picture";
 
@@ -21,6 +21,16 @@ const query = (response: unknown) => {
   vi.mocked(invoke).mockResolvedValueOnce(response);
   return native.query(member, [{ kinds: [9] }]);
 };
+
+beforeEach(() => {
+  vi.mocked(invoke)
+    .mockReset()
+    .mockImplementation(async (command, args) => {
+      if (command === "relay_verify_signatures")
+        return nativeSignatureChecks(args);
+      throw new Error(`Unexpected native command: ${command}`);
+    });
+});
 
 it("prepares the selected source's emoji before importing and passes back native upload notes", async () => {
   const converted = {
@@ -103,14 +113,35 @@ it("reads the signed id from an uncertain native publish outcome", () => {
   ).toBeUndefined();
 });
 
-it("admits the community's events through the relay verifier", async () => {
-  const events = await query([JSON.parse(JSON.stringify(message))]);
-  expect(events).toMatchObject([{ id: message.id, content: "hi" }]);
+it("admits the query in relay order using native signature checks", async () => {
+  const reply = signed(agent, { kind: 9, content: "reply", tags: [] });
+  const response = JSON.parse(JSON.stringify([reply, message]));
+  const events = await query(response);
+  expect(events.map((event) => event.id)).toEqual([reply.id, message.id]);
   expect(events.every(hasEventProof)).toBe(true);
   expect(invoke).toHaveBeenCalledWith("app_agent_query", {
     ...member,
     filters: [{ kinds: [9] }],
   });
+  expect(invoke).toHaveBeenCalledWith("relay_verify_signatures", {
+    claims: [reply, message].map(({ id, pubkey, sig }) => ({
+      id,
+      pubkey,
+      sig,
+    })),
+  });
+
+  vi.mocked(invoke).mockClear();
+  expect((await query(response)).map((event) => event.id)).toEqual([
+    reply.id,
+    message.id,
+  ]);
+  expect(invoke).toHaveBeenCalledTimes(1);
+
+  // A proof for this id cannot admit a different signature for the same body.
+  await expect(
+    query([reply, { ...message, sig: "0".repeat(128) }]),
+  ).rejects.toThrow(/malformed or invalidly signed/);
 });
 
 it("reads effective edit state through the agent-authenticated native query", async () => {
@@ -191,10 +222,13 @@ it("searches profile names natively and reports a community without the search",
   const found = await native.searchProfiles(member, "wes", 100);
   expect(found).toMatchObject([{ id: profile.id }]);
   expect(found?.every(hasEventProof)).toBe(true);
-  expect(invoke).toHaveBeenLastCalledWith("app_agent_search_profiles", {
+  expect(invoke).toHaveBeenCalledWith("app_agent_search_profiles", {
     ...member,
     query: "wes",
     limit: 100,
+  });
+  expect(invoke).toHaveBeenCalledWith("relay_verify_signatures", {
+    claims: [{ id: profile.id, pubkey: profile.pubkey, sig: profile.sig }],
   });
   vi.mocked(invoke).mockResolvedValueOnce(null);
   expect(await native.searchProfiles(member, "wes", 100)).toBeUndefined();

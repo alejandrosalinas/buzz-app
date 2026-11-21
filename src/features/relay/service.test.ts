@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
 import { provideRelay } from "./service";
+import { ReadError } from "./errors";
+import { matchesEvent } from "./projection";
+import { sendWithOwnerMentions } from "./owner-mentions";
 import type { ReadTransport } from "./transport";
 import {
   flush,
@@ -9,7 +12,13 @@ import {
   roster,
   bounds,
   scriptedTransport,
+  signed,
 } from "./testing";
+
+vi.mock("./outbox-storage", async (original) => ({
+  ...(await original<typeof import("./outbox-storage")>()),
+  browserOutboxStorage: () => ({ load: () => [], save: () => {} }),
+}));
 
 const roots: Context[] = [];
 function root() {
@@ -299,4 +308,80 @@ it("turns a community refusal heard after connecting into one denied connection"
   expect(connect).toHaveBeenCalledTimes(2);
   expect(data.snapshot().status).toBe("ready");
   expect(listeners.size).toBe(1);
+});
+
+it("retains owner proof through a transient reconnect and forgets it after an access refusal during reconnect", async () => {
+  const viewer = keypair();
+  const relay = keypair();
+  const peer = keypair();
+  const discovery = [
+    roster(relay, "c", [viewer.pubkey, peer.pubkey]),
+    metadata(relay, "c", "General"),
+  ];
+  const connection: ReadTransport = {
+    ...transport(viewer.pubkey),
+    relayAuthor: relay.pubkey,
+    scope: "https://relay.example",
+    query: async (filters) =>
+      discovery.filter((event) =>
+        filters.some((filter) => matchesEvent(event, filter)),
+      ),
+    writer: {
+      sign: async (event) => signed(viewer, event),
+      publish: async () => {},
+    },
+  };
+  const connect = vi
+    .fn<() => Promise<ReadTransport>>()
+    .mockResolvedValueOnce(connection)
+    .mockRejectedValueOnce(new ReadError("unavailable", "Network unavailable"))
+    .mockResolvedValueOnce(connection)
+    .mockRejectedValueOnce(
+      new ReadError("denied", "restricted: authorization denied", 403),
+    )
+    .mockResolvedValue(connection);
+  const data = provideRelay(root(), connect);
+  const source = { channelId: "c", rootId: null };
+  const ready = async () => {
+    await vi.waitFor(() => {
+      const snapshot = data.snapshot();
+      expect(snapshot.status).toBe("ready");
+      expect(snapshot.session.channels.get?.("c")?.members).toContain(
+        viewer.pubkey,
+      );
+    });
+    return data.snapshot().session;
+  };
+  const first = await ready();
+  const id = sendWithOwnerMentions(first, [peer.pubkey], () =>
+    first.messages.send("c", "@Peer hello", [peer.pubkey]),
+  );
+  await vi.waitFor(() =>
+    expect(first.ownerMentions?.latest(source)?.eventId).toBe(id),
+  );
+
+  data.retry();
+  await vi.waitFor(() =>
+    expect(data.snapshot()).toMatchObject({ status: "error", retrying: true }),
+  );
+  data.retry();
+  const recovered = await ready();
+  expect(recovered).not.toBe(first);
+  expect(recovered.ownerMentions?.latest(source)?.eventId).toBe(id);
+  expect(recovered.ownerMentions?.confirmedOwnerSends(source, [id])).toEqual([
+    id,
+  ]);
+
+  data.retry();
+  await vi.waitFor(() =>
+    expect(data.snapshot()).toMatchObject({
+      status: "error",
+      denied: true,
+      refusal: "access",
+    }),
+  );
+  data.tryAgain();
+  const restored = await ready();
+  expect(restored.ownerMentions?.latest(source)).toBeNull();
+  expect(restored.ownerMentions?.confirmedOwnerSends(source, [id])).toEqual([]);
 });

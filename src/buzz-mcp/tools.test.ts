@@ -2161,13 +2161,24 @@ it("creates a Solo chat with its members in the create, as Buzz does", async () 
   ).resolves.toBe(`${plain} ops (stream, private)\nyou: owner`);
 });
 
+/** A host's workspaces that file everything and have no defaults. */
+const workspaces = (
+  overrides: Partial<NonNullable<BuzzClient["workspaces"]>> = {},
+): NonNullable<BuzzClient["workspaces"]> => ({
+  list: async () => [],
+  prepare: async () => async () => ({ status: "filed" }),
+  defaults: async () => ({ canvas: "", agents: [], skipped: [] }),
+  move: async () => ({ status: "filed" }),
+  ...overrides,
+});
+
 it("discovers local workspaces and files only after creating a Solo with explicit members", async () => {
   const { client, published } = relay();
   const file = vi.fn(async () => ({ status: "filed" as const }));
   const list = vi.fn(async () => [{ id: "work", name: "Work" }]);
   const prepare = vi.fn(async () => file);
-  client.soloWorkspaces = { list, prepare };
-  expect(await callTool(client, {}, "solo_workspace_list", {})).toBe(
+  client.workspaces = workspaces({ list, prepare });
+  expect(await callTool(client, {}, "workspace_list", {})).toBe(
     JSON.stringify([{ id: "work", name: "Work" }]),
   );
   const answer = await callTool(client, {}, "channel_create", {
@@ -2178,7 +2189,11 @@ it("discovers local workspaces and files only after creating a Solo with explici
     workspace: "work",
   });
   const id = published[0]?.tags[0]?.[1];
-  expect(prepare).toHaveBeenCalledExactlyOnceWith("work", [alice], id);
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(
+    "work",
+    { members: [alice], open: false },
+    id,
+  );
   expect(file).toHaveBeenCalledExactlyOnceWith(id);
   expect(answer).toBe(
     `created ${id}\nadded ${alice} Alice Smith\nfiled in workspace work`,
@@ -2196,7 +2211,7 @@ it("rejects unsupported or invalid workspace placement before publication", asyn
     members: [alice],
     workspace: "work",
   };
-  await expect(callTool(client, {}, "solo_workspace_list", {})).rejects.toThrow(
+  await expect(callTool(client, {}, "workspace_list", {})).rejects.toThrow(
     "unavailable on this host",
   );
   await expect(callTool(client, {}, "channel_create", args)).rejects.toThrow(
@@ -2205,14 +2220,7 @@ it("rejects unsupported or invalid workspace placement before publication", asyn
   const prepare = vi.fn(async () => {
     throw new Error("No such workspace");
   });
-  client.soloWorkspaces = { list: async () => [], prepare };
-  await expect(
-    callTool(client, {}, "channel_create", {
-      ...args,
-      solo: false,
-      members: undefined,
-    }),
-  ).rejects.toThrow("workspace is for Solo");
+  client.workspaces = workspaces({ prepare });
   await expect(callTool(client, {}, "channel_create", args)).rejects.toThrow(
     "No such workspace",
   );
@@ -2229,7 +2237,7 @@ it.each([
   const file = vi.fn(async () => {
     throw new Error(message);
   });
-  client.soloWorkspaces = { list: async () => [], prepare: async () => file };
+  client.workspaces = workspaces({ prepare: async () => file });
   const answer = await callTool(client, {}, "channel_create", {
     name: "triage",
     visibility: "private",
@@ -2242,7 +2250,7 @@ it.each([
   expect(answer).toContain(
     `workspace placement unconfirmed and may have completed: ${message}`,
   );
-  expect(answer).toContain("do not create another chat");
+  expect(answer).toContain("do not create another");
   expect(published).toHaveLength(1);
   expect(file).toHaveBeenCalledOnce();
 });
@@ -2251,10 +2259,9 @@ it.each(["not-filed", "unconfirmed"] as const)(
   "reports structured placement outcome without repeating create: %s",
   async (status) => {
     const { client, published } = relay();
-    client.soloWorkspaces = {
-      list: async () => [],
+    client.workspaces = workspaces({
       prepare: async () => async () => ({ status, error: "placement stopped" }),
-    };
+    });
     const answer = await callTool(client, {}, "channel_create", {
       name: "triage",
       visibility: "private",
@@ -2269,7 +2276,7 @@ it.each(["not-filed", "unconfirmed"] as const)(
         : "placement unconfirmed and may have completed",
     );
     if (status === "unconfirmed")
-      expect(answer).toContain("Inspect or refresh");
+      expect(answer).toContain("Check your owner's sidebar");
     expect(published).toHaveLength(1);
   },
 );
@@ -2285,15 +2292,14 @@ it("reports uncertainty after a gated durable placement loses its app lifetime",
     started = resolve;
   });
   let durable = false;
-  client.soloWorkspaces = {
-    list: async () => [],
+  client.workspaces = workspaces({
     prepare: async () => async () => {
       durable = true;
       started();
       await delivered;
       throw new Error("retired after durable placement");
     },
-  };
+  });
   const pending = callTool(client, {}, "channel_create", {
     name: "triage",
     visibility: "private",
@@ -2311,8 +2317,86 @@ it("reports uncertainty after a gated durable placement loses its app lifetime",
   const answer = await pending;
   expect(answer).toContain(`created ${published[0]?.tags[0]?.[1]}`);
   expect(answer).toContain("placement unconfirmed and may have completed");
-  expect(answer).toContain("Inspect or refresh");
+  expect(answer).toContain("Check your owner's sidebar");
   expect(answer).not.toContain("not filed");
+});
+
+it("starts a team channel with its members and the workspace's defaults", async () => {
+  const { client, published } = relay();
+  const prepare = vi.fn(async () => async () => ({ status: "filed" as const }));
+  client.workspaces = workspaces({
+    prepare,
+    defaults: async () => ({ canvas: "# Rules", agents: [bob], skipped: [] }),
+  });
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "launch",
+    visibility: "private",
+    type: "forum",
+    members: [alice],
+    workspace: "work",
+  });
+  const id = published[0]?.tags[0]?.[1];
+  // The host refuses a private one before creation unless the owner is named.
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(
+    "work",
+    { members: [alice], open: false },
+    id,
+  );
+  expect(published[0]?.tags).toContainEqual(["p", alice]);
+  expect(published[1]?.content).toBe("# Rules");
+  expect(answer).toContain("filed in workspace work");
+  expect(answer).toContain(`added ${bob}`);
+});
+
+it("leaves out default agents it can't add, names them, and creates anyway", async () => {
+  const { client, published, state } = relay();
+  const archived = "d".repeat(64);
+  state.push(
+    event({
+      kind: 10100,
+      pubkey: bob,
+      content: JSON.stringify({ channel_add_policy: "owner_only" }),
+    }),
+  );
+  client.workspaces = workspaces({
+    defaults: async () => ({
+      canvas: "",
+      agents: [alice, bob],
+      skipped: [archived],
+    }),
+  });
+  const answer = await callTool(client, {}, "channel_create", {
+    name: "launch",
+    visibility: "open",
+    workspace: "work",
+  });
+  expect(answer).toMatch(/^created /);
+  expect(answer).toContain(
+    `workspace default agent ${bob} not added: only your owner can add this agent`,
+  );
+  expect(answer).toContain(
+    `workspace default agent ${archived} not added: not available in this community`,
+  );
+  const added = published.flatMap(({ tags }) =>
+    tags.flatMap(([key, value]) => (key === "p" ? [value] : [])),
+  );
+  expect(added).toEqual([alice]);
+});
+
+it("moves a conversation to a workspace, or unfiles it", async () => {
+  const { client } = relay();
+  const move = vi.fn(async () => ({ status: "filed" as const }));
+  client.workspaces = workspaces({ move });
+  await expect(
+    callTool(client, {}, "channel_move", { channel: room, workspace: "work" }),
+  ).resolves.toBe(`moved ${room} to workspace work`);
+  await expect(
+    callTool(client, { channel: room }, "channel_move", { workspace: " " }),
+  ).resolves.toBe(`unfiled ${room}`);
+  expect(move.mock.calls).toEqual([
+    [room, "work"],
+    [room, undefined],
+  ]);
 });
 
 it("refuses Solo arguments that do not fit, before publishing", async () => {
@@ -2332,10 +2416,6 @@ it("refuses Solo arguments that do not fit, before publishing", async () => {
   await expect(create({ solo: true, template: "Triage" })).rejects.toThrow(
     shape,
   );
-  for (const members of [[alice], ["alice"], alice])
-    await expect(create({ members })).rejects.toThrow(
-      "members is for Solo chats.",
-    );
   await expect(create({ solo: true, members: ["alice"] })).rejects.toThrow(
     "Not a pubkey: alice",
   );
@@ -2349,7 +2429,7 @@ it("refuses Solo arguments that do not fit, before publishing", async () => {
     n.toString(16).padStart(64, "0"),
   );
   await expect(create({ solo: true, members: many })).rejects.toThrow(
-    "A Solo chat starts with at most 32 members.",
+    "A channel starts with at most 32 members.",
   );
   expect(published).toEqual([]);
 });

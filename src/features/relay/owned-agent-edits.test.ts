@@ -16,6 +16,7 @@ import { MessageProjection } from "./message-projection";
 import { createRelayProfiler } from "./profiling";
 import {
   bounds,
+  completeHeads,
   flush,
   keypair,
   message,
@@ -188,6 +189,7 @@ it.each(["member", "guest"])(
         profile(agent, owner),
         profile(stranger, stranger),
       ]);
+      completeHeads(wire, relay);
       await connection.session.outbox?.ready();
       // A guest's edit is signed only once the directory's own attestation
       // names its owner; editOwnedAgent's check can settle first.

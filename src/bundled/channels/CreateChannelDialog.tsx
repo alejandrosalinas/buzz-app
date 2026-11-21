@@ -7,9 +7,9 @@ import {
   type ChannelTemplate,
 } from "../../features/channel-templates/local";
 import {
+  channelDefaults,
   projectDefault,
   projectTemplateId,
-  shareableInstructions,
 } from "../../features/solo/workspace";
 import { Select } from "../../shared/design-system/ui/Select";
 import { useTeams } from "../../features/agents/react";
@@ -142,25 +142,10 @@ function OpenCreateChannelDialog({
         true,
       );
       if (!active || !preferred) return;
-      const teamAgents = preferred.teamIds.flatMap((id) => {
-        const team = kit.entries.find(
-          ({ record }) =>
-            !record.deleted &&
-            record.value.type === "team" &&
-            record.value.id === id,
-        )?.record.value;
-        if (team?.type !== "team")
-          throw new Error("A team in the workspace defaults could not load.");
-        return team.agents;
-      });
-      // Only standalone instructions are eligible to share; local paths stay.
-      const canvas = shareableInstructions(preferred.canvas);
       setWorkspaceTemplate({
-        id: preferred.id,
+        ...channelDefaults(preferred, kit.entries),
         name: "Workspace defaults",
         teams: [],
-        agents: [...new Set([...preferred.agents, ...teamAgents])],
-        canvas,
       });
     })()
       .catch((reason: unknown) => {

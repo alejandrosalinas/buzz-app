@@ -51,7 +51,7 @@ declare global {
       state(): SoloRegionProps["state"];
       classify(id: string): Promise<void>;
       createWorkspace(): Promise<void>;
-      present(removed: string[], hidden: string[]): void;
+      present(removed: string[], hidden: string[], first?: string): void;
       showHeaderMetadata(visible: boolean): void;
       status(status: "ready" | "loading"): void;
       addTransientRegion(): Promise<void>;
@@ -74,7 +74,8 @@ export const soloRegionFixture: BundledPlugin = {
       let binding: SoloRegionBinding;
       let snapshot: SoloRegionSnapshot;
       let removed: string[] = [],
-        hidden: string[] = [];
+        hidden: string[] = [],
+        first: string | undefined;
       let headerMetadataVisible = true;
       let notify = () => {};
       if (!ctx.soloNavigation) throw new Error("Solo navigation unavailable");
@@ -210,7 +211,11 @@ export const soloRegionFixture: BundledPlugin = {
                 <ChannelGroup ui={ui} id="gamma" />
               </>
             )}
-            {[...live]
+            {/* A source can retain a keyed conversation across roster changes. */}
+            {(first
+              ? [first, ...[...live].filter((id) => id !== first)]
+              : [...live]
+            )
               .filter((id) => !removed.includes(id))
               .map((id) => (
                 <div
@@ -278,9 +283,10 @@ export const soloRegionFixture: BundledPlugin = {
           snapshot = { ...snapshot, status, revision: snapshot.revision + 1 };
           notify();
         },
-        present(nextRemoved, nextHidden) {
+        present(nextRemoved, nextHidden, nextFirst) {
           removed = nextRemoved;
           hidden = nextHidden;
+          first = nextFirst;
           snapshot = { ...snapshot, revision: snapshot.revision + 1 };
           notify();
         },

@@ -2,6 +2,8 @@
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { afterEach, expect, it, vi } from "vitest";
+import type { Agents } from "../../features/agents/service";
+import { AgentsContext } from "../../features/agents/react";
 import type {
   CompletionResult,
   ComposerCompletionProps,
@@ -17,6 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  types = registered;
 });
 
 it("matches `/` and name characters at a word start, never mid-word or past a space", () => {
@@ -46,6 +49,9 @@ const codex = "d".repeat(64);
 const remote = "e".repeat(64);
 const theirs = "f".repeat(64);
 const person = "b".repeat(64);
+const plugin = "1".repeat(64);
+const plain = "2".repeat(64);
+const empty = "3".repeat(64);
 const identities = [
   {
     pubkey: claude,
@@ -68,9 +74,44 @@ const identities = [
     execution: "remote",
     type: "buzz.claude-code/claude-code",
   },
+  {
+    pubkey: plugin,
+    name: "Harness",
+    managed: true,
+    execution: "local",
+    type: "com.example.harness/harness",
+  },
+  {
+    pubkey: plain,
+    name: "Plain",
+    managed: true,
+    execution: "local",
+    type: "com.example.plain/plain",
+  },
+  {
+    pubkey: empty,
+    name: "Empty",
+    managed: true,
+    execution: "local",
+    type: "com.example.empty/empty",
+  },
   // Someone else's agent: not a managed choice on this machine.
   { pubkey: theirs, name: "Theirs", managed: false },
 ];
+const registered = [
+  { key: "buzz.claude-code/claude-code", skillFolders: ["~/.claude/skills"] },
+  { key: "com.example.plain/plain" },
+  { key: "com.example.empty/empty", skillFolders: [] },
+];
+let types = registered;
+const listeners = new Set<() => void>();
+const agents = {
+  subscribe: (listener: () => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  },
+  types: () => types,
+} as unknown as Agents;
 const choices = { identities, pending: false };
 const session = {
   agentChoices: {
@@ -108,22 +149,24 @@ function showSkills(
   let publish = vi.fn();
   let mounts = 0;
   const element = (text: string) => (
-    <AddressedAgentsContext.Provider value={addressed}>
-      <SkillCompletion
-        key={mounts++}
-        session={session}
-        scope={`https://one.example:${viewer}`}
-        channelId={channelId}
-        observation={{
-          revision: 0,
-          text: `/${text}`,
-          start: text.length + 1,
-          end: text.length + 1,
-        }}
-        publish={publish}
-        query={{ start: 0, end: text.length + 1, query: text }}
-      />
-    </AddressedAgentsContext.Provider>
+    <AgentsContext.Provider value={agents}>
+      <AddressedAgentsContext.Provider value={addressed}>
+        <SkillCompletion
+          key={mounts++}
+          session={session}
+          scope={`https://one.example:${viewer}`}
+          channelId={channelId}
+          observation={{
+            revision: 0,
+            text: `/${text}`,
+            start: text.length + 1,
+            end: text.length + 1,
+          }}
+          publish={publish}
+          query={{ start: 0, end: text.length + 1, query: text }}
+        />
+      </AddressedAgentsContext.Provider>
+    </AgentsContext.Provider>
   );
   const view = render(element(query));
   const last = () => publish.mock.lastCall?.[0] as CompletionResult | undefined;
@@ -167,21 +210,34 @@ it("offers the one addressed local agent's skills as chips for that agent, liste
   shown.remount("usr");
   await act(async () => {});
   expect(shown.last()).toBeUndefined();
-  shown.view.unmount();
-
-  vi.mocked(invoke).mockClear();
-  const other = showSkills("two", [codex], "");
-  await waitFor(() => expect(other.labels()).toEqual(["review", "write"]));
-  expect(invoke).toHaveBeenCalledExactlyOnceWith("local_skills_list", {
-    roots: ["$CODEX_HOME/skills", "~/.agents/skills"],
-  });
-  expect(other.last()?.items[0]?.edit).toMatchObject({
-    token: { target: codex },
-  });
-  other.view.unmount();
 });
 
-it("lists nothing unless one addressed agent is the viewer's own local Claude or Codex agent", async () => {
+it("offers a plugin agent's skills once its type registers, ignoring blank folders", async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  vi.mocked(invoke).mockReset().mockResolvedValue(rows);
+  const shown = showSkills("late", [plugin], "");
+  await act(async () => {});
+  expect(shown.last()).toBeUndefined();
+  types = [
+    ...registered,
+    {
+      key: "com.example.harness/harness",
+      skillFolders: ["~/.example/skills", " ", ""],
+    },
+  ];
+  act(() => {
+    for (const listener of listeners) listener();
+  });
+  await waitFor(() => expect(shown.labels()).toEqual(["review", "write"]));
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("local_skills_list", {
+    roots: ["~/.example/skills"],
+  });
+  expect(shown.last()?.items[0]?.edit).toMatchObject({
+    token: { target: plugin },
+  });
+});
+
+it("lists nothing unless one addressed agent is the viewer's own local agent whose type lists skill folders", async () => {
   vi.mocked(isTauri).mockReturnValue(true);
   vi.mocked(invoke).mockReset().mockResolvedValue(rows);
   for (const addressed of [
@@ -189,6 +245,8 @@ it("lists nothing unless one addressed agent is the viewer's own local Claude or
     [person],
     [remote],
     [theirs],
+    [plain],
+    [empty],
     ["9".repeat(64)],
   ]) {
     const shown = showSkills("none", addressed, "");

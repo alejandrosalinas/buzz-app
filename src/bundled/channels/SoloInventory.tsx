@@ -67,7 +67,6 @@ import creationStyles from "./SoloInventory.module.css";
 import {
   DotsThreeIcon,
   ChatCircleIcon,
-  PencilSimpleIcon,
   PlusIcon,
 } from "../../shared/design-system/icons";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
@@ -451,7 +450,7 @@ export function SoloInventory({
                       className={styles.conversationIcon}
                       aria-hidden="true"
                     >
-                      <PencilSimpleIcon size={16} />
+                      <PlusIcon size={16} />
                     </span>
                   }
                   onClick={() => {

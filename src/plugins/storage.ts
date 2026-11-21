@@ -123,7 +123,10 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
 
   const imports: PluginImports | undefined = desktop
     ? {
-        folder: () => invoke("plugin_import_folder"),
+        folder: (path) =>
+          invoke("plugin_import_folder", path ? { path } : undefined),
+        checkPath: (path) =>
+          invoke("plugin_import_folder", { path, checkOnly: true }),
         checkFolder: (id) => invoke("plugin_update_check", { id }),
         previewFolder: (id) => invoke("plugin_update_preview", { id }),
         files: (source, files) =>

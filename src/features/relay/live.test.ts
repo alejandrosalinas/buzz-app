@@ -6713,8 +6713,10 @@ it.each(["complete", "cut", "closed", "renewed"] as const)(
         expect(reads).not.toContainEqual([
           expect.objectContaining({ kinds: [39002] }),
         ]);
+        // The head read carries the channel's newest notices.
         expect(reads).toContainEqual([
           expect.objectContaining({ "#h": ["a"], top_level: true }),
+          expect.objectContaining({ "#h": ["a"], kinds: [40099] }),
         ]);
       }
     } finally {

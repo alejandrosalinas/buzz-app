@@ -213,6 +213,31 @@ timeline and the thread being read, without reading unopened threads' replies.
   auxiliary events, authorized deletions, quiet agent messages and replies outside
   the viewer's conversations (see [Relevant replies](#relevant-replies)). It is **not an exact total or lower
   bound**: missing markers/deletions can overcount; missing history can undercount.
+- `messages(channelId, limit?)` lists the messages a channel's `observedCount`
+  counts, from the same evidence and rules, newest first. Each item has `id`,
+  `createdAt`, `authorId` and, for a reply, the thread's `rootId`. It reads no
+  relay, opens no channel window and asks no conversation lookup, so it still
+  answers when the channel window is history-limited. `limit` defaults to 200;
+  it is rounded down and capped at 500, and a limit below 1 (or `NaN`) lists
+  nothing, so it never throws. `truncated` says more unread messages are known
+  than it returned. `items` is `null` exactly when `observedCount` is.
+  `incomplete` says the list may miss unread messages that evidence lacks: no
+  repair has sampled every channel (`sampled` is absent), freshness is not
+  `observed`, capacity dropped the channel's oldest rows (until evidence is
+  emptied or access to the channel ends), or the channel's last repair batch
+  filled its 500-row limit and a row it left out could be unread. A batch
+  shares that limit across up to 128 channels, and a full one says nothing of
+  which channels had older rows. So the channel counts as cut off unless its
+  main read mark (`<channel>`, which catch-up moves, or the retention floor; not
+  an older client's `activity:` mark, which leaves mentions and replies unread)
+  reaches the batch's oldest returned message, and no unread intent (an active
+  synced channel mark unread, or a local mark on a message evidence lacks)
+  could keep a left-out row unread. Without `incomplete`, the list can still miss older
+  messages for the reasons above. Call it again when the channel's
+  `subscribe` listener runs, and after your own reads and marks, since a
+  change that leaves the snapshot equal notifies no one. The method is
+  optional: hosts before it omit it, so check
+  `typeof session.unread.messages === "function"`.
 - `coverage` and `freshness` describe message evidence, separately from `sync()`.
   Evidence is capped at 4,096 events / 8 MiB. An event that would pass either
   cap first drops retained rows down to 3,072 events / 6 MiB with room for it:

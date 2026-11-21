@@ -457,7 +457,7 @@ export function nativeRelaySigner(community: string): Signer {
   };
 }
 
-const verifyNativeSignatures: SignatureVerifier = (claims) =>
+export const verifyNativeSignatures: SignatureVerifier = (claims) =>
   nativeReadInvoke<boolean[]>("relay_verify_signatures", { claims });
 
 /** Device evidence can be verified before any relay connection exists. */

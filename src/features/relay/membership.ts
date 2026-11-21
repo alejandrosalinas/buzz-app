@@ -9,8 +9,14 @@ export const channelRowKind = (kind: number) =>
 /** A content row has one channel home; ambiguous tags are not membership evidence. */
 export function channelRowChannel(event: EventData): string | undefined {
   if (!channelRowKind(event.kind)) return undefined;
-  const channels = event.tags.filter((tag) => tag[0] === "h");
-  return channels.length === 1 && channels[0]?.[1] ? channels[0][1] : undefined;
+  let home: string[] | undefined;
+  for (let index = 0; index < event.tags.length; index++) {
+    const entry = event.tags[index];
+    if (entry?.[0] !== "h") continue;
+    if (home) return undefined;
+    home = entry;
+  }
+  return home?.[1] || undefined;
 }
 const pubkey = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{64}$/.test(value);

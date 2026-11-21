@@ -12,6 +12,8 @@ import {
   keypair,
   message,
   roster,
+  completeHeads,
+  flush,
   scriptedTransport,
   signed,
 } from "../relay/testing";
@@ -41,11 +43,12 @@ afterEach(async () => {
   keepMounted.mockClear();
 });
 
-function mount(publish: (event: RelayEvent) => Promise<void>) {
+async function mount(publish: (event: RelayEvent) => Promise<void>) {
   let live: LiveCallbacks | undefined;
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   const owner = createRelaySession(
     {
-      ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+      ...wire.transport,
       writer: { sign: async (template) => signed(viewer, template), publish },
       subscribe(callbacks) {
         live = callbacks;
@@ -57,6 +60,8 @@ function mount(publish: (event: RelayEvent) => Promise<void>) {
   owners.push(owner);
   owner.session.channels.ensure("c");
   live?.receive([roster(relay, "c", [viewer.pubkey], 1), root]);
+  completeHeads(wire, relay, [root]);
+  await flush();
   const row = owner.session.channels.window("c").rows[0];
   if (!row) throw new Error("Missing row");
   const tree = (active: boolean) => (
@@ -92,7 +97,7 @@ it("keeps coarse-pointer entry on the dialog until a reason is chosen", async ()
   }));
   const publish = vi.fn(async () => {});
   const user = userEvent.setup();
-  mount(publish);
+  await mount(publish);
   await user.click(
     screen.getByRole("button", { name: "More message actions" }),
   );
@@ -115,7 +120,7 @@ it("reports from the message menu, keeps input after failure and confirms succes
         settle = (error) => (error ? reject(error) : resolve());
       }),
   );
-  mount(publish);
+  await mount(publish);
   const trigger = screen.getByRole("button", { name: "More message actions" });
   await user.click(trigger);
   await user.click(await screen.findByRole("menuitem", { name: "Report" }));
@@ -178,7 +183,7 @@ it("reports from the message menu, keeps input after failure and confirms succes
 
 it("starts each report with an empty form", async () => {
   const user = userEvent.setup();
-  mount(async () => {});
+  await mount(async () => {});
   const trigger = screen.getByRole("button", { name: "More message actions" });
   await user.click(trigger);
   await user.click(await screen.findByRole("menuitem", { name: "Report" }));
@@ -216,7 +221,7 @@ it.each([
           settle = (error) => (error ? reject(error) : resolve());
         }),
     );
-    const h = mount(publish);
+    const h = await mount(publish);
     const openMenu = async () => {
       await user.click(
         screen.getByRole("button", { name: "More message actions" }),

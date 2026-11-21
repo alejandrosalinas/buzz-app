@@ -686,6 +686,7 @@ it.each(["thread", "channel"] as const)(
         routeConversation: async () => ({
           root: "1".repeat(64),
           parent: event.id,
+          turnContext: "FIRST_TASK_INSTRUCTIONS",
         }),
       },
     );
@@ -698,13 +699,22 @@ it.each(["thread", "channel"] as const)(
           routeConversation: async () => ({
             root: "1".repeat(64),
             parent: event.id,
+            turnContext: "UPDATED_TASK_INSTRUCTIONS",
           }),
         },
       ),
       scope,
     );
     expect(first.key).toBe(`${channel}/${event.id}`);
-    expect(next?.key).toBe(first.key);
+    if (!next) throw new Error("follow-up was not admitted");
+    expect(next.key).toBe(first.key);
+    const [firstPrompt, nextPrompt] = await Promise.all([
+      f.kit.turnPrompt(d, first),
+      f.kit.turnPrompt(d, next),
+    ]);
+    expect(firstPrompt.text).toContain("FIRST_TASK_INSTRUCTIONS");
+    expect(nextPrompt.text).toContain("UPDATED_TASK_INSTRUCTIONS");
+    expect(nextPrompt.text).not.toContain("FIRST_TASK_INSTRUCTIONS");
     await f.kit.reply(f.agent, first, "Work");
     expect(f.published[0]?.tags).toEqual([
       ["h", channel],

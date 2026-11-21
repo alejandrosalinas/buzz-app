@@ -220,7 +220,6 @@ describe("composeBase", () => {
       "audience | Audience",
       "workspace-layout | Workspace Layout",
       "memory | Agent Memory | owner",
-      "engineering | Engineering Discipline | owner",
       "repo-conventions | Working in the Repo",
       "commit-identity | Commit identity | owner",
       "working-location | Working location | plugin",
@@ -420,10 +419,9 @@ describe("the owner's choices", () => {
       progress: { mode: "custom", text: "   " },
       etiquette: { mode: "custom", text: "x".repeat(SECTION_TEXT_BYTES + 1) },
       memory: { mode: "custom", text: "bell\u0007" },
-      engineering: { mode: "custom" },
       autonomy: { mode: "on" },
       publishing: "off",
-      "commit-identity": null,
+      "commit-identity": { mode: "custom" },
     };
     const composed = composeBase(facts, {
       owner: refused as Record<string, OwnerChoice>,

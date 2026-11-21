@@ -19,6 +19,7 @@ import {
   message,
   profile,
   roster,
+  completeHeads,
   scriptedTransport,
   signed,
 } from "../relay/testing";
@@ -94,7 +95,7 @@ const customReaction = (key: typeof viewer, code: string, url: string) =>
       ["emoji", code, url],
     ],
   });
-function harness(
+async function harness(
   events: RelayEvent[] = [],
   publish = vi.fn(async (_event: RelayEvent) => {}),
   pickerTools = tools,
@@ -117,6 +118,8 @@ function harness(
   owners.push(owner);
   owner.session.channels.ensure("c");
   live.receive([roster(relay, "c", [viewer.pubkey], 1), root, ...events]);
+  completeHeads(wire, relay, [root, ...events]);
+  await flush();
   function Controls({
     disabled = false,
     onFocusedRemoval,
@@ -163,7 +166,7 @@ it("shows one bubble per emoji, counts unique people, and removes all my duplica
   const mine = react(),
     duplicate = react(viewer, 3),
     theirs = react(other);
-  const h = harness([mine, duplicate, theirs]);
+  const h = await harness([mine, duplicate, theirs]);
   render(<h.Controls />);
   expect(
     screen.queryAllByRole("button", { name: /React with|Remove/ }),
@@ -201,7 +204,7 @@ it("shows one bubble per emoji, counts unique people, and removes all my duplica
 });
 it("keeps one bubble and focus when the count crosses the former grouping threshold", async () => {
   const others = Array.from({ length: 8 }, () => keypair());
-  const h = harness(others.map((person) => react(person)));
+  const h = await harness(others.map((person) => react(person)));
   const onFocusedRemoval = vi.fn();
   render(<h.Controls onFocusedRemoval={onFocusedRemoval} />);
   const pills = () =>
@@ -237,7 +240,7 @@ it("keeps one bubble and focus when the count crosses the former grouping thresh
 
 it.each([3, 4, 5])("shows all %i reactors in the preview", async (count) => {
   const people = Array.from({ length: count }, () => keypair());
-  const h = harness(people.map((person) => react(person)));
+  const h = await harness(people.map((person) => react(person)));
   render(<h.Controls />);
   act(() =>
     screen.getByRole("button", { name: `👍: ${count} people` }).focus(),
@@ -252,7 +255,7 @@ it.each([3, 4, 5])("shows all %i reactors in the preview", async (count) => {
 });
 
 it("opening a large preview preserves unrelated cached profiles", async () => {
-  const h = harness([react(other)]);
+  const h = await harness([react(other)]);
   const unrelated = profile(other, { name: "Existing colleague" });
   act(() =>
     h.live.receive([
@@ -334,7 +337,7 @@ it("keeps custom emoji URLs separate and updates a grouped count when I join", a
   const people = Array.from({ length: 9 }, () => keypair());
   const first = "https://a.test/first.gif";
   const second = "https://a.test/second.gif";
-  const h = harness([
+  const h = await harness([
     ...people.map((person) => customReaction(person, "party", first)),
     customReaction(other, "party", second),
   ]);
@@ -378,7 +381,7 @@ it("keeps custom emoji URLs separate and updates a grouped count when I join", a
 
 it("keeps the same bubble and focus through single and multiple reactor transitions", async () => {
   const others = [other];
-  const h = harness([react(other)]);
+  const h = await harness([react(other)]);
   render(
     <>
       <button type="button">Elsewhere</button>
@@ -429,7 +432,7 @@ it("keeps failed first-reaction delivery visible and retries the same event", as
   const publish = vi.fn(async (_event: RelayEvent) => {
     throw new PublishRejected("Nope");
   });
-  const h = harness([], publish);
+  const h = await harness([], publish);
   render(<h.Controls />);
   fireEvent.click(
     within(screen.getByTestId("reaction-controls")).getByRole("button", {
@@ -451,7 +454,7 @@ it("keeps failed first-reaction delivery visible and retries the same event", as
   expect(publish.mock.calls[1]?.[0]).toEqual(original);
 });
 it("prevents duplicate submissions and unavailable-message actions", async () => {
-  const h = harness();
+  const h = await harness();
   const view = render(<h.Controls disabled />);
   fireEvent.click(
     within(screen.getByTestId("reaction-controls")).getByRole("button", {
@@ -476,7 +479,7 @@ it("prevents duplicate submissions and unavailable-message actions", async () =>
 it.each(["hover", "focus"] as const)(
   "shows who reacted on %s to someone who cannot react",
   async (reveal) => {
-    const h = harness([react(other)]);
+    const h = await harness([react(other)]);
     render(<h.Controls disabled />);
     const pill = screen.getByRole("button", {
       name: `👍: ${other.pubkey.slice(0, 10)}`,
@@ -495,7 +498,7 @@ it.each(["hover", "focus"] as const)(
 );
 
 it("does not let someone who cannot react toggle, and leaves keys to ancestors", async () => {
-  const h = harness([react(other)]);
+  const h = await harness([react(other)]);
   const keys: string[] = [];
   render(
     // Thread Escape, the message menu and timeline scrolling skip prevented keys.
@@ -536,7 +539,7 @@ it("keeps emojis visually active but rejects another click while delivery is pen
         release = resolve;
       }),
   );
-  const h = harness([react(other)], publish);
+  const h = await harness([react(other)], publish);
   render(<h.Controls />);
   fireEvent.click(
     screen.getByRole("button", { name: `👍: ${other.pubkey.slice(0, 10)}` }),
@@ -568,7 +571,7 @@ it("keeps emojis visually active but rejects another click while delivery is pen
   // Only delivery held back the preview that the hover opened.
   expect(screen.getByRole("tooltip").textContent).toContain("You");
 
-  const failed = harness(
+  const failed = await harness(
     [react(other)],
     vi.fn(async () => {
       throw new PublishRejected("Nope");
@@ -611,7 +614,7 @@ it("uses the picker catalog URL even when an old URL has my reaction", async () 
       ),
     },
   ]);
-  const h = harness(
+  const h = await harness(
     [customReaction(viewer, "party", oldUrl)],
     undefined,
     pickerTools,
@@ -653,7 +656,7 @@ it("uses the original animated emoji in reaction emojis and previews", async () 
   const media = vi.fn((source: string, size?: "small") =>
     size === "small" ? source.replace(/\.gif$/, ".thumb.jpg") : source,
   );
-  const h = harness(
+  const h = await harness(
     [customReaction(other, "eyes-intensifies", url)],
     undefined,
     tools,
@@ -673,7 +676,7 @@ it("uses the original animated emoji in reaction emojis and previews", async () 
 
 it("loads names for people who only reacted after a preview opens", async () => {
   const people = Array.from({ length: 5 }, () => keypair());
-  const h = harness(people.map((person) => react(person)));
+  const h = await harness(people.map((person) => react(person)));
   render(<h.Controls />);
   // Complete startup reads so the scheduler can admit background reactor names.
   await act(async () => {
@@ -755,7 +758,7 @@ const showsPlaceholder = (slot: Element, shortcode: string) => {
 
 it("draws a tagless shortcode from the community palette, once the palette arrives", async () => {
   const url = "https://a.test/approve.png";
-  const h = harness([tagless(other, "approve")]);
+  const h = await harness([tagless(other, "approve")]);
   render(<h.Controls />);
   const pill = screen.getByRole("button", {
     name: `:approve:: ${other.pubkey.slice(0, 10)}`,
@@ -773,7 +776,7 @@ it("draws a tagless shortcode from the community palette, once the palette arriv
 });
 
 it("shows a neutral glyph for an unknown shortcode, keeping it as the name", async () => {
-  const h = harness([tagless(other, "mystery")]);
+  const h = await harness([tagless(other, "mystery")]);
   render(<h.Controls />);
   const pill = screen.getByRole("button", {
     name: `:mystery:: ${other.pubkey.slice(0, 10)}`,
@@ -787,7 +790,7 @@ it("shows a neutral glyph for an unknown shortcode, keeping it as the name", asy
 });
 
 it("shows a neutral glyph in pills and previews when media is refused or fails", async () => {
-  const h = harness(
+  const h = await harness(
     [
       customReaction(other, "denied", "https://a.test/denied.png"),
       customReaction(other, "broken", "https://a.test/broken.png"),
@@ -833,8 +836,8 @@ it("shows a neutral glyph in pills and previews when media is refused or fails",
   expect(brokenPreview()?.querySelector("img")).toBeNull();
 });
 
-it("keeps a failed custom reaction's placeholder while its image retries", () => {
-  const h = harness([
+it("keeps a failed custom reaction's placeholder while its image retries", async () => {
+  const h = await harness([
     customReaction(other, "flaky", "https://a.test/flaky.png"),
   ]);
   render(<h.Controls />);
@@ -880,7 +883,7 @@ it("forwards the contributed picker into true toggles and releases confirmed wri
       ),
     },
   ]);
-  const h = harness([react()], undefined, pickerTools);
+  const h = await harness([react()], undefined, pickerTools);
   render(<h.Controls />);
   const picker = screen.getAllByRole("button", {
     name: "Choose from picker",
@@ -908,7 +911,7 @@ it("rolls back a failed last-reaction removal and retries it after remount", asy
   const publish = vi.fn(async (_event: RelayEvent) => {
     throw new PublishRejected("Nope");
   });
-  const h = harness([react()], publish);
+  const h = await harness([react()], publish);
   const view = render(<h.Controls />);
   fireEvent.click(screen.getByRole("button", { name: "👍: You" }));
   expect(screen.queryByRole("button", { name: "👍: You" })).toBeNull();
@@ -934,7 +937,7 @@ it("rolls back a failed last-reaction removal and retries it after remount", asy
 });
 
 it("retires reaction previews while retaining the reaction delivery owner", async () => {
-  const h = harness([react(other)]);
+  const h = await harness([react(other)]);
   vi.useFakeTimers();
   try {
     const tree = (active: boolean) => (
@@ -968,7 +971,7 @@ it("retires reaction previews while retaining the reaction delivery owner", asyn
 });
 
 it("keeps focus on the bubble when my reaction is removed and another person remains", async () => {
-  const h = harness([react(), react(other)]);
+  const h = await harness([react(), react(other)]);
   const onFocusedRemoval = vi.fn();
   render(<h.Controls onFocusedRemoval={onFocusedRemoval} />);
   const own = screen.getByRole("button", { name: "👍: 2 people" });
@@ -986,7 +989,7 @@ it("keeps focus on the bubble when my reaction is removed and another person rem
   });
 });
 it("hands focus back when the last reaction is removed", async () => {
-  const h = harness([react()]);
+  const h = await harness([react()]);
   const onFocusedRemoval = vi.fn();
   render(<h.Controls onFocusedRemoval={onFocusedRemoval} />);
   const own = screen.getByRole("button", { name: "👍: You" });
@@ -1001,7 +1004,7 @@ it("hands focus back when the last reaction is removed", async () => {
 });
 it.each([false, true])(
   "hides inline add on coordination while retaining existing reactions (%s)",
-  (populated) => {
+  async (populated) => {
     const pickerTools = registry<ComposerTool>([
       {
         key: "picker",
@@ -1017,7 +1020,11 @@ it.each([false, true])(
         ),
       },
     ]);
-    const h = harness(populated ? [react(other)] : [], undefined, pickerTools);
+    const h = await harness(
+      populated ? [react(other)] : [],
+      undefined,
+      pickerTools,
+    );
     const view = render(<h.Controls audience="agents" />);
     expect(screen.queryByTestId("inline-add-reaction")).toBeNull();
     if (populated)
@@ -1039,7 +1046,7 @@ it.each([false, true])(
   },
 );
 it("keeps the raw emoji when the name table fails to load, and the next reveal retries", async () => {
-  const h = harness([react(other)]);
+  const h = await harness([react(other)]);
   render(<h.Controls />);
   const pill = screen.getByRole("button", {
     name: `👍: ${other.pubkey.slice(0, 10)}`,

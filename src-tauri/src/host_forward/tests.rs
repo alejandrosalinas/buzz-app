@@ -1839,6 +1839,124 @@ fn goose_responses_route_is_inference() {
     );
 }
 
+#[test]
+fn goose_ai_gateway_routes_are_exact() {
+    let endpoints = "/api/ai-gateway/v2/endpoints";
+    let services = "/api/2.1/unity-catalog/model-services";
+    let responses = "/ai-gateway/openai/v1/responses";
+    let messages = "/ai-gateway/anthropic/v1/messages";
+    let chat = "/ai-gateway/mlflow/v1/chat/completions";
+    for (method, path, query, class) in [
+        (
+            Method::GET,
+            endpoints,
+            Some("page_size=100"),
+            Some(Class::Discovery),
+        ),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=FULL"),
+            Some(Class::Discovery),
+        ),
+        (Method::POST, responses, None, Some(Class::Inference)),
+        (Method::POST, messages, None, Some(Class::Inference)),
+        (Method::POST, chat, None, Some(Class::Inference)),
+        (Method::GET, responses, None, None),
+        (Method::POST, endpoints, None, None),
+        (Method::GET, endpoints, None, None),
+        (Method::POST, responses, Some("page_size=100"), None),
+        (
+            Method::GET,
+            endpoints,
+            Some("page_size=100&view=FULL"),
+            None,
+        ),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=BASIC"),
+            None,
+        ),
+        (Method::GET, services, Some("page_size=0&view=FULL"), None),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=FULL&page_size=1"),
+            None,
+        ),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=FULL&page_token=A%2"),
+            None,
+        ),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=FULL&page_token=A+B"),
+            None,
+        ),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=FULL&page_token="),
+            None,
+        ),
+        (
+            Method::GET,
+            services,
+            Some("page_size=100&view=FULL&other=1"),
+            None,
+        ),
+        (
+            Method::GET,
+            "/api/2.1/unity-catalog/model-services/model",
+            None,
+            None,
+        ),
+        (
+            Method::POST,
+            "/ai-gateway/anthropic/v1/messages/count_tokens",
+            None,
+            None,
+        ),
+    ] {
+        assert_eq!(
+            Harness::Goose.classify(&method, path, query),
+            class,
+            "{method} {path} {query:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn goose_catalog_pagination_keeps_discovery_context() {
+    let mut gateway = fake_gateway().await;
+    let forward = ready(gateway.origin);
+    let generation = open(&forward, Harness::Goose, 1);
+    let path =
+        "/api/2.1/unity-catalog/model-services?page_size=100&view=FULL&page_token=A%2B%2F%3D%26B";
+    let response = reqwest::Client::new()
+        .get(format!("{}{path}", generation.url))
+        .header("Authorization", "Bearer owner-sentinel")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = recv(&mut gateway.seen).await;
+    assert_eq!(seen.path, format!("/upstream/goose{path}"));
+    assert!(!seen.headers.contains_key(header::AUTHORIZATION));
+    for (name, value) in discovery() {
+        assert_eq!(seen.headers[&name], value);
+    }
+    for name in inference().keys() {
+        if !discovery().contains_key(name) {
+            assert!(!seen.headers.contains_key(name), "{name}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn goose_parent_and_child_requests_strip_authorization() {
     let mut gateway = fake_gateway().await;
@@ -1851,8 +1969,11 @@ async fn goose_parent_and_child_requests_strip_authorization() {
     for (index, (session, child, path)) in [
         (PARENT, false, "/serving-endpoints/model-a/invocations"),
         (PARENT, false, "/serving-endpoints/responses"),
+        (PARENT, false, "/ai-gateway/openai/v1/responses"),
+        (PARENT, false, "/ai-gateway/anthropic/v1/messages"),
         (CHILD, true, "/serving-endpoints/model-a/invocations"),
         (CHILD, true, "/serving-endpoints/responses"),
+        (CHILD, true, "/ai-gateway/mlflow/v1/chat/completions"),
     ]
     .into_iter()
     .enumerate()

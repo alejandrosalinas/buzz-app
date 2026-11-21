@@ -12,14 +12,27 @@ import type { ProfileQueries } from "./profile-directory";
 import { attachmentMessage, type UploadedAttachment } from "./attachments";
 import { validReactionContent, type CustomEmoji } from "./emoji";
 import type { EventTemplate } from "nostr-tools";
-import { MEDIA_TARGET_TAG, type ChannelMessage } from "./contracts";
+import {
+  INVOCATION_INTENT_TAG,
+  INVOCATION_INTENT_VERSION,
+  MEDIA_TARGET_TAG,
+  type ChannelMessage,
+} from "./contracts";
 import { messageAuthor } from "./fold";
-import { threadReference } from "./thread-reference";
+import { isThreadContent, threadReference } from "./thread-reference";
 import { reactionTarget as reactionTargetId } from "./reaction-target";
 import { safeMessageUrl } from "./message-content";
 import type { EventData } from "./events";
 import type { Outbox, OutboxRecovery } from "./outbox";
 import { signedMessageTokenTags } from "../messages/message-tokens";
+import type { AgentInvocationIntent } from "../agents/session-admission";
+import type { RelaySession } from "./session";
+
+/** The agent service binds its active matcher to each live relay session. */
+export const replyInvocationIntents = new WeakMap<
+  RelaySession,
+  (input: AgentInvocationIntent) => boolean
+>();
 
 /** Owner authorization is supplied only after the agent's signed profile is verified. */
 export type AgentOwnerAuthorization = Readonly<{
@@ -68,6 +81,10 @@ export function createMessages(
   unmentionedRecipients: (channelId: string) => readonly string[] = () => [],
   /** Events whose `buzz:copy-of` tag names this message id (sent-to-channel copies). */
   copiesOf: (id: string) => readonly EventData[] = () => [],
+  invocationScope?: (
+    channelId: string,
+    rootId: string,
+  ) => ((agentPubkey: string) => boolean) | undefined,
 ) {
   const writer = (
     kind: number,
@@ -120,6 +137,38 @@ export function createMessages(
     )
       throw new Error("Choose at most 32 valid mention references");
     return [...new Set(pubkeys)].map((key) => ["mention", key]);
+  };
+  const invocationTags = (
+    channelId: string,
+    rootId: string,
+    parentId: string,
+    recipients: readonly string[][],
+  ) => {
+    if (!recipients.length) return [];
+    const optedIn = invocationScope?.(channelId, rootId);
+    if (!optedIn) return [];
+    const inChannel = (event: EventData | undefined) => {
+      if (!event || !isThreadContent(event) || !hasEventProof(event))
+        return false;
+      const channels = event.tags.filter(([name]) => name === "h");
+      return channels.length === 1 && channels[0]?.[1] === channelId;
+    };
+    const root = find(rootId);
+    if (!root || !inChannel(root) || threadReference(root)) return [];
+    if (parentId !== rootId) {
+      const parent = find(parentId);
+      if (
+        !parent ||
+        !inChannel(parent) ||
+        threadReference(parent)?.rootId !== rootId
+      )
+        return [];
+    }
+    return recipients.flatMap(([, pubkey]) =>
+      pubkey && optedIn(pubkey)
+        ? [[INVOCATION_INTENT_TAG, String(INVOCATION_INTENT_VERSION), pubkey]]
+        : [],
+    );
   };
   const pickTags = (
     channelId: string,
@@ -501,6 +550,10 @@ export function createMessages(
         ]
           .filter(Boolean)
           .join("\n\n");
+        const recipients = mentionTags(
+          channelId,
+          withDmAgents(channelId, options.mentions ?? []),
+        );
         event.tags = [
           ...event.tags.filter(([tag]) => tag !== "p" && tag !== "mention"),
           ...(root && parent
@@ -509,10 +562,10 @@ export function createMessages(
                 ["e", parent, "", "reply"],
               ]
             : []),
-          ...mentionTags(
-            channelId,
-            withDmAgents(channelId, options.mentions ?? []),
-          ),
+          ...recipients,
+          ...(root && parent
+            ? invocationTags(channelId, root, parent, recipients)
+            : []),
           ...referenceTags(options.references ?? []),
           ...pickTags(channelId, options.mentions ?? [], options.picks ?? {}),
           ...(mediaTarget ? [[MEDIA_TARGET_TAG, mediaTarget]] : []),
@@ -631,14 +684,20 @@ export function createMessages(
       if (mediaTargetUrl && !mediaTarget)
         throw new Error("A valid media target is required");
       const message = attachmentMessage(content, attachments, relayOrigin);
-      return writer(9, channelId).send({
+      const out = writer(9, channelId);
+      const recipients = mentionTags(
+        channelId,
+        withDmAgents(channelId, mentions),
+      );
+      return out.send({
         kind: 9,
         content: text(message.content),
         tags: [
           ["h", channelId],
           ...(parentId === rootId ? [] : [["e", rootId, "", "root"]]),
           ["e", parentId, "", "reply"],
-          ...mentionTags(channelId, withDmAgents(channelId, mentions)),
+          ...recipients,
+          ...invocationTags(channelId, rootId, parentId, recipients),
           ...referenceTags(references),
           ...pickTags(channelId, mentions, picks),
           ...(mediaTarget ? [[MEDIA_TARGET_TAG, mediaTarget]] : []),

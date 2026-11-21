@@ -1,7 +1,9 @@
+import { hostComposerProvenance } from "../../src/features/messages/mention-draft";
+import { MessageComposer } from "../../src/features/messages/MessageComposer";
 import "../../src/shared/styles/globals.css";
 import { useKeyboardFocusVisibility } from "../../src/shared/design-system/useKeyboardFocusVisibility";
 import { AgentSettings } from "../../src/app/AgentSettings";
-import { StrictMode, useState, useLayoutEffect } from "react";
+import { StrictMode, useEffect, useState, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { finalizeEvent } from "nostr-tools";
 import { Context } from "@deepseek-ai/cordis";
@@ -14,6 +16,7 @@ import { SettingsCardsService } from "../../src/features/settings/service";
 import { provideNavigation } from "../../src/features/navigation/service";
 import { ConversationService } from "../../src/features/conversation/service";
 import { bundledPlugins } from "../../src/bundled";
+import { mentionQuery } from "../../src/bundled/mentions/mention-query";
 import { conversationFeatures } from "../../src/app/conversation-features";
 import { bindNames } from "../../src/features/identity-names/service";
 import { createAgentDirectory } from "../../src/features/identity-names/testing";
@@ -43,6 +46,18 @@ let time = 1700000000;
 const publications: RelayEvent[] = [];
 // Channel history the viewer wrote elsewhere, read like the relay's own.
 const history: RelayEvent[] = [];
+const invocation = (() => {
+  if (!new URLSearchParams(location.search).has("invocation")) return;
+  const root = message(first, "c", "Physical thread", ++time);
+  const anchor = message(first, "c", "Invocation", ++time, [
+    ["e", root.id, "", "reply"],
+  ]);
+  const sibling = message(first, "c", "Sibling invocation", ++time, [
+    ["e", root.id, "", "reply"],
+  ]);
+  history.push(root, anchor, sibling);
+  return { rootId: root.id, anchorId: anchor.id, siblingId: sibling.id };
+})();
 let replaceRecipients = (
   _people: readonly { pubkey: string; name: string }[],
 ): boolean => false;
@@ -78,6 +93,7 @@ const secondProfile = () =>
   );
 const delayed = new URLSearchParams(location.search).has("delayed-profiles");
 const testControls = new URLSearchParams(location.search).has("test-controls");
+const supplement = new URLSearchParams(location.search).get("supplement");
 const channels = new URLSearchParams(location.search).has("channels");
 const stream = new URLSearchParams(location.search).has("stream");
 // Opt-in roster scale for local typing diagnostics; ordinary journeys keep two channels.
@@ -330,6 +346,53 @@ const plugins = createPluginManager(context, {
       ({ manifest }) =>
         channels && ["buzz.channels", "buzz.links"].includes(manifest.id),
     ),
+    ...(supplement !== null
+      ? [
+          {
+            manifest: {
+              id: "test.crew",
+              name: "Crew supplement",
+              apiVersion: 1,
+            },
+            module: {
+              inject: ["conversation"],
+              apply(ctx) {
+                ctx.conversation.registerCompletionSupplement({
+                  id: "crew",
+                  title: "Crews",
+                  order: supplement === "hold" ? -20 : 10,
+                  match: ({ text, start }) => mentionQuery(text, start),
+                  component: ({ publish }) => {
+                    useEffect(() => {
+                      if (supplement === "silent") return;
+                      return (
+                        publish({
+                          items: [
+                            {
+                              id: "crew",
+                              label: "Honey crew",
+                              edit: {
+                                mentions: [
+                                  { pubkey: first.pubkey, name: "Honey" },
+                                  { pubkey: second.pubkey, name: "Honey" },
+                                ],
+                              },
+                            },
+                          ],
+                          ...(supplement === "hold"
+                            ? { holdAutoSelect: true }
+                            : {}),
+                        }) || undefined
+                      );
+                    }, [publish]);
+                    return null;
+                  },
+                });
+              },
+            },
+          },
+        ]
+      : []),
     {
       manifest: {
         id: "test.disabled-command",
@@ -416,7 +479,17 @@ Object.assign(window, {
     outsider: outsider.pubkey,
     first: first.pubkey,
     second: second.pubkey,
+    invocation,
     publications,
+    ownerMention: (rootId: string | null) =>
+      owner.session.ownerMentions?.latest({ channelId: "c", rootId }),
+    confirmedOwnerSends: (rootId: string | null, eventIds: readonly string[]) =>
+      owner.session.ownerMentions?.confirmedOwnerSends(
+        { channelId: "c", rootId },
+        eventIds,
+      ),
+    programmaticOwnerSend: (rootId: string, text: string) =>
+      owner.session.messages.reply("c", rootId, text),
     replaceRecipients: (people: readonly { pubkey: string; name: string }[]) =>
       replaceRecipients(people),
     disabledCalls,
@@ -470,6 +543,7 @@ Object.assign(window, {
 function Fixture() {
   useKeyboardFocusVisibility();
   const [thread, setThread] = useState(false);
+  const [replyParent, setReplyParent] = useState(invocation?.anchorId);
   const [disabled, setDisabled] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
   return (
@@ -486,6 +560,14 @@ function Fixture() {
             }
       }
     >
+      {invocation && (
+        <button
+          type="button"
+          onClick={() => setReplyParent(publications[0]?.id)}
+        >
+          Reply to first invocation message
+        </button>
+      )}
       {testControls && (
         <>
           <button type="button" onClick={() => setThread(!thread)}>
@@ -525,7 +607,9 @@ function Fixture() {
         </>
       )}
       <div style={{ width: "100%", maxWidth: 720 }}>
-        <conversation.ui.Composer
+        <MessageComposer
+          evidenceOwner={hostComposerProvenance}
+          extensions={conversation}
           disabled={disabled}
           session={namedSession}
           scope={
@@ -536,7 +620,15 @@ function Fixture() {
           channelId="c"
           channelName="General"
           {...(focusRequest ? { focusRequest } : {})}
-          {...(thread ? { threadRootId: "a".repeat(64) } : {})}
+          {...(invocation
+            ? {
+                threadRootId: invocation.anchorId,
+                sourceRootId: invocation.rootId,
+                replyParentId: replyParent,
+              }
+            : thread
+              ? { threadRootId: "a".repeat(64) }
+              : {})}
         />
       </div>
       {showSettings && <AgentSettings />}

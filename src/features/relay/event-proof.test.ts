@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { getEventHash, verifyEvent, verifiedSymbol } from "nostr-tools";
 import { createEventVerifier, eventDto, hasEventProof } from "./events";
 import { connectBrokerTransport, connectSignedTransport } from "./transport";
@@ -33,10 +33,15 @@ it("reuses only its own proof while returning newly owned, frozen wire fields", 
   expect(second[verifiedSymbol]).toBe(true);
   expect(second).not.toHaveProperty("extra");
   raw.tags[0].push("changed");
+  const [channel] = second.tags;
+  assert(channel);
+  expect(Reflect.set(second, "content", "tampered")).toBe(false);
+  expect(Reflect.set(second.tags, 0, ["h", "other"])).toBe(false);
+  expect(Reflect.set(channel, 1, "other")).toBe(false);
+  expect(Reflect.set(second.tags, 1, ["p", other.pubkey])).toBe(false);
   expect(second.tags).toEqual([["h", "a"]]);
-  expect(Object.isFrozen(second)).toBe(true);
-  expect(Object.isFrozen(second.tags)).toBe(true);
-  expect(Object.isFrozen(second.tags[0])).toBe(true);
+  expect(getEventHash(second)).toBe(second.id);
+  expect(hasEventProof(second)).toBe(true);
   createEventVerifier()(wire()); // another connection has no proof
   eventDto(wire()); // uncached boundary remains uncached
   eventDto(wire());

@@ -119,7 +119,10 @@ export type GitScope = {
   path?: string | undefined;
 };
 export type PluginImports = {
-  folder(): Promise<ImportPreview | null>;
+  /** Without `path`, the owner picks the folder. */
+  folder(path?: string): Promise<ImportPreview | null>;
+  /** Reads an absolute folder path without acquiring or replacing an installation preview. */
+  checkPath(path: string): Promise<ImportPreview | null>;
   checkFolder(id: string): Promise<PluginRelease>;
   previewFolder(id: string): Promise<ImportPreview | null>;
   files(source: string, files: ImportFile[]): Promise<ImportPreview | null>;

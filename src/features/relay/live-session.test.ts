@@ -557,7 +557,7 @@ function reconnectHarness(
       (entry) => !entry.signal?.aborted && entry.filters[0]?.top_level === true,
     );
   /** The one outstanding window read, after answering byline profile and
-   * status reads empty. A head's notice read, sent beside it, stays pending. */
+   * status reads empty. A notice read of its own stays pending. */
   const read = (channelId = "c") => {
     for (const entry of wire.pending.splice(0)) {
       if (entry.signal?.aborted) continue;
@@ -567,8 +567,9 @@ function reconnectHarness(
       else wire.pending.push(entry);
     }
     const reads = wire.pending.filter((entry) => !isNoticeRead(entry.filters));
-    expect(reads.map((entry) => entry.filters)).toMatchObject([
-      [{ "#h": [channelId], top_level: true }],
+    // A head read carries its notice filter second.
+    expect(reads.map((entry) => entry.filters[0])).toMatchObject([
+      { "#h": [channelId], top_level: true },
     ]);
     const [entry] = reads;
     assert(entry);
@@ -666,6 +667,7 @@ function reconnectHarness(
   };
   return {
     owner,
+    relay,
     alice,
     wire,
     queries,
@@ -2188,7 +2190,9 @@ describe("a reconnect whose replay was continuous", () => {
       expect(h.window().freshness).toBe("verified");
       // The head read also asks for the newest membership notices.
       expect(
-        channelReads(h).filter((filters) => filters[0]?.kinds?.[0] === 40099),
+        channelReads(h).filter((filters) =>
+          filters.some((filter) => filter.kinds?.[0] === 40099),
+        ),
       ).toHaveLength(1);
     } finally {
       h.owner.dispose();
@@ -2359,10 +2363,24 @@ describe("a reconnect whose replay was continuous", () => {
       h.live.state({ status: "connected", routes: [] });
       h.live.established("c");
       await flush();
-      h.read().respond(h.page("head", [seen], seen));
+      // A long drop: a full page of joins lands with the catch-up's head,
+      // so their descent continues below it.
+      const joins = Array.from({ length: 500 }, (_, index) =>
+        signed(h.relay, {
+          kind: 40099,
+          content: JSON.stringify({
+            type: "member_joined",
+            actor: h.alice.pubkey,
+            target: keypair().pubkey,
+          }),
+          created_at: 11 + index,
+          tags: [["h", "c"]],
+        }),
+      );
+      h.read().respond([...h.page("head", [seen], seen), ...joins]);
       await flush();
       expect(h.window().freshness).toBe("verified");
-      // The catch-up's notice read fails: its notices are still owed.
+      // The descent's read fails: the notices below are still owed.
       const owed = notices();
       expect(owed).toHaveLength(1);
       owed[0]?.fail(new Error("Membership notices did not advance"));

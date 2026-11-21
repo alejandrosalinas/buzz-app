@@ -4,7 +4,10 @@
 // kept apart from the saved prompts, which drop old sessions to stay small,
 // and holds each session for `STANDALONE_DAYS` from its start: longer than
 // Usage reads back. Nothing inside that window is dropped, however often the
-// agent's turns run.
+// agent's turns run. Every one-off turn's session is kept, Usage on or off;
+// only while the Usage plugin is on (`usageOn`) does it also keep the key of
+// the turn that started it (`timer/ID` or `watch/ID`), so Usage can say which
+// routine spent it.
 //
 // Each day's starts are a value of their own, so a turn rewrites only its
 // day's value, and whole days past keeping are removed. Agent storage takes
@@ -13,31 +16,41 @@
 import { validTime } from "../agent-harness/acp/agent-sessions";
 import type { AgentKey } from "./membership";
 import type { AgentStore } from "./store";
+import type { SettingsCards } from "../settings/service";
 
 export const STANDALONE_PREFIX = "buzz.standalone-sessions.v1:";
+/** The Usage plugin's settings card, registered only while Usage is on. */
+export const USAGE_CARD = "buzz.usage/usage";
+
+/** Whether Usage is on, asked as each one-off turn starts: a runtime keeps
+ * the turn's key with its session only then. */
+export const usageOn = (cards: Pick<SettingsCards, "has">) => () =>
+  cards.has(USAGE_CARD);
 /** Usage reads 30 days back, and a turn can answer a day after it started. */
 export const STANDALONE_DAYS = 32;
 const DAY = 86_400_000;
 
-type Stored = { version: 1; sessions: [string, number][] };
+/** `[id, startedAt]`, then the key of the turn that started it when that
+ * was kept. Fields past these are kept as they are, unread. */
+type Entry = [string, number, ...unknown[]];
+type Stored = { version: 1; sessions: Entry[] };
 
 /** The key of an agent's sessions that started on `day` (days since 1970,
  * UTC), of one agent type. */
 const dayKey = (type: string, agent: AgentKey, day: number) =>
   `${STANDALONE_PREFIX}${type}:${agent}:${day}`;
 
-/** The stored sessions, damaged entries dropped. */
-function read(text: string | null): [string, number][] {
+const short = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= 256;
+
+/** The stored sessions, entries without a valid id and start dropped. */
+function read(text: string | null): Entry[] {
   try {
     const stored = JSON.parse(text ?? "null") as Partial<Stored> | null;
     if (stored?.version === 1 && Array.isArray(stored.sessions))
       return stored.sessions.filter(
-        (entry): entry is [string, number] =>
-          Array.isArray(entry) &&
-          typeof entry[0] === "string" &&
-          entry[0].length > 0 &&
-          entry[0].length <= 256 &&
-          validTime(entry[1]),
+        (entry): entry is Entry =>
+          Array.isArray(entry) && short(entry[0]) && validTime(entry[1]),
       );
   } catch {}
   return [];
@@ -69,12 +82,17 @@ export function standaloneSessions(
       .sort((a, b) => a[1] - b[1]);
   };
   return {
-    /** The sessions kept, oldest first, with when each started. */
-    list: () => kept().map(([id, at]) => ({ id, at })),
-    /** Records a one-off turn's new session, then removes the days past
-     * keeping. A failed save is logged, never thrown, so the agent keeps
-     * working. */
-    async add(id: string) {
+    /** The sessions kept, oldest first, with when each started and the key
+     * of the turn that started it, when that was kept. A damaged key reads
+     * as none, so its session still counts. */
+    list: () =>
+      kept().map(([id, at, wake]) =>
+        short(wake) ? { id, at, wake } : { id, at },
+      ),
+    /** Records a one-off turn's new session, and the turn's key when given,
+     * then removes the days past keeping. A failed save is logged, never
+     * thrown, so the agent keeps working. */
+    async add(id: string, wake?: string) {
       try {
         // Read, changed and written with no wait between, so adds never
         // drop each other's sessions.
@@ -82,7 +100,7 @@ export function standaloneSessions(
         const at = now();
         const key = dayKey(type, agent, Math.floor(at / DAY));
         const sessions = read(storage.get(key));
-        sessions.push([id, at]);
+        sessions.push(short(wake) ? [id, at, wake] : [id, at]);
         const after = cutoff();
         const past = days().filter(({ day }) => (day + 1) * DAY <= after);
         await storage.set(

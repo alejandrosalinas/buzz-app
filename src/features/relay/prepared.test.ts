@@ -717,6 +717,7 @@ it("reads and persists a Solo chat's head like any channel's, threads staying in
         top_level: true,
         include_aux: true,
       }),
+      expect.objectContaining({ "#h": ["work"], kinds: [40099] }),
     ]);
     const prompt = message(viewer, "work", "Prompt", 20);
     const answer = message(alice, "work", "Answer", 21);

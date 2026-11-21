@@ -99,6 +99,7 @@ function setup(
           }),
         launch: async () => ({ cwd: "/work", systemPrompt: "prompt" }),
         tools,
+        provider: "databricks",
         choice: () => ({ provider: "databricks", model: "" }),
         conversation: "chat",
         prompt: async (fresh) => {
@@ -201,7 +202,10 @@ describe("a forwarded goose turn", () => {
     expect(
       forwardedEnv(
         { url: "http://127.0.0.1:4100/g9", noProxy: "127.0.0.1,localhost" },
-        { choice: () => ({ provider: "databricks", model: "" }) },
+        {
+          provider: "databricks",
+          choice: () => ({ provider: "databricks", model: "" }),
+        },
       ),
     ).toMatchObject({
       DATABRICKS_HOST: "http://127.0.0.1:4100/g9",

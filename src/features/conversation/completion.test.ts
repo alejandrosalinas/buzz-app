@@ -51,6 +51,22 @@ it("validates and deterministically arbitrates optional provider ranges", () => 
     matchCompletion([provider("a", 0, 3)], { ...observation, end: 4 }, context),
   ).toBeUndefined();
 });
+it("keeps a supplement beside the winner only at the winner's start", () => {
+  const beside = (start: number, order = -20) => ({
+    ...provider(`beside-${start}`, start, 3, order),
+    supplement: true as const,
+  });
+  const match = matchCompletion(
+    [provider("people", 1, 3), beside(1), beside(0)],
+    observation,
+    context,
+  );
+  expect(match?.provider.id).toBe("people");
+  expect(match?.supplements.map(({ provider }) => provider.id)).toEqual([
+    "beside-1",
+  ]);
+  expect(matchCompletion([beside(1)], observation, context)).toBeUndefined();
+});
 it("snapshots valid edit primitives, rejects malformed/duplicate candidates and bounds output", () => {
   const recipient = { pubkey: "a".repeat(64), name: "Honey" };
   const input = {

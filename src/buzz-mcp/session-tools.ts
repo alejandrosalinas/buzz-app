@@ -251,8 +251,9 @@ async function dispatchSessionTool(
 ): Promise<Reply> {
   const tool = added.find((tool) => tool.name === name);
   if (tool) {
-    // A plugin's tool doesn't get the agent's device settings or Bestie.
-    const { settings: _, bestie: __, ...plugin } = client;
+    // A plugin's tool doesn't get the agent's device settings, Bestie or
+    // the owner's workspaces.
+    const { settings: _, bestie: __, workspaces: ___, ...plugin } = client;
     return tool.call(plugin, context, args);
   }
   if (isSoloWorkerTool(name)) return callSoloWorkerTool(client, name, args);

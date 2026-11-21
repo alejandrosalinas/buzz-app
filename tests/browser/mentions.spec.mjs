@@ -399,6 +399,14 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
     ["p", keys.second],
   ]);
   expect(first.tags.filter(([tag]) => tag === "h")).toEqual([["h", "c"]]);
+  // A real browser Send click carries editor selection evidence through to
+  // the plugin reader after delivery. Relay tags alone cannot supply it.
+  await expect
+    .poll(() => page.evaluate(() => window.mentionFixture.ownerMention(null)))
+    .toMatchObject({
+      eventId: first.id,
+      recipientIds: [keys.first, keys.second],
+    });
   await page.getByRole("button", { name: "Toggle thread" }).click();
   await choose(keys.second);
   await page.evaluate(() =>
@@ -503,7 +511,175 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
   expect(afterRemoval.tags.filter(([tag]) => tag === "p")).toEqual([
     ["p", keys.second],
   ]);
+  // A tool can set routing before a human Send without making it an explicit ping.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.mentionFixture.ownerMention("a".repeat(64))?.eventId,
+      ),
+    )
+    .toBe(afterRemoval.id);
+  await page.evaluate(
+    (pubkey) =>
+      window.mentionFixture.replaceRecipients([
+        { pubkey, name: "Honey", explicit: true },
+      ]),
+    keys.second,
+  );
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.mentionFixture.publications.length))
+    .toBe(4);
+  const automatic = await page.evaluate(() =>
+    window.mentionFixture.publications.at(-1),
+  );
+  expect(automatic.tags.filter(([tag]) => tag === "p")).toEqual([
+    ["p", keys.second],
+  ]);
+  const threadRoot = "a".repeat(64);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ root, id }) => window.mentionFixture.confirmedOwnerSends(root, [id]),
+        { root: threadRoot, id: automatic.id },
+      ),
+    )
+    .toEqual([automatic.id]);
+  expect(
+    await page.evaluate(
+      (root) => window.mentionFixture.ownerMention(root)?.eventId,
+      threadRoot,
+    ),
+  ).toBe(afterRemoval.id);
+  const ordinary = page.getByRole("textbox", { name: "Reply to thread" });
+  await ordinary.fill("An ordinary owner update");
+  await ordinary.press("Enter");
+  await expect
+    .poll(() => page.evaluate(() => window.mentionFixture.publications.length))
+    .toBe(5);
+  const human = await page.evaluate(() =>
+    window.mentionFixture.publications.at(-1),
+  );
+  expect(human.tags.filter(([name]) => name === "p")).toEqual([]);
+  const programmatic = await page.evaluate(
+    (root) =>
+      window.mentionFixture.programmaticOwnerSend(
+        root,
+        "An ordinary owner update",
+      ),
+    threadRoot,
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (id) => window.mentionFixture.publications.some((row) => row.id === id),
+        programmatic,
+      ),
+    )
+    .toBe(true);
+  expect(
+    await page.evaluate(
+      (id) =>
+        window.mentionFixture.publications.find((row) => row.id === id)?.pubkey,
+      programmatic,
+    ),
+  ).toBe(human.pubkey);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ root, ids }) => window.mentionFixture.confirmedOwnerSends(root, ids),
+        { root: threadRoot, ids: [programmatic, human.id] },
+      ),
+    )
+    .toEqual([human.id]);
   expect(errors.unexplained()).toEqual([]);
+});
+
+test("owner send proof stays in the invocation when the composer targets an inner reply", async ({
+  page,
+}) => {
+  // A trusted browser Send must carry the composer address through delivery.
+  await page.addInitScript(() => {
+    localStorage.setItem("buzz-remember-mentioned-agents.v1", "off");
+  });
+  await page.goto(`${fixture}?invocation`);
+  const composer = page.getByRole("textbox", { name: "Reply to thread" });
+  await expect(composer).toBeVisible();
+  const { invocation, first, second } = await page.evaluate(() => {
+    const { invocation, first, second } = window.mentionFixture;
+    return { invocation, first, second };
+  });
+  const { anchorId, rootId, siblingId } = invocation;
+  let sent = 0;
+  const send = async () => {
+    await page
+      .getByRole("button", { name: "Send message", exact: true })
+      .click();
+    const index = sent++;
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.mentionFixture.publications.length),
+      )
+      .toBe(sent);
+    return page.evaluate((index) => {
+      const { id, tags } = window.mentionFixture.publications[index];
+      return { id, tags };
+    }, index);
+  };
+  const mention = async (key) => {
+    await page
+      .getByRole("button", { name: "Mention a member", exact: true })
+      .click();
+    const picker = page.getByRole("dialog", {
+      name: "Mention a member or agent",
+    });
+    await picker.locator(`[data-mention-choice="${key}"]`).click();
+    return send();
+  };
+  const latest = (root) =>
+    page.evaluate((root) => window.mentionFixture.ownerMention(root), root);
+  const confirmed = (root, ids) =>
+    page.evaluate(
+      ({ root, ids }) => window.mentionFixture.confirmedOwnerSends(root, ids),
+      { root, ids },
+    );
+
+  const direct = await mention(first);
+  expect(direct.tags.filter(([name]) => name === "e")).toEqual([
+    ["e", rootId, "", "root"],
+    ["e", anchorId, "", "reply"],
+  ]);
+  await composer.fill("Direct owner update");
+  const ordinary = await send();
+  expect(ordinary.tags.filter(([name]) => name === "p")).toEqual([]);
+  const ids = [direct.id, ordinary.id];
+  await expect.poll(() => confirmed(anchorId, ids)).toEqual(ids);
+  expect(await latest(anchorId)).toMatchObject({
+    eventId: direct.id,
+    recipientIds: [first],
+  });
+
+  await page
+    .getByRole("button", { name: "Reply to first invocation message" })
+    .click();
+  const nested = await mention(second);
+  expect(nested.tags.filter(([name]) => name === "e")).toEqual([
+    ["e", rootId, "", "root"],
+    ["e", direct.id, "", "reply"],
+  ]);
+  await composer.fill("Nested owner update");
+  const nestedOrdinary = await send();
+  expect(nestedOrdinary.tags.filter(([name]) => name === "p")).toEqual([]);
+  ids.push(nested.id, nestedOrdinary.id);
+  await expect.poll(() => confirmed(anchorId, ids)).toEqual(ids);
+  expect(await latest(anchorId)).toMatchObject({
+    eventId: nested.id,
+    recipientIds: [second],
+  });
+  for (const other of [rootId, siblingId, direct.id, null]) {
+    expect(await latest(other)).toBeNull();
+    expect(await confirmed(other, ids)).toEqual([]);
+  }
 });
 
 test("selected mentions inside code remain visible through draft restore and channel/reply publication", async ({

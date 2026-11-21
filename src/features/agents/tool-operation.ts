@@ -147,7 +147,8 @@ export async function callToolOperation(
       content: { title: registered.name, arguments: JSON.parse(input) },
     });
     check();
-    const { settings: _, ...plugin } = client;
+    // Nor the owner's workspaces: only the agent's own tools file in them.
+    const { settings: _, workspaces: __, ...plugin } = client;
     const authority = Object.freeze({
       client: Object.freeze(plugin),
       context,

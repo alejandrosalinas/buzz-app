@@ -45,6 +45,16 @@ export type Stats = Readonly<{
     cost: Total;
     sessions: number;
   }>[];
+  /** The period's cost by the agent and the timer or watch of its that
+   * started each session, costliest first; the sessions that none started or
+   * whose harness does not say last, with no `agent` or `wake`. Empty when no
+   * session says. */
+  routines: readonly Readonly<{
+    agent?: Agent;
+    wake?: string;
+    cost: Total;
+    sessions: number;
+  }>[];
   /** The period's costliest sessions. */
   costliest: readonly Readonly<{
     agent: Agent;
@@ -170,6 +180,8 @@ export function stats(
   const prompt = new Sum();
   const agents: Stats["agents"][number][] = [];
   const sessions: Stats["costliest"][number][] = [];
+  // Keyed by agent and wake: each agent names its own timers and watches.
+  const routines = new Map<string, Routine>();
   for (const { agent, harness, sessions: list } of usage) {
     const models = new Map<string, number>();
     const agentCost = new Sum();
@@ -227,6 +239,17 @@ export function stats(
       }
       agentSessions += 1;
       agentCost.include(sessionCost);
+      // A watch's catch-up turn is that watch's work too.
+      const wake = session.wake?.replace(/^catch-up\//, "watch/");
+      const id = wake === undefined ? "" : JSON.stringify([agent.pubkey, wake]);
+      const routine = routines.get(id) ?? {
+        ...(wake !== undefined && { agent, wake }),
+        cost: new Sum(),
+        sessions: 0,
+      };
+      routine.cost.include(sessionCost);
+      routine.sessions += 1;
+      routines.set(id, routine);
       sessions.push({
         agent,
         harness,
@@ -247,7 +270,14 @@ export function stats(
     });
   }
   if (unread.size)
-    for (const sum of [cost, previousCost, tokens, output, read])
+    for (const sum of [
+      cost,
+      previousCost,
+      tokens,
+      output,
+      read,
+      ...[...routines.values()].map((routine) => routine.cost),
+    ])
       sum.partial = true;
   for (const harness of unread) uncertain(harness);
   const hit = read.total();
@@ -280,10 +310,27 @@ export function stats(
     agents: agents.sort(
       (a, b) => known(b.cost) - known(a.cost) || b.sessions - a.sessions,
     ),
+    routines: routined(routines),
     costliest: sessions
       .sort((a, b) => known(b.cost) - known(a.cost) || b.tokens - a.tokens)
       .slice(0, COSTLIEST),
   };
+}
+
+type Routine = { agent?: Agent; wake?: string; cost: Sum; sessions: number };
+
+/** The routines, those a timer or watch started costliest first, then the
+ * rest; none when no session says which started it. */
+function routined(routines: ReadonlyMap<string, Routine>): Stats["routines"] {
+  if (![...routines.values()].some(({ wake }) => wake !== undefined)) return [];
+  return [...routines.values()]
+    .map(({ cost, ...routine }) => ({ ...routine, cost: cost.total() }))
+    .sort(
+      (a, b) =>
+        Number(a.wake === undefined) - Number(b.wake === undefined) ||
+        known(b.cost) - known(a.cost) ||
+        b.sessions - a.sessions,
+    );
 }
 
 /** A Claude model id as its name, e.g. `claude-opus-5-5` as Claude Opus 5.5;

@@ -31,6 +31,7 @@ import {
   keypair,
   message,
   metadata,
+  ownedProfile,
   profile,
   roster,
   scriptedTransport,
@@ -1625,6 +1626,135 @@ it.each([
     }
   },
 );
+
+it("tells the reranker which hits agents or workflows wrote, whoever owns them, and where the searcher is a member now", async () => {
+  vi.useFakeTimers();
+  const relay = keypair(),
+    viewer = keypair(),
+    colleague = keypair(),
+    colleagueAgent = keypair(),
+    envelopeAgent = keypair(),
+    ownAgent = keypair();
+  const discovery = [
+    metadata(relay, "crew", "crew"),
+    roster(relay, "crew", [viewer.pubkey, colleague.pubkey]),
+    metadata(relay, "left", "left"),
+    roster(relay, "left", [viewer.pubkey]),
+    profile(colleague, { name: "Colleague" }),
+    await ownedProfile(colleagueAgent, colleague, "Helper"),
+  ];
+  const owner = createRelaySession({
+    ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+    archiveAuthority: relay.pubkey,
+    query(filters) {
+      if (filters.some((filter) => filter.search !== undefined))
+        return Promise.resolve([
+          message(colleague, "crew", "deploy by a person", 1700000504),
+          message(colleagueAgent, "crew", "deploy by an agent", 1700000503),
+          signed(envelopeAgent, {
+            kind: 40002,
+            created_at: 1700000502,
+            content: JSON.stringify({ content: "deploy from an envelope" }),
+            tags: [["h", "crew"]],
+          }),
+          message(ownAgent, "left", "deploy by my agent", 1700000501),
+          // Relay-signed workflow output names its owner, not as their own.
+          eventDto(
+            message(relay, "crew", "deploy by a workflow", 1700000500, [
+              ["buzz:workflow", "true"],
+              ["buzz:workflow-owner", colleague.pubkey],
+            ]),
+          ),
+        ]);
+      return Promise.resolve(
+        discovery.filter((event) =>
+          filters.some((filter) => matchFilter(filter as Filter, event)),
+        ),
+      );
+    },
+  });
+  // The viewer's own agent has no agent profile; their library knows it.
+  const source = owner.session.agentChoices;
+  const choices = {
+    ...source.snapshot(),
+    identities: [{ pubkey: ownAgent.pubkey, name: "Mine", managed: true }],
+  };
+  // After leaving a public channel, it reads publicly again while its old
+  // roster still lists the viewer (see discovery-permissions.test.ts).
+  const channels = owner.session.channels;
+  const session = {
+    ...owner.session,
+    agentChoices: {
+      ...source,
+      snapshot: () => choices,
+      subscribe: () => () => {},
+      retain: () => () => {},
+      ensure: () => {},
+    },
+    channels: {
+      ...channels,
+      get: (id: string) => {
+        const channel = channels.get?.(id);
+        if (id !== "left" || !channel) return channel;
+        const { viewerRole: _, ...left } = channel;
+        return { ...left, readOnly: true as const };
+      },
+    },
+  } as typeof owner.session;
+  const requests: DecisionRequest[] = [];
+  const decisions = {
+    status: () => "ready",
+    subscribe: () => () => {},
+    decide: async (request: DecisionRequest) => {
+      requests.push(request);
+      return { outcome: "failed", reason: "unavailable" };
+    },
+  } as unknown as Decisions;
+  render(
+    <SearchResults
+      session={session}
+      query="deploy"
+      onQueryChange={() => {}}
+      input={createRef<HTMLInputElement>()}
+      pages={[]}
+      openConversation={() => {}}
+      openNewMessage={() => {}}
+      decisions={decisions}
+    />,
+  );
+  try {
+    await act(async () => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS));
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    expect(requests).toHaveLength(1);
+    const { candidates } = JSON.parse(requests[0]?.state ?? "{}") as {
+      candidates: {
+        text: string;
+        author: string;
+        from_agent?: true;
+        searcher_in_conversation?: true;
+      }[];
+    };
+    expect(
+      candidates.map(
+        ({ text, author, from_agent, searcher_in_conversation }) => [
+          text,
+          author,
+          from_agent,
+          searcher_in_conversation,
+        ],
+      ),
+    ).toEqual([
+      ["deploy by a person", "Colleague", undefined, true],
+      ["deploy by an agent", "Helper", true, true],
+      ["deploy from an envelope", expect.any(String), true, true],
+      ["deploy by my agent", expect.any(String), true, undefined],
+      ["deploy by a workflow", "Workflow · owned by Colleague", true, true],
+    ]);
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
 
 // Searches several signed pages; a busy runner has taken over 5 s.
 it("sorts a conversation newest first across pages and restarts paging when the order changes", async () => {

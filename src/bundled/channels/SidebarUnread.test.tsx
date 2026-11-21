@@ -112,10 +112,11 @@ it.each([
 });
 
 it("reveals the heading for an unread chat in a closed Solo workspace", async () => {
+  const captureScrollAnchor = { current: vi.fn() };
   function Workspace() {
     const [open, setOpen] = useState(false);
     return (
-      <SidebarUnread>
+      <SidebarUnread captureScrollAnchor={captureScrollAnchor}>
         <SidebarSection
           sectionKey="group:work"
           title="Work"
@@ -135,6 +136,11 @@ it("reveals the heading for an unread chat in a closed Solo workspace", async ()
     );
   }
   render(<Workspace />);
+  const sidebar = screen.getByRole("navigation");
+  const capturedPositions: number[] = [];
+  captureScrollAnchor.current.mockImplementation(() => {
+    capturedPositions.push(sidebar.scrollTop);
+  });
   const heading = screen.getByLabelText("Work");
   heading.dataset.top = "340";
   await measure();
@@ -144,6 +150,8 @@ it("reveals the heading for an unread chat in a closed Solo workspace", async ()
   await measure();
   expect(heading.closest("details")).not.toHaveAttribute("open");
   expect(heading).toHaveFocus();
+  expect(sidebar.scrollTop).toBeGreaterThan(0);
+  expect(capturedPositions).toEqual([sidebar.scrollTop]);
 });
 
 it.each([0, 1, 3, 5])(

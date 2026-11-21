@@ -10,7 +10,7 @@ import {
   type AgentSessionRouter,
   type AgentSessionAssociation,
   type AgentSessionSource,
-  type InvocationSubthread,
+  type RoutedInvocation,
 } from "./session-admission";
 import type {} from "../navigation/service";
 import {
@@ -74,6 +74,7 @@ import type { TeamResult, TeamSent } from "./team-ops";
 import type { Expected, SnapshotRead } from "./agent-config-artifacts";
 import type { revertTemplate, SettingsCheck } from "./agent-config-history";
 import type { RevertOutcome } from "./AgentConfigHistory";
+import { TranscriptPanel } from "./TranscriptPanel";
 import { isBundledOwner } from "../../plugins/provenance";
 import {
   awaitRecommendation,
@@ -86,6 +87,7 @@ import {
   recommendedCandidates,
   type RecommendedCandidate,
   type RecommendedPick,
+  SOURCE_MS,
   withRecommended,
 } from "./recommended";
 import {
@@ -198,7 +200,11 @@ import { threadReference } from "../relay/thread-reference";
 import { channelTabs } from "../../bundled/channels/useChannelTabState";
 import type { RelayData } from "../relay/service";
 import type { RelaySession } from "../relay/session";
-import type { ChannelSummary } from "../relay/contracts";
+import { replyInvocationIntents } from "../relay/messages";
+import {
+  INVOCATION_INTENT_VERSION,
+  type ChannelSummary,
+} from "../relay/contracts";
 import {
   parseSlug,
   type AttentionObject,
@@ -270,7 +276,13 @@ import {
 import { readInterrupted, writeInterrupted } from "./interrupted";
 import { AttentionSources, type AttentionProducer } from "./attention-sources";
 import { type AddedTool, BUZZ_SESSION } from "../../buzz-mcp/session-tools";
-import { soloChannelMetadata } from "../relay/discovery";
+import { openMetadata } from "../relay/discovery";
+import { prepareSoloMove } from "../channel-navigation/solo-navigation";
+import {
+  loadChannelSetup,
+  loadChatSetup,
+  shareableInstructions,
+} from "../solo/workspace";
 import { channelIdentity } from "../relay/channel-labels";
 import { regionLabels } from "../solo/region-labels";
 import { nameSoloChat } from "./solo-chat-name";
@@ -288,6 +300,7 @@ import {
   type BlockedReason,
   type EligibleRoute,
   gatewayRoutes,
+  HARNESS,
   TURN_READINESS_WAIT_MS,
 } from "./gateway/route";
 
@@ -566,6 +579,10 @@ export type SessionUsage = Readonly<{
   channelId?: string;
   root?: string;
   title?: string;
+  /** The key of the standalone turn that started it (`timer/ID`, `watch/ID`,
+   * `catch-up/ID` or `source/ID`), as `runOnce` was given it. Left out when
+   * it did not start from one, or the harness does not say. */
+  wake?: string;
   startedAt: number;
   lastAt: number;
   observations: readonly UsageObservation[];
@@ -588,20 +605,51 @@ export type HandoffSource = Readonly<
 >;
 /** A wake the agent sends itself, `from` another of its conversations. */
 export type AgentHandoff = AgentWake & Readonly<{ from: HandoffSource }>;
-/** Run-only placement of a just-created Solo; never a general move capability. */
-export type SoloPlacement = Readonly<{
+/** Filing a conversation in one of the owner's workspaces. */
+export type WorkspacePlacement = Readonly<{
   status: "filed" | "not-filed" | "unconfirmed";
   error?: string;
 }>;
-export type SoloWorkspaces = Readonly<{
+/** Who will be in a conversation the agent is about to create. */
+export type WorkspaceAudience = Readonly<{
+  members: readonly string[];
+  open: boolean;
+}>;
+/** A new conversation's kind: a Solo chat with the members it names, or a
+ * team channel. */
+export type WorkspaceChat = Readonly<
+  { solo: true; members: readonly string[] } | { solo: false }
+>;
+/** A workspace's defaults for a new conversation in it. */
+export type WorkspaceDefaults = Readonly<{
+  canvas: string;
+  agents: readonly string[];
+  /** Default agents not available here, left out of the create. */
+  skipped: readonly string[];
+}>;
+/** Run-only access to the owner's sidebar workspaces, for conversations the
+ * owner can see. */
+export type Workspaces = Readonly<{
   list(
     signal: AbortSignal,
   ): Promise<readonly Readonly<{ id: string; name: string }>[]>;
+  /** As New chat for a Solo chat with `members`, or New channel. */
+  defaults(
+    workspace: string,
+    chat: WorkspaceChat,
+    signal: AbortSignal,
+  ): Promise<WorkspaceDefaults>;
   prepare(
     workspace: string,
-    members: readonly string[],
+    audience: WorkspaceAudience,
     signal: AbortSignal,
-  ): Promise<(created: RelayEvent) => Promise<SoloPlacement>>;
+  ): Promise<(created: RelayEvent) => Promise<WorkspacePlacement>>;
+  /** Files `id` in `workspace`, or unfiles it without one. */
+  move(
+    id: string,
+    workspace: string | undefined,
+    signal: AbortSignal,
+  ): Promise<WorkspacePlacement>;
 }>;
 /** The agent as `run` holds it. A run's handle works for as long as the
  * agent exists; one from `Agents.handle` fails each call while `handle`
@@ -691,17 +739,27 @@ export type AgentHandle = Readonly<{
   /** The owner's thread tabs on this device in the agent's community;
    * undefined while it is not connected. */
   tabs(): ReturnType<typeof channelTabs> | undefined;
-  /** On a run's handle only: personal workspaces for new Solo chats. */
-  soloWorkspaces?: Readonly<{
+  /** On a run's handle only: the owner's sidebar workspaces. */
+  workspaces?: Readonly<{
     list(
       signal?: AbortSignal,
     ): Promise<readonly Readonly<{ id: string; name: string }>[]>;
+    defaults(
+      workspace: string,
+      chat: WorkspaceChat,
+      signal?: AbortSignal,
+    ): Promise<WorkspaceDefaults>;
     prepare(
       workspace: string,
-      members: readonly string[],
+      audience: WorkspaceAudience,
       channelId: string,
       signal?: AbortSignal,
-    ): Promise<(id: string) => Promise<SoloPlacement>>;
+    ): Promise<(id: string) => Promise<WorkspacePlacement>>;
+    move(
+      id: string,
+      workspace: string | undefined,
+      signal?: AbortSignal,
+    ): Promise<WorkspacePlacement>;
   }>;
   /** On a run's handle only: Buzz settings on this device. */
   settings?: DeviceSettings;
@@ -864,7 +922,7 @@ export type Delivery<Config = unknown> = Readonly<{
       conversation: AgentSessionSource;
     }>,
     signal?: AbortSignal,
-  ): Promise<InvocationSubthread | undefined>;
+  ): Promise<RoutedInvocation | undefined>;
   /** The native adapter calls this after authority and conversation checks. */
   prepareSession?(
     placement: Readonly<{
@@ -1059,6 +1117,8 @@ export type AgentType<Config = unknown> = {
   readonly supportsGuardedWake?: true;
   /** Carries Delivery.session into tool context and sessionContext into the prompt. */
   sessionAdmission?: true;
+  /** Resolves Delivery.routeConversation before selecting the provider session. */
+  invocationRouting?: true;
   /** Huddles supplies a running agent owned by the current viewer.
    * Full-duplex voice on the existing room conversation; abort closes the pipe. */
   voice?(seat: AgentVoiceSeat<Config>): Promise<AgentVoiceConnection>;
@@ -1226,6 +1286,10 @@ export type AgentType<Config = unknown> = {
    * left for it. Without it, support is unadvertised: a harness that builds
    * its turns with `turnPrompt` still shows them, and another one never does. */
   notes?: true;
+  /** Up to 8 folders, each absolute, `~/…` or starting with `$CODEX_HOME`,
+   * whose `<name>/SKILL.md` skills the composer's `/` offers for its local
+   * agents. */
+  skillFolders?: readonly string[];
   /** Why protected runs must stop when this runtime cannot enforce the contract. */
   protectionUnavailable?: string;
   /** Fully retires native sessions for this membership key before policy changes. */
@@ -1583,6 +1647,9 @@ export type NewAgent = Readonly<{
 /** A plugin's recommended agent setup for this launch,
  * `{recommendedBy?, description?, candidates}`; see `Agents.recommend`. */
 export type RecommendedSource = (signal: AbortSignal) => unknown;
+/** A plugin's list of the harnesses this launch's agent gateway routes
+ * enable; see `Agents.gatewayHarnesses`. */
+export type GatewayHarnessSource = (signal: AbortSignal) => unknown;
 export type { PluginNote } from "./plugin-notes";
 /** An agent's own model settings, as `switchToAutomatic` found them. */
 export type ModelSettings = Readonly<{
@@ -1596,6 +1663,8 @@ export type NoteChange = Readonly<{ note?: PluginNote | null }>;
 const MODEL_FIELDS = ["model", "provider", "effort"] as const;
 export type Agents = {
   readonly invocationSubthreads?: true;
+  readonly invocationIntentVersion?: 1;
+  readonly invocationTurnContext?: true;
   registerSessionRouter(router: AgentSessionRouter): void;
   registerExecution(provider: AgentExecutionProvider): void;
   /** Select the adapter while the agent is idle. This is write-once. */
@@ -1671,6 +1740,19 @@ export type Agents = {
    * answer, a failure, an invalid or late setup keeps the build's. `signal` aborts when the wait ends. Only the first
    * plugin to call it in a launch is asked; later calls are ignored. */
   recommend(source: RecommendedSource): void;
+  /** Bundled plugins only: decides which harnesses this launch's agent
+   * gateway routes enable, in place of the gateway access check's
+   * `harnesses` (docs/configuration.md#agent-gateway). Call it while the
+   * plugin starts: `source` is asked once, at once, and its answer, a list
+   * of at most 32 harness names, applies to every membership. Access checks
+   * wait for the call until bundled plugins have started, at most
+   * `SOURCE_MS` from the app's start, then for its answer, at most
+   * `SOURCE_MS` from the call; no answer in time, a failure or anything but
+   * such a list enables none, and then nothing is sent to the gateway.
+   * `signal` aborts when the wait ends. Only the first plugin to call it in
+   * a launch is asked; later calls are ignored. With no plugin calling it
+   * once bundled plugins have started, the access check's list stands. */
+  gatewayHarnesses(source: GatewayHarnessSource): void;
   // Bundled plugins only, like `recommend`: the building blocks for a plugin
   // that moves agents onto Automatic (plugin-architecture.md).
   /** Whether plugin start-up is over (each plugin started, or failed), the
@@ -1717,6 +1799,13 @@ export type Agents = {
    * delivery goes, the bundled harnesses' prompts, the agent's Buzz tools as
    * an MCP handler, and its replies. */
   readonly harness: HarnessKit;
+  /** Host presentation for an agent type's tabs, available through injection. */
+  readonly ui?: Readonly<{
+    /** Renders one conversation's transcript with Refresh, live step-driven
+     * updates while working, View-activity focus, Markdown, file diffs and
+     * prompt sections. Feature-detect on older hosts. */
+    Transcript: typeof TranscriptPanel;
+  }>;
   /** Wakes an agent this copy of the app runs in one of its conversations,
    * as a mention there would, but with no message: the agent is told `text`
    * comes from this plugin, not its owner, and is data. Throws when this copy does not run the agent or its queue is full;
@@ -2328,6 +2417,8 @@ const wssOf = (origin: string) =>
 export class AgentsService extends Service implements Agents {
   private readonly sessionAdmissions;
   readonly invocationSubthreads = true as const;
+  readonly invocationTurnContext = true as const;
+  readonly invocationIntentVersion = INVOCATION_INTENT_VERSION;
   registerSessionRouter(router: AgentSessionRouter) {
     this.sessionAdmissions.register(this.ctx, router);
   }
@@ -2599,6 +2690,9 @@ export class AgentsService extends Service implements Agents {
           if (!identity.deleted) this.followRecommendedHarness(identity);
       },
     );
+    // Routes wait for a plugin's harness list, or for start-up to end
+    // without one.
+    gatewayRoutes.selectHarnesses(this.selectedHarnesses());
     // So `ready` readers hear when start-up ends and the setup is final.
     const status = ctx.pluginStatus as Context["pluginStatus"] | undefined;
     if (status) {
@@ -2711,6 +2805,7 @@ export class AgentsService extends Service implements Agents {
             agent: agent.key,
             owner: agent.owner,
             harness: type.key,
+            communityOrigin: communityDestination(agent.relay).url,
             ...placement,
             invocationId:
               trigger.type === "mention" ? trigger.event.id : trigger.id,
@@ -2733,6 +2828,7 @@ export class AgentsService extends Service implements Agents {
           agent: agent.key,
           owner: agent.owner,
           harness: agent.type,
+          communityOrigin: communityDestination(agent.relay).url,
           ...placement,
           invocationId:
             trigger.type === "mention" ? trigger.event.id : trigger.id,
@@ -3154,7 +3250,7 @@ export class AgentsService extends Service implements Agents {
           agents: templateAgents(template, this.allTeams(), here),
         }));
       },
-      soloWorkspaces: (agent) => {
+      workspaces: (agent) => {
         if (!this.bindingOf(agent)) return undefined;
         // Each operation acts in the session live when it starts, which a
         // reload replaces; its later reads and writes stay fenced to it.
@@ -3166,6 +3262,8 @@ export class AgentsService extends Service implements Agents {
             );
           return { binding, ...fenced(binding) };
         };
+        const errorText = (error: unknown) =>
+          error instanceof Error ? error.message : String(error);
         const fenced = (binding: Binding) => {
           const check = (signal: AbortSignal) => {
             signal.throwIfAborted();
@@ -3181,7 +3279,7 @@ export class AgentsService extends Service implements Agents {
           const list = async (signal: AbortSignal) => {
             check(signal);
             if (!binding.session.snapshotRead || !binding.session.relayAuthor)
-              throw new Error("Solo workspace authority is unavailable");
+              throw new Error("Workspace authority is unavailable");
             const preferences = binding.session.sidebarPreferences;
             await preferences.refresh();
             check(signal);
@@ -3191,30 +3289,112 @@ export class AgentsService extends Service implements Agents {
               state.cached ||
               !preferences.writable
             )
-              throw new Error(state.error ?? "Solo workspaces are unavailable");
+              throw new Error(state.error ?? "Workspaces are unavailable");
             return (state.data?.sections ?? []).map(({ id, name }) => ({
               id,
               name,
             }));
           };
-          return { check, list };
+          const known = async (workspace: string, signal: AbortSignal) => {
+            if (!(await list(signal)).some(({ id }) => id === workspace))
+              throw new Error("No such workspace; use workspace_list");
+          };
+          /** Relay-owned metadata and roster of `id`, read as the owner. */
+          const conversation = async (id: string, signal: AbortSignal) => {
+            const author = binding.session.relayAuthor ?? "";
+            const events = await binding.session.snapshotRead?.(
+              [
+                {
+                  kinds: [39000, 39002],
+                  authors: [author],
+                  "#d": [id],
+                  limit: 2,
+                  consistency: "strong",
+                },
+              ],
+              { signal },
+            );
+            check(signal);
+            const find = (kind: number) =>
+              events?.find(
+                (event) =>
+                  event.kind === kind &&
+                  event.pubkey === author &&
+                  event.tags.some(
+                    ([key, value]) => key === "d" && value === id,
+                  ),
+              );
+            const metadata = find(39000);
+            const roster = find(39002);
+            const member = (key: string) =>
+              !!roster?.tags.some(
+                ([name, value]) => name === "p" && value === key,
+              );
+            return {
+              metadata,
+              member,
+              // Filed only where the owner's sidebar can list it.
+              visible:
+                !!metadata &&
+                (member(binding.viewer) || openMetadata(metadata)),
+              // A region's chats are placed by the region, as in Move to.
+              regional:
+                !!metadata &&
+                regionLabels(channelIdentity(metadata).labels).length > 0,
+            };
+          };
+          return { check, list, known, conversation };
         };
         return {
           list: async (signal: AbortSignal) => operation().list(signal),
-          prepare: async (workspace, members, signal) => {
-            const { binding, check, list } = operation();
-            if (!members.includes(binding.viewer))
+          defaults: async (workspace, chat, signal) => {
+            const { binding, check, known } = operation();
+            await known(workspace, signal);
+            // As New channel: without saved defaults here, there are none.
+            if (!binding.session.channelKit.available)
+              return { canvas: "", agents: [], skipped: [] };
+            const { session } = binding;
+            if (!chat.solo) {
+              const setup = await loadChannelSetup(session, workspace);
+              check(signal);
+              return setup;
+            }
+            const setup = await loadChatSetup(session, workspace);
+            check(signal);
+            // Local folders stay with the owner and their own agents, as in
+            // New chat; anyone else in the chat gets only the instructions.
+            const own = () =>
+              new Set([
+                binding.viewer,
+                agent.pubkey,
+                ...setup.agents,
+                ...session.agentChoices
+                  .snapshot()
+                  .identities.map(({ pubkey }) => pubkey),
+              ]);
+            let owned = own();
+            if (chat.members.some((key) => !owned.has(key))) {
+              await session.agentChoices.refresh();
+              check(signal);
+              owned = own();
+            }
+            return {
+              canvas: chat.members.every((key) => owned.has(key))
+                ? setup.canvas
+                : shareableInstructions(setup.canvas),
+              agents: setup.agents,
+              skipped: setup.skipped,
+            };
+          },
+          prepare: async (workspace, audience, signal) => {
+            const { binding, check, known, conversation } = operation();
+            if (!audience.open && !audience.members.includes(binding.viewer))
               throw new Error(
-                "Include your owner in members to file a Solo chat",
+                "Your owner can't see this conversation; make it open, or include your owner in members",
               );
-            if (!(await list(signal)).some(({ id }) => id === workspace))
-              throw new Error(
-                "No such Solo workspace; use solo_workspace_list",
-              );
+            await known(workspace, signal);
             const active = AbortSignal.any([signal, binding.controller.signal]);
             return async (created) => {
-              const errorText = (error: unknown) =>
-                error instanceof Error ? error.message : String(error);
               let id: string | undefined;
               try {
                 check(active);
@@ -3222,60 +3402,22 @@ export class AgentsService extends Service implements Agents {
                 if (
                   created.kind !== 9007 ||
                   created.pubkey !== agent.pubkey ||
-                  !id ||
-                  !created.tags.some(
-                    ([key, value]) => key === "t" && value === "buzz.solo",
-                  ) ||
-                  !created.tags.some(
-                    ([key, value]) => key === "p" && value === binding.viewer,
-                  )
+                  !id
                 )
-                  throw new Error("Not this agent's new Solo chat");
+                  throw new Error("Not this agent's new conversation");
                 // Read relay-owned authority, not an optimistic channel-list entry.
-                const events = await binding.session.snapshotRead?.(
-                  [
-                    {
-                      kinds: [39000, 39002],
-                      authors: [binding.session.relayAuthor ?? ""],
-                      "#d": [id],
-                      limit: 2,
-                      consistency: "strong",
-                    },
-                  ],
-                  { signal: active },
-                );
-                check(active);
-                const metadata = events?.find(
-                  (event) =>
-                    event.kind === 39000 &&
-                    event.pubkey === binding.session.relayAuthor &&
-                    event.tags.some(
-                      ([key, value]) => key === "d" && value === id,
-                    ),
-                );
-                const roster = events?.find(
-                  (event) =>
-                    event.kind === 39002 &&
-                    event.pubkey === binding.session.relayAuthor &&
-                    event.tags.some(
-                      ([key, value]) => key === "d" && value === id,
-                    ),
-                );
+                const found = await conversation(id, active);
                 if (
-                  !metadata ||
-                  !soloChannelMetadata(metadata) ||
-                  regionLabels(channelIdentity(metadata).labels).length > 0 ||
-                  !metadata.tags.some(
+                  !found.metadata ||
+                  found.regional ||
+                  !found.metadata.tags.some(
                     ([key, value]) => key === "P" && value === agent.pubkey,
                   ) ||
-                  ![agent.pubkey, binding.viewer, ...members].every((member) =>
-                    roster?.tags.some(
-                      ([key, value]) => key === "p" && value === member,
-                    ),
-                  )
+                  !found.visible ||
+                  ![agent.pubkey, ...audience.members].every(found.member)
                 )
                   throw new Error(
-                    "New Solo chat creator and members are not confirmed",
+                    "New conversation's creator and members are not confirmed",
                   );
               } catch (error) {
                 return {
@@ -3299,6 +3441,32 @@ export class AgentsService extends Service implements Agents {
                 };
               }
             };
+          },
+          move: async (id, workspace, signal) => {
+            const { binding, check, list, known, conversation } = operation();
+            if (workspace !== undefined) await known(workspace, signal);
+            else await list(signal);
+            const found = await conversation(id, signal);
+            if (!found.visible)
+              throw new Error("Your owner can't see this conversation");
+            const managed = prepareSoloMove(binding.session, id);
+            if (found.regional || managed)
+              throw new Error(managed ?? "This chat is managed by its region.");
+            const active = AbortSignal.any([signal, binding.controller.signal]);
+            try {
+              await binding.session.sidebarPreferences.assign(
+                id,
+                workspace,
+                active,
+              );
+              check(active);
+              return { status: "filed" as const };
+            } catch (error) {
+              return {
+                status: "unconfirmed" as const,
+                error: errorText(error),
+              };
+            }
           },
         };
       },
@@ -3501,6 +3669,19 @@ export class AgentsService extends Service implements Agents {
       throw new Error(
         `Agent type timeoutMs must be a whole number from 1 to ${TIMEOUT_LIMIT_MS}`,
       );
+    const folders = type.skillFolders;
+    if (
+      folders !== undefined &&
+      !(
+        Array.isArray(folders) &&
+        folders.length <= 8 &&
+        Array.from(folders).every((folder) => typeof folder === "string")
+      )
+    )
+      throw new Error("Agent type skillFolders must be up to 8 folders");
+    const skillFolders = folders
+      ? Object.freeze(folders.map((folder) => folder.trim()).filter(Boolean))
+      : undefined;
     const { remote } = type;
     if (
       remote &&
@@ -3519,6 +3700,7 @@ export class AgentsService extends Service implements Agents {
     const pluginId = this.ctx.pluginOwner?.id;
     this.contributions.register(this.ctx, {
       ...type,
+      ...(skillFolders && { skillFolders }),
       ...(models && {
         models: async (agent: Agent<Config>) => {
           await this.checkExecution(agent.key, agent.type);
@@ -3586,6 +3768,102 @@ export class AgentsService extends Service implements Agents {
     }
     this.recommendSource = { plugin, source };
     this.recommendCalled();
+  }
+  /** The plugin `gatewayHarnesses` asks this launch, once it has called. */
+  private harnessSource?: Readonly<{
+    plugin: string;
+    source: GatewayHarnessSource;
+  }>;
+  /** Whether this launch's harness list is decided, so a call is too late. */
+  private harnessClosed = false;
+  /** Tells the wait in `selectedHarnesses` a plugin called. */
+  private harnessCalled = () => {};
+  gatewayHarnesses(source: GatewayHarnessSource) {
+    const plugin = this.bundledCaller("gatewayHarnesses");
+    if (typeof source !== "function")
+      throw new Error("gatewayHarnesses needs a function");
+    if (this.harnessSource || this.harnessClosed) {
+      console.warn(
+        `Plugin ${plugin}'s gateway harnesses are ignored: ${this.harnessSource ? "another plugin gives this launch's" : "they came after start-up"}`,
+      );
+      return;
+    }
+    this.harnessSource = { plugin, source };
+    this.harnessCalled();
+  }
+  /** This launch's harness list from the plugin that calls
+   * `gatewayHarnesses`: undefined when bundled plugins started (or
+   * `SOURCE_MS` passed) with none calling, none when its answer fails or
+   * comes more than `SOURCE_MS` after the call. */
+  private async selectedHarnesses(): Promise<readonly string[] | undefined> {
+    const status = this.ctx.pluginStatus as Context["pluginStatus"] | undefined;
+    // Only a bundled plugin can call, so installed plugins still starting
+    // never hold the access checks back.
+    const started = () =>
+      status?.bundledSettled
+        ? status.bundledSettled()
+        : (status?.settled?.() ?? true);
+    // The wait for a call is capped from start-up; its answer gets its own
+    // `SOURCE_MS` from the call, so a slow start-up never cuts it short.
+    const disposed = new AbortController();
+    this.ctx.effect(() => () => disposed.abort());
+    const calling = new AbortController();
+    const deadline = setTimeout(() => calling.abort(), SOURCE_MS);
+    const call = () => calling.abort();
+    disposed.signal.addEventListener("abort", call);
+    const given = await new Promise<typeof this.harnessSource>((resolve) => {
+      let stop = () => {};
+      const check = () => {
+        if (!this.harnessSource && !calling.signal.aborted && !started())
+          return;
+        stop();
+        calling.signal.removeEventListener("abort", check);
+        this.harnessCalled = () => {};
+        this.harnessClosed = true;
+        resolve(this.harnessSource);
+      };
+      this.harnessCalled = check;
+      calling.signal.addEventListener("abort", check);
+      stop = status?.subscribe(check) ?? stop;
+      check();
+    });
+    clearTimeout(deadline);
+    disposed.signal.removeEventListener("abort", call);
+    if (!given) return undefined;
+    const ended = new AbortController();
+    const timer = setTimeout(() => ended.abort(), SOURCE_MS);
+    const end = () => ended.abort();
+    // Disposed while waiting for the call: the answer's wait is over too.
+    if (disposed.signal.aborted) end();
+    disposed.signal.addEventListener("abort", end);
+    try {
+      const answer: unknown = await Promise.race([
+        (async () => given.source(ended.signal))(),
+        new Promise((_, reject) => {
+          const late = () => reject(new Error("it came too late"));
+          if (ended.signal.aborted) late();
+          ended.signal.addEventListener("abort", late);
+        }),
+      ]);
+      const names = Array.isArray(answer) ? Array.from(answer) : undefined;
+      if (
+        !names ||
+        names.length > 32 ||
+        !names.every((name) => typeof name === "string" && HARNESS.test(name))
+      )
+        throw new Error("it is not a list of harness names");
+      return Object.freeze([...new Set<string>(names)]);
+    } catch (error) {
+      console.warn(
+        `Plugin ${given.plugin}'s gateway harnesses were not used, so none are enabled`,
+        error instanceof Error ? error.message : error,
+      );
+      return Object.freeze([]);
+    } finally {
+      clearTimeout(timer);
+      disposed.signal.removeEventListener("abort", end);
+      ended.abort();
+    }
   }
   /** The calling plugin's id; throws unless it is bundled. */
   private bundledCaller(what: string) {
@@ -4223,6 +4501,9 @@ export class AgentsService extends Service implements Agents {
     added: () => this.tools(),
     repositories: repositoriesContext,
   });
+  readonly ui: NonNullable<Agents["ui"]> = Object.freeze({
+    Transcript: TranscriptPanel,
+  });
   readonly supportsGuardedWake = true as const;
   wake(key: AgentKey, wake: AgentWake): void;
   wake(
@@ -4420,7 +4701,7 @@ export class AgentsService extends Service implements Agents {
     if (!run)
       throw new Error("This agent is not running in this copy of Buzz.");
     // Workspace filing is for local turns, not an external app's run authority.
-    const { soloWorkspaces: _, ...external } = run;
+    const { workspaces: _, ...external } = run;
     const { handoff } = external;
     const handle: AgentHandle = {
       ...external,
@@ -8609,6 +8890,17 @@ export class AgentsService extends Service implements Agents {
         connection,
         stopLive: this.listen(live.session, origin, connection),
       };
+      if (live) {
+        replyInvocationIntents.set(
+          live.session,
+          this.sessionAdmissions.invocationIntent,
+        );
+        live.controller.signal.addEventListener(
+          "abort",
+          () => replyInvocationIntents.delete(live.session),
+          { once: true },
+        );
+      }
     }
     // Disconnecting stops its agents even when no binding changed.
     this.update();

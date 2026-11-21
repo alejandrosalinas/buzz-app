@@ -92,6 +92,46 @@ it("keeps the viewport when a child retries a pending reveal during a preserved 
   view.rerender(<View location="other" />);
   expect(reveal).toHaveFocus();
 });
+it("reveals a region's current chat shown with a Team row", () => {
+  function View() {
+    const sidebar = useSidebarView("fixture", true, "task", false);
+    return (
+      <>
+        <button type="button" onClick={() => sidebar.revealAgain("region")}>
+          Reveal current
+        </button>
+        <nav ref={sidebar.list} data-testid="viewport">
+          <div data-sidebar-section="channels">
+            <div data-team-row-channel-group="source">
+              <button type="button">Source</button>
+              <button type="button" aria-current="page">
+                Task
+              </button>
+            </div>
+          </div>
+          <details data-sidebar-section="region">
+            <summary>Region</summary>
+          </details>
+        </nav>
+      </>
+    );
+  }
+  render(<View />);
+  const viewport = screen.getByTestId("viewport");
+  Object.defineProperty(viewport, "clientHeight", { value: 100 });
+  const place = (element: HTMLElement, top: number, height: number) =>
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+      top,
+      bottom: top + height,
+      height,
+    } as DOMRect);
+  place(viewport, 0, 100);
+  place(screen.getByText("Task"), 200, 20);
+  place(screen.getByText("Region"), 400, 20);
+  viewport.scrollTop = 0;
+  fireEvent.click(screen.getByText("Reveal current"));
+  expect(viewport.scrollTop).toBe(160);
+});
 it("re-arms only explicit current reveals using the latest location and preserves manual scrolling otherwise", () => {
   let sidebar: ReturnType<typeof useSidebarView> | undefined;
   function View({

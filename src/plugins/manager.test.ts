@@ -435,6 +435,7 @@ it.each(["resolve", "reject"] as const)(
       checkFolder: vi.fn(async () => ({ revision: "updated" })),
       previewFolder: vi.fn(async () => null),
       folder: vi.fn(async () => null),
+      checkPath: vi.fn(async () => null),
       files: vi.fn(async () => null),
       git: vi.fn(async () => null),
       url: vi.fn(async () => null),

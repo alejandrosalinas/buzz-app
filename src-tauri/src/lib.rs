@@ -370,7 +370,29 @@ async fn plugin_import_folder<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     imports: tauri::State<'_, Imports>,
     upload: Option<FolderUpload>,
+    path: Option<String>,
+    check_only: Option<bool>,
 ) -> Result<Option<Preview>, String> {
+    // An agent's request names the folder instead of the picker; the folder
+    // reader's checks apply unchanged, and the owner reviews it before install.
+    if let Some(path) = path {
+        let folder = std::path::PathBuf::from(&path);
+        if !folder.is_absolute() || path.chars().any(char::is_control) {
+            return Err("Enter an absolute folder path".into());
+        }
+        if check_only == Some(true) {
+            // Checks must never lock or replace Add's preview.
+            return tauri::async_runtime::spawn_blocking(move || {
+                prepare_folder(&folder).map(|prepared| Some(prepared.preview))
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        return prepare_import(imports.inner().clone(), move || {
+            prepare_folder(&folder).map(Some)
+        })
+        .await;
+    }
     prepare_import(imports.inner().clone(), move || {
         if let Some(upload) = upload {
             return prepare_upload(upload).map(Some);

@@ -1414,6 +1414,34 @@ test("profile preview stays inside a Solo conversation beside another pane", asy
     .toBe(true);
 });
 
+// The overlay panel enters from past the board's edge; revealing its tab must
+// not scroll the board itself, or the conversation jumps until the slide ends.
+test("opening a profile over a narrow conversation keeps the board in place", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 976, height: 800 });
+  await page.goto("/tests/fixtures/profiles.html?solo");
+  await page.getByRole("button", { name: "One", exact: true }).click();
+  await page.evaluate(() => {
+    window.boardScrolls = 0;
+    document.addEventListener(
+      "scroll",
+      (event) => {
+        if (event.target.querySelector?.(":scope > [data-panel-dock]"))
+          window.boardScrolls += 1;
+      },
+      true,
+    );
+  });
+  await page
+    .getByRole("button", { name: "View Viewer profile", exact: true })
+    .click();
+  await expect(
+    page.getByRole("complementary", { name: "Profile", exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.boardScrolls)).toBe(0);
+});
+
 test("profile preview fits enlarged text and stops its status with reduced motion", async ({
   page,
 }, testInfo) => {

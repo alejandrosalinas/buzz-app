@@ -321,6 +321,58 @@ it("registers identity marks and withdraws them with their plugin", async () => 
   );
 });
 
+it("registers a send gate with only an id and hold, and withdraws it with its plugin", async () => {
+  const h = harness({
+    inject: ["conversation"],
+    apply(ctx) {
+      expect(() =>
+        ctx.conversation.registerSendGate({ id: "gate" } as never),
+      ).toThrow("id and hold function");
+      ctx.conversation.registerSendGate({ id: "gate", hold: () => false });
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() =>
+    expect(h.service.sendGates.snapshot()).toHaveLength(1),
+  );
+  h.runtime.reconcile([]);
+  await vi.waitFor(() =>
+    expect(h.service.sendGates.snapshot()).toHaveLength(0),
+  );
+});
+
+it("publishes a kept message for a plugin", async () => {
+  const send = vi.fn(() => "event-id");
+  const session = { messages: { send } } as never;
+  const message = {
+    channelId: "channel",
+    text: "Later",
+    recipients: [],
+    references: [],
+    attachments: [],
+    picks: {},
+  };
+  let publish: ConversationService["publish"] | undefined;
+  const h = harness({
+    inject: ["conversation"],
+    apply(ctx) {
+      publish = ctx.conversation.publish.bind(ctx.conversation);
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() => expect(publish).toBeDefined());
+  await expect(publish?.(session, message)).resolves.toBe("event-id");
+  expect(send).toHaveBeenCalledExactlyOnceWith(
+    "channel",
+    "Later",
+    [],
+    [],
+    undefined,
+    [],
+    {},
+  );
+});
+
 it("rejects an attachment renderer order that is neither a number nor a function", async () => {
   const h = harness({
     inject: ["conversation"],
@@ -414,6 +466,41 @@ it("owns completion registration through disable, replacement and failed activat
     ),
   );
   expect(broken.service.completions.snapshot()).toHaveLength(0);
+});
+it("makes a supplement only through registerCompletionSupplement", async () => {
+  const provider = {
+    title: "Rows",
+    match: () => null,
+    component: Component,
+  };
+  const h = harness({
+    inject: ["conversation"],
+    apply(ctx) {
+      ctx.conversation.registerCompletion({ ...provider, id: "owner" });
+      ctx.conversation.registerCompletionSupplement({
+        ...provider,
+        id: "rows",
+      });
+      expect(() =>
+        ctx.conversation.registerCompletion({
+          ...provider,
+          id: "refused",
+          supplement: true,
+        }),
+      ).toThrow("registerCompletionSupplement");
+    },
+  });
+  h.runtime.reconcile([h.plugin]);
+  await vi.waitFor(() =>
+    expect(
+      h.service.completions
+        .snapshot()
+        .map(({ id, supplement }) => [id, supplement === true]),
+    ).toEqual([
+      ["owner", false],
+      ["rows", true],
+    ]),
+  );
 });
 it.each([
   [emoji, ["typeahead"]],

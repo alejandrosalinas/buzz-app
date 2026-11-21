@@ -131,6 +131,9 @@ type Head = {
   events: readonly RelayEvent[];
   /** The newest membership notices among its rows, shown with them. */
   notices?: readonly RelayEvent[];
+  /** Its own read also read the newest notices, so `notices` are current.
+   * Never saved. */
+  noticesRead?: true;
   savedAt: number;
   /** When the relay read that produced it started; none for a saved head. */
   readAt?: number;
@@ -244,13 +247,27 @@ const MAX_NOTICES = 2000;
 /** Relay query order: time descending, then ID ascending at ties. */
 const newestFirst = (a: RelayEvent, b: RelayEvent) =>
   b.created_at - a.created_at || a.id.localeCompare(b.id);
-/** Rows a page read can reach again, which notices are not. */
-const rowIds = (state: WindowState) =>
-  new Set(
+/** Where the read after a page of notices starts: null when it was the last. */
+const noticeCursor = (events: readonly RelayEvent[]): WindowCursor | null => {
+  const last = [...events].sort(newestFirst).at(-1);
+  return last && events.length >= NOTICE_PAGE_SIZE
+    ? { createdAt: last.created_at, eventId: last.id }
+    : null;
+};
+/** Rows a page read can reach again, which notices are not. Rows the window
+ * holds back (read before its first page, or below its floor) were never
+ * shown, so a catch-up has no need to reach them. */
+const rowIds = (state: WindowState) => {
+  const floor = state.floor ?? (state.snapshot.hasMore ? Infinity : -Infinity);
+  return new Set(
     state.events
-      .filter((event) => WINDOW_KINDS.includes(event.kind))
+      .filter(
+        (event) =>
+          WINDOW_KINDS.includes(event.kind) && event.created_at >= floor,
+      )
       .map((event) => event.id),
   );
+};
 
 /** Session-owned read model. Broad byte-bounded heads are separate from the small history LRU.
  * Preparing a head never mounts a timeline or evicts a subscribed history window. */
@@ -565,18 +582,21 @@ export function createChannelStore(
       // viewer's own confirmed sends can carry rows from before the loaded
       // history. Showing one leaves a gap that a later page fills mid-list,
       // where the timeline can neither anchor the reader nor tell it from new
-      // arrivals. That page shows them instead.
+      // arrivals. That page shows them instead. Until a page sets the floor,
+      // history's extent is unknown, not unbounded: every row, read (a Huddle
+      // card, say), live or replayed, waits for the first page, so the view
+      // loads in one piece.
       const more = patch.hasMore ?? state.snapshot.hasMore;
-      const shown =
-        (floor: number | undefined) => (event: import("./events").EventData) =>
-          !channelRowKind(event.kind) ||
-          ((floor === undefined || event.created_at >= floor) &&
-            (state.ceiling === undefined || event.created_at < state.ceiling));
+      const floor = more ? (state.floor ?? Infinity) : undefined;
+      const shown = (event: import("./events").EventData) =>
+        !channelRowKind(event.kind) ||
+        ((floor === undefined || event.created_at >= floor) &&
+          (state.ceiling === undefined || event.created_at < state.ceiling));
       // Notices read beside a head wait for a page to land (see `adoptHead`).
       const notices = state.floor === undefined ? [] : state.notices.values();
       const combined = new Map(
         [...state.events, ...notices, ...state.traffic.values()]
-          .filter(shown(more ? state.floor : undefined))
+          .filter(shown)
           .map((event) => [event.id, event as import("./events").EventData]),
       );
       const ids = new Set(combined.keys());
@@ -592,12 +612,9 @@ export function createChannelStore(
           )
           .map(({ event }) => event.id),
       );
-      // Until a page sets the floor, history's extent is unknown, not
-      // unbounded: a confirmed send waits for the page that holds it.
+      // Likewise a confirmed send waits for the page that holds it.
       const own = outbox.filter(
-        ({ event }) =>
-          state.sent.has(event.id) ||
-          shown(more ? (state.floor ?? Infinity) : undefined)(event),
+        ({ event }) => state.sent.has(event.id) || shown(event),
       );
       for (const item of own)
         if (
@@ -798,6 +815,12 @@ export function createChannelStore(
    * `noticeHead` is false when its newest notices are already being read. */
   function adoptHead(state: WindowState, head: Head, noticeHead = true) {
     state.events = head.events;
+    // A head read with its newest notices needs no second read of them.
+    if (head.noticesRead && state.ceiling === undefined) {
+      takeNotices(state, head.notices ?? [], null);
+      state.noticeHead = false;
+      noticeHead = false;
+    }
     for (const event of head.notices ?? []) state.notices.set(event.id, event);
     attached(state);
     moveCursor(state, head.cursor);
@@ -857,6 +880,44 @@ export function createChannelStore(
    * notices again; when those do not meet the notices held, the descent starts
    * over from them. A failed read only leaves notices out until the next page
    * or head read. */
+  /** Hold one page of a window's notices read from `cursor` (null: the
+   * newest), and move `noticeCursor` to where the next older read starts. */
+  function takeNotices(
+    state: WindowState,
+    events: readonly RelayEvent[],
+    cursor: WindowCursor | null,
+  ) {
+    if (
+      events.some(
+        (event) =>
+          event.kind !== 40099 ||
+          event.pubkey !== transport?.relayAuthor ||
+          !hasTag(event, "h", state.channelId),
+      )
+    )
+      throw new Error("Membership notices are outside their channel");
+    let known: RelayEvent | undefined;
+    for (const event of state.notices.values())
+      if (!known || newestFirst(event, known) < 0) known = event;
+    for (const event of events) state.notices.set(event.id, event);
+    const last = [...events].sort(newestFirst).at(-1);
+    const next = noticeCursor(events);
+    if (
+      cursor &&
+      next &&
+      (next.createdAt > cursor.createdAt ||
+        (next.createdAt === cursor.createdAt && next.eventId <= cursor.eventId))
+    )
+      throw new Error("Membership notices did not advance");
+    // A head read that reaches the notices held continues their descent.
+    const met =
+      known !== undefined &&
+      last !== undefined &&
+      (last.created_at < known.created_at ||
+        events.some((event) => event.id === known?.id));
+    if (cursor || !next || !met || state.noticeCursor === undefined)
+      state.noticeCursor = next;
+  }
   async function fillNotices(state: WindowState, head: boolean) {
     // Notices are read down from the head; a detached segment shows none.
     if (state.ceiling !== undefined) return;
@@ -899,40 +960,7 @@ export function createChannelStore(
           controller.signal,
         );
         if (!live(state, generation) || controller.signal.aborted) return;
-        if (
-          events.some(
-            (event) =>
-              event.kind !== 40099 ||
-              event.pubkey !== source.relayAuthor ||
-              !hasTag(event, "h", channelId),
-          )
-        )
-          throw new Error("Membership notices are outside their channel");
-        let known: RelayEvent | undefined;
-        for (const event of state.notices.values())
-          if (!known || newestFirst(event, known) < 0) known = event;
-        for (const event of events) state.notices.set(event.id, event);
-        const last = [...events].sort(newestFirst).at(-1);
-        const next =
-          last && events.length >= NOTICE_PAGE_SIZE
-            ? { createdAt: last.created_at, eventId: last.id }
-            : null;
-        if (
-          cursor &&
-          next &&
-          (next.createdAt > cursor.createdAt ||
-            (next.createdAt === cursor.createdAt &&
-              next.eventId <= cursor.eventId))
-        )
-          throw new Error("Membership notices did not advance");
-        // A head read that reaches the notices held continues their descent.
-        const met =
-          known !== undefined &&
-          last !== undefined &&
-          (last.created_at < known.created_at ||
-            events.some((event) => event.id === known?.id));
-        if (!top || !next || !met || state.noticeCursor === undefined)
-          state.noticeCursor = next;
+        takeNotices(state, events, cursor);
         if (top) keepNotices(state);
         // Read beside the head, notices wait for its rows (see `adoptHead`).
         if (state.floor === undefined) continue;
@@ -1088,25 +1116,40 @@ export function createChannelStore(
       saveDiscovery();
     }, [channelId]);
   }
+  /** A window page. A head read also asks, in the same request, for the
+   * channel's newest membership notices, so that the head shows with them. */
   async function readPage(
     channelId: string,
     cursor: WindowCursor | null,
     settings: ReadOptions,
+    withNotices = false,
   ) {
     if (!transport) throw new Error("Relay is unavailable");
     const source = transport;
+    const filters = [windowFilter(channelId, cursor)];
+    if (withNotices && !cursor)
+      filters.push(noticeFilter(channelId, source.relayAuthor, null));
     const read = (signal?: AbortSignal) =>
-      source.read([windowFilter(channelId, cursor)], {
+      source.read(filters, {
         ...settings,
         ...(signal ? { signal } : {}),
       });
     // Head reads belong to session recovery; only manual pagination needs a
     // finite retry owner here.
-    const events = cursor
+    const received = cursor
       ? await retryRead(read, settings.signal ?? new AbortController().signal)
       : await read();
+    // Pages never hold notices (see `WINDOW_KINDS`): any are the second filter's.
+    const notices =
+      filters.length > 1
+        ? received.filter((event) => event.kind === 40099)
+        : undefined;
+    const events = notices
+      ? received.filter((event) => event.kind !== 40099)
+      : received;
     return {
       events,
+      notices,
       page: parseWindow(channelId, cursor, transport.relayAuthor, events),
     };
   }
@@ -1128,10 +1171,13 @@ export function createChannelStore(
     try {
       if (disposed || !transport || !canReadRemote(channelId))
         throw new DOMException("Stale request", "AbortError");
-      const { events, page } = await readPage(channelId, null, {
-        signal: controller.signal,
-        priority,
-      });
+      const source = transport;
+      const { events, notices, page } = await readPage(
+        channelId,
+        null,
+        { signal: controller.signal, priority },
+        true,
+      );
       if (
         disposed ||
         generation !== epoch ||
@@ -1148,8 +1194,22 @@ export function createChannelStore(
         cursor: page.cursor,
         hasMore: page.hasMore,
         events,
-        // Until a notice read replaces them, the last head's notices stand.
-        ...(retained?.notices ? { notices: retained.notices } : {}),
+        // Notices outside the channel are left to the window's own read,
+        // which rejects them (see `fillNotices`).
+        ...(notices?.every(
+          (event) =>
+            event.pubkey === source.relayAuthor &&
+            hasTag(event, "h", channelId),
+        )
+          ? // Those below its rows wait for the page that reaches them.
+            {
+              notices: notices.sort(newestFirst),
+              noticesRead: true as const,
+            }
+          : // Until a notice read replaces them, the last head's notices stand.
+            retained?.notices
+            ? { notices: retained.notices }
+            : {}),
         savedAt: now(),
         readAt: startedAt,
         cached: false,
@@ -1205,11 +1265,9 @@ export function createChannelStore(
     const besideHead = !cursor && state.ceiling === undefined;
     try {
       if (prepared && !cursor) {
-        const reading = requestHead(state.channelId, "foreground");
-        if (besideHead) void fillNotices(state, true);
-        const head = await reading;
+        const head = await requestHead(state.channelId, "foreground");
         if (!live(state, generation)) return;
-        adoptHead(state, head, !besideHead);
+        adoptHead(state, head);
         return;
       }
       const reading = readPage(state.channelId, cursor, {
@@ -4461,9 +4519,13 @@ export function createChannelStore(
         visible([...state.notices.values()]).map((event) => [event.id, event]),
       );
       state.traffic.clear();
+      // Before its first page a window shows none of its rows (see
+      // `setWindow`): ready would leave it blank with no read owed. It goes
+      // idle so its next ensure() reads the page, and an open one reads it now.
+      const paged = state.floor !== undefined || !state.snapshot.hasMore;
       setWindow(state, {
         loadingOlder: false,
-        status: state.events.length ? "ready" : "idle",
+        status: paged && state.events.length ? "ready" : "idle",
       });
     }
     // Disk heads also carry profile and cross-channel auxiliary evidence. Drop
@@ -4471,6 +4533,9 @@ export function createChannelStore(
     if (hadHydration) void persistence?.retain([]).catch(() => {});
     setList(list);
     resetReferences();
+    const open = current ? windows.get(current) : undefined;
+    if (open?.snapshot.status === "idle" && authorized(open.channelId))
+      queries.ensure(open.channelId);
   }
   function dispose() {
     disposed = true;
@@ -4718,13 +4783,15 @@ export function createChannelStore(
       controllers.add(controller);
       try {
         const priority = current === channelId ? "foreground" : "background";
-        const reading = requestHead(channelId, priority);
-        // Live replay covers minutes; notices from a longer drop come by read,
-        // beside the head rather than after it.
-        void fillNotices(retained, true);
-        const head = await reading;
+        const head = await requestHead(channelId, priority);
         if (!valid())
           throw new DOMException("Stale live catch-up", "AbortError");
+        // Live replay covers minutes; notices from a longer drop come with the
+        // head, or by their own read when it had none.
+        if (head.noticesRead) {
+          takeNotices(retained, head.notices ?? [], null);
+          retained.noticeHead = false;
+        } else void fillNotices(retained, true);
         retained.restored = false;
         retained.readAt = head.readAt;
         accept(head.events);

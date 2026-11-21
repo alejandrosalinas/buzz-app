@@ -5,7 +5,6 @@ import {
   LIVE_CANVAS_LIMIT,
   parseKitRecord,
   parseLineup,
-  resolveLineup,
 } from "../channel-templates/model";
 import { splitPartition } from "../relay/partition";
 import { readView, writeView } from "../../shared/view-state";
@@ -355,10 +354,12 @@ export function parseChatSetup(raw: unknown): ChatSetup {
 export function defaultsRevision(kit: { entries: readonly KitEntry[] }) {
   return kit.entries.map((entry) => entry.eventId).join();
 }
-export async function loadChatSetup(
+/** A workspace's saved default template, as New chat and New channel find
+ * it, with the kit it was read from. */
+export async function loadWorkspaceDefaults(
   session: RelaySession,
   projectId: string,
-): Promise<ChatSetup & { revision: string }> {
+) {
   const store = session.sidebarPreferences;
   await store.refresh();
   const preferences = store.snapshot();
@@ -376,51 +377,118 @@ export async function loadChatSetup(
       kit.error ??
         "Workspace defaults couldn’t load. Retry before starting the chat.",
     );
-  const revision = defaultsRevision(kit);
   const template = projectDefault(
     kit.entries,
     await projectTemplateId(projectId),
     preferences.data.legacyTemplates?.[projectId],
     true,
   );
-  if (!template) return { projectId, canvas: "", agents: [], revision };
-  if (template.agents.length || template.teamIds.length) {
-    await session.agentChoices.refresh("templates");
-    const choices = session.agentChoices.snapshot();
-    if (
-      choices.templates.status !== "ready" ||
-      !choices.templates.complete ||
-      choices.archives.status !== "ready"
-    )
-      throw new Error(
-        "Available agents couldn’t load. Retry before starting the chat.",
-      );
-    const roster = session.channels.list();
-    const candidates = resolveLineup(
-      template,
-      kit.entries,
-      choices.templates.identities,
+  return { template, entries: kit.entries, revision: defaultsRevision(kit) };
+}
+/** New channel's reading of a workspace's defaults: the agents it and its
+ * teams name, not yet checked against those available, and only the part of
+ * its Canvas safe to share. */
+export function channelDefaults(
+  template: Template,
+  entries: readonly KitEntry[],
+) {
+  const teamAgents = template.teamIds.flatMap((id) => {
+    const team = entries.find(
+      ({ record }) =>
+        !record.deleted &&
+        record.value.type === "team" &&
+        record.value.id === id,
+    )?.record.value;
+    if (team?.type !== "team")
+      throw new Error("A team in the workspace defaults could not load.");
+    return team.agents;
+  });
+  return {
+    id: template.id,
+    agents: [...new Set([...template.agents, ...teamAgents])],
+    // Only standalone instructions are eligible to share; local paths stay.
+    canvas: shareableInstructions(template.canvas),
+  };
+}
+/** The default agents a new conversation can add, under one rule for New
+ * chat, New channel and the agent tools: an agent not available here
+ * (archived, being deleted, or outside this community) is skipped and the
+ * create goes on. One not yet checked is neither added nor skipped: the
+ * create waits for a complete read. */
+async function availableDefaults(
+  session: RelaySession,
+  agents: readonly string[],
+  starting: string,
+) {
+  if (!agents.length) return { agents: [], skipped: [] };
+  if (agents.length > 200)
+    throw new Error("Workspace defaults name more than 200 agents.");
+  await session.agentChoices.refresh("templates");
+  const choices = session.agentChoices.snapshot();
+  if (
+    choices.templates.status !== "ready" ||
+    !choices.templates.complete ||
+    choices.archives.status !== "ready"
+  )
+    throw new Error(
+      `Available agents couldn’t load. Retry before ${starting}.`,
     );
-    if (
-      candidates.some(
-        (agent) =>
-          !choices.templates.identities.find(
-            (choice) => choice.pubkey === agent.pubkey,
-          )?.managed,
-      ) &&
-      (roster.status !== "ready" || roster.coverage === "partial")
-    ) {
-      session.channels.refreshList?.();
-      throw new Error(
-        "Community membership couldn’t load completely. Refresh and retry before starting the chat.",
-      );
-    }
-    const agents = resolveLineup(
-      template,
-      kit.entries,
-      templateAgentChoices(choices, roster),
-    ).map((agent) => agent.pubkey);
-    return { projectId, canvas: template.canvas, agents, revision };
+  // An agent you don't manage is available only if it is in a channel here.
+  const roster = session.channels.list();
+  if (
+    choices.templates.identities.some(
+      (agent) => agents.includes(agent.pubkey) && !agent.managed,
+    ) &&
+    (roster.status !== "ready" || roster.coverage === "partial")
+  ) {
+    session.channels.refreshList?.();
+    throw new Error(
+      `Community membership couldn’t load completely. Refresh and retry before ${starting}.`,
+    );
   }
-  return { projectId, canvas: template.canvas, agents: [], revision };
+  const available = new Set(
+    templateAgentChoices(choices, roster).map((agent) => agent.pubkey),
+  );
+  return {
+    agents: agents.filter((key) => available.has(key)),
+    skipped: agents.filter((key) => !available.has(key)),
+  };
+}
+/** A workspace's defaults for a new Solo chat: its full Canvas, and the
+ * default agents available here, with those skipped. */
+export async function loadChatSetup(
+  session: RelaySession,
+  projectId: string,
+): Promise<ChatSetup & { revision: string; skipped: string[] }> {
+  const { template, entries, revision } = await loadWorkspaceDefaults(
+    session,
+    projectId,
+  );
+  if (!template)
+    return { projectId, canvas: "", agents: [], skipped: [], revision };
+  const { agents, skipped } = await availableDefaults(
+    session,
+    channelDefaults(template, entries).agents,
+    "starting the chat",
+  );
+  return { projectId, canvas: template.canvas, agents, skipped, revision };
+}
+/** A workspace's defaults for a new team channel: only the shareable part
+ * of its Canvas, and the default agents available here, with those
+ * skipped. */
+export async function loadChannelSetup(
+  session: RelaySession,
+  projectId: string,
+): Promise<{ canvas: string; agents: string[]; skipped: string[] }> {
+  const { template, entries } = await loadWorkspaceDefaults(session, projectId);
+  if (!template) return { canvas: "", agents: [], skipped: [] };
+  const defaults = channelDefaults(template, entries);
+  return {
+    canvas: defaults.canvas,
+    ...(await availableDefaults(
+      session,
+      defaults.agents,
+      "creating the channel",
+    )),
+  };
 }

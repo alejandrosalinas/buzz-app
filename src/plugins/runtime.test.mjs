@@ -106,6 +106,52 @@ test("pages wait for dependencies and completion of async activation", async () 
   }
 });
 
+test("bundled start-up is over while an installed plugin still starts", async () => {
+  const release = deferred();
+  const h = harness(async (info) =>
+    info.source === "external"
+      ? { inject: ["pages"], apply: () => release.promise }
+      : { inject: ["pages"], apply() {} },
+  );
+  try {
+    h.runtime.reconcile([
+      { ...plugin("example.bundled"), source: "bundled", revision: "bundled" },
+      plugin("example.slow"),
+    ]);
+    await h.wait((s) => s["example.bundled"]?.status === "active");
+    assert.equal(h.states["example.slow"].status, "starting");
+    assert.equal(h.root.pluginStatus.settled(), false);
+    assert.equal(h.root.pluginStatus.bundledSettled(), true);
+    release.resolve();
+    await h.wait((s) => s["example.slow"]?.status === "active");
+    assert.equal(h.root.pluginStatus.settled(), true);
+  } finally {
+    release.resolve();
+    await h.dispose();
+  }
+});
+
+test("bundled start-up is not over while a bundled plugin starts", async () => {
+  const release = deferred();
+  const h = harness(async () => ({
+    inject: ["pages"],
+    apply: () => release.promise,
+  }));
+  try {
+    h.runtime.reconcile([
+      { ...plugin("example.bundled"), source: "bundled", revision: "bundled" },
+    ]);
+    await settle();
+    assert.equal(h.root.pluginStatus.bundledSettled(), false);
+    release.resolve();
+    await h.wait((s) => s["example.bundled"]?.status === "active");
+    assert.equal(h.root.pluginStatus.bundledSettled(), true);
+  } finally {
+    release.resolve();
+    await h.dispose();
+  }
+});
+
 test("startup is not over while the plugin settings are being read", async () => {
   let configuring = true;
   const root = new Context();
@@ -117,8 +163,10 @@ test("startup is not over while the plugin settings are being read", async () =>
   );
   try {
     assert.equal(root.pluginStatus.settled(), false);
+    assert.equal(root.pluginStatus.bundledSettled(), false);
     configuring = false;
     assert.equal(root.pluginStatus.settled(), true);
+    assert.equal(root.pluginStatus.bundledSettled(), true);
   } finally {
     await runtime.dispose();
     await root.fiber.dispose();

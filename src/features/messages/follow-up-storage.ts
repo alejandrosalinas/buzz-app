@@ -18,6 +18,7 @@ export type FollowUpMessage = {
   forward?: ForwardReference;
   text: string;
   recipients: readonly string[];
+  explicitRecipientIds?: readonly string[];
   attachments: readonly UploadedAttachment[];
   references: readonly string[];
   picks: MentionPicks;
@@ -211,6 +212,10 @@ function valid(value: unknown): value is SavedFollowUp {
     (v.sending === undefined || v.sending === true) &&
     Number.isFinite(v.createdAt) &&
     strings(v.recipients) &&
+    (v.explicitRecipientIds === undefined ||
+      (strings(v.explicitRecipientIds) &&
+        v.explicitRecipientIds.length <= 32 &&
+        v.explicitRecipientIds.every((id) => v.recipients.includes(id)))) &&
     strings(v.references) &&
     Array.isArray(v.attachments) &&
     v.attachments.every(isUploadedAttachment) &&

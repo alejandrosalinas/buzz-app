@@ -14,7 +14,7 @@ import {
   signed,
 } from "./testing";
 import type { LiveCallbacks } from "./live";
-import type { ReadFilter } from "./events";
+import type { ReadFilter, RelayEvent } from "./events";
 import type { HeadPersistence, SavedHead } from "./persistence";
 import { diffPreview, rowProfileIds } from "./membership";
 
@@ -144,25 +144,38 @@ it.each([false, true])(
         [9, 40002, 40008, 48100, 48103],
       );
       const hello = message(viewer, "a", "Hello", 20);
-      head.respond([
+      const page = [
         hello,
         bounds(relay, "a", "head", {
           has_more: true,
           next_cursor: { created_at: hello.created_at, id: hello.id },
         }),
-      ]);
-      await flush();
-      // Messages show before their notices are read.
-      expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id]);
-      const notices = take(wire, isNotices);
-      expect(notices.filters).toEqual([
-        { kinds: [40099], "#h": ["a"], authors: [relay.pubkey], limit: 500 },
-      ]);
+      ];
+      const noticeFilter = {
+        kinds: [40099],
+        "#h": ["a"],
+        authors: [relay.pubkey],
+        limit: 500,
+      };
       // One below the oldest page waits for the page that reaches it.
       const row = addition(pinky.pubkey, 21);
       const below = addition(brain.pubkey, 19);
-      notices.respond([row, below]);
-      await flush();
+      if (prepared) {
+        // A prepared head reads its notices in the same request and shows
+        // with them, however early it was read.
+        expect(head.filters[1]).toEqual(noticeFilter);
+        head.respond([...page, row, below]);
+        await flush();
+      } else {
+        head.respond(page);
+        await flush();
+        // Messages show before their notices are read.
+        expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id]);
+        const notices = take(wire, isNotices);
+        expect(notices.filters).toEqual([noticeFilter]);
+        notices.respond([row, below]);
+        await flush();
+      }
       expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id, row.id]);
       expect(q.window("a").rows[1]?.membership?.target).toBe(pinky.pubkey);
       // Render before enrichment, with no per-row blocking request.
@@ -381,7 +394,10 @@ it("prepared disk heads retain signed membership evidence and subject profiles f
       ]);
     await flush();
     first.session.channels.prepare?.("a");
-    wire.next().respond([addition(), end()]);
+    wire.next().respond([end(), addition()]);
+    await flush();
+    // Opening it shows the prepared head's notices, then reads their names.
+    first.session.channels.ensure("a");
     await flush();
     wire
       .next()
@@ -390,7 +406,7 @@ it("prepared disk heads retain signed membership evidence and subject profiles f
         profile(pinky, { name: "Pinky" }),
       ]);
     await flush();
-    expect(saved[0]?.events).toContainEqual(
+    expect(saved[0]?.notices).toContainEqual(
       expect.objectContaining({ id: addition().id, kind: 40099 }),
     );
     expect(saved[0]?.profiles).toHaveLength(2);
@@ -427,7 +443,7 @@ it("prepared disk heads retain signed membership evidence and subject profiles f
   }
 });
 
-it("reads a head's newest notices beside it, showing those that land first with its rows", async () => {
+it("reads a head's newest notices in its own request and shows them with its rows", async () => {
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
     notices: true,
   });
@@ -447,19 +463,19 @@ it("reads a head's newest notices beside it, showing those that land first with 
     await flush();
     q.ensure("a");
     await flush();
-    // Both reads are out before either answers.
     const head = take(wire, isWindow);
-    const notices = take(wire, isNotices);
+    expect(head.filters[1]).toEqual({
+      kinds: [40099],
+      "#h": ["a"],
+      authors: [relay.pubkey],
+      limit: 500,
+    });
     const joined = addition(pinky.pubkey, 21);
-    notices.respond([joined]);
-    await flush();
-    // Notices alone never render; they wait for the head's rows.
-    expect(q.window("a")).toMatchObject({ status: "loading", rows: [] });
     const hello = message(viewer, "a", "Hello", 20);
-    head.respond([hello, end()]);
+    head.respond([hello, end(), joined]);
     await flush();
     expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id, joined.id]);
-    // The notice read beside the head was its only one.
+    // The head's request was the only notice read.
     expect(wire.pending.some((entry) => entry.filters.some(isNotices))).toBe(
       false,
     );
@@ -501,8 +517,7 @@ it("saves a head's notices with it and restores only relay-signed ones", async (
     await flush();
     first.session.channels.ensure("a");
     await flush();
-    take(wire, isWindow).respond([hello, end()]);
-    take(wire, isNotices).respond([joined]);
+    take(wire, isWindow).respond([hello, end(), joined]);
     await flush();
     expect(saved[0]?.notices).toEqual([
       expect.objectContaining({ id: joined.id }),
@@ -607,7 +622,7 @@ it("does not rewrite a restored head whose notice names are already saved", asyn
   }
 });
 
-it("opens a channel over the established stream with its notices read beside the head, saved with their names", async () => {
+it("opens a channel over the established stream with its notices read with the head, saved with their names", async () => {
   let saved: SavedHead[] = [];
   const disk: HeadPersistence = {
     read: async () => saved,
@@ -648,15 +663,14 @@ it("opens a channel over the established stream with its notices read beside the
     await flush();
     q.ensure("a");
     await flush();
-    // The catch-up sends both reads before either answers.
+    // The catch-up's head read carries the notices.
     const head = take(wire, isWindow);
-    const notices = take(wire, isNotices);
+    expect(head.filters[1]).toEqual(
+      expect.objectContaining({ kinds: [40099], "#h": ["a"] }),
+    );
     const joined = addition(pinky.pubkey, 21);
-    notices.respond([joined]);
-    await flush();
-    expect(q.window("a").rows).toEqual([]);
     const hello = message(viewer, "a", "Hello", 20);
-    head.respond([hello, end()]);
+    head.respond([hello, end(), joined]);
     await flush();
     expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id, joined.id]);
     // Each name read answers only the names it asks for, so the joiner's name
@@ -687,7 +701,7 @@ it("opens a channel over the established stream with its notices read beside the
   }
 });
 
-it("leaves a failed head's window empty though its notices landed first", async () => {
+it("leaves a failed head's window empty, notices and all", async () => {
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey, {
     notices: true,
   });
@@ -707,10 +721,7 @@ it("leaves a failed head's window empty though its notices landed first", async 
     await flush();
     q.ensure("a");
     await flush();
-    const head = take(wire, isWindow);
-    take(wire, isNotices).respond([addition(pinky.pubkey, 21)]);
-    await flush();
-    head.fail(new ReadError("unavailable", "head failed"));
+    take(wire, isWindow).fail(new ReadError("unavailable", "head failed"));
     await flush();
     expect(q.window("a")).toMatchObject({ status: "error", rows: [] });
   } finally {
@@ -735,14 +746,22 @@ it("a catch-up head rereads the newest notices, and restarts the descent only wh
   );
   const q = owner.session.channels;
   const hello = message(viewer, "a", "Hello", 1_000);
-  const head = () =>
-    take(wire, isWindow).respond([
+  // Each head read carries the channel's newest notices.
+  const head = (notices: RelayEvent[]) => {
+    const read = take(wire, isWindow);
+    expect(read.filters[1]).toEqual(
+      expect.objectContaining({ kinds: [40099], limit: 500 }),
+    );
+    expect(read.filters[1]).not.toHaveProperty("until");
+    read.respond([
       hello,
       bounds(relay, "a", "head", {
         has_more: true,
         next_cursor: { created_at: hello.created_at, id: hello.id },
       }),
+      ...notices,
     ]);
+  };
   const noticeReads = () =>
     wire.pending.filter(
       (entry) => !entry.signal?.aborted && entry.filters.some(isNotices),
@@ -757,10 +776,8 @@ it("a catch-up head rereads the newest notices, and restarts the descent only wh
       ]);
     await flush();
     q.ensure("a");
-    head();
-    await flush();
     const held = addition(pinky.pubkey, 1_001);
-    take(wire, isNotices).respond([held]);
+    head([held]);
     await flush();
     expect(q.window("a").rows.map((r) => r.id)).toEqual([hello.id, held.id]);
     expect(noticeReads()).toHaveLength(0);
@@ -768,14 +785,10 @@ it("a catch-up head rereads the newest notices, and restarts the descent only wh
     live.state({ status: "connected", routes: [] });
     live.established("a");
     await flush();
-    head();
-    await flush();
     const missed = Array.from({ length: 500 }, (_, index) =>
       addition(keypair().pubkey, 1_100 + index),
     );
-    const top = take(wire, isNotices);
-    expect(top.filters[0]).not.toHaveProperty("until");
-    top.respond(missed);
+    head(missed);
     await flush();
     const resumed = take(wire, isNotices);
     expect(resumed.filters[0]).toMatchObject({
@@ -792,9 +805,7 @@ it("a catch-up head rereads the newest notices, and restarts the descent only wh
     live.state({ status: "connected", routes: [] });
     live.established("a");
     await flush();
-    head();
-    await flush();
-    take(wire, isNotices).respond(missed);
+    head(missed);
     await flush();
     expect(noticeReads()).toHaveLength(0);
     expect(q.window("a").rows).toHaveLength(502);

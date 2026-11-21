@@ -870,6 +870,18 @@ describe("AgentSessions", () => {
     ]);
   });
 
+  it("says which turn a one-off session was started for, and none for a conversation", async () => {
+    vi.useFakeTimers();
+    const started = vi.fn();
+    const { sessions } = setup({}, false, { started });
+    await sessions.deliver("chan/root", "one", 1);
+    await sessions.runOnce("watch/x", () => "look");
+    expect(started.mock.calls.map((call) => call[4])).toEqual([
+      undefined,
+      "watch/x",
+    ]);
+  });
+
   it("opens each session with the tags for its conversation, and a one-off turn's with none", async () => {
     vi.useFakeTimers();
     const { sessions, fake } = setup({}, false, {

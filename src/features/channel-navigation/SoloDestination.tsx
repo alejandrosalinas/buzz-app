@@ -40,6 +40,10 @@ import type { Navigation } from "../navigation/controller";
 import type { ChannelSummary } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
 import { conversationTarget, matchesConversation } from "./routes";
+import {
+  captureSidebarDeparture,
+  recoverSidebarFocus,
+} from "./sidebar-focus-recovery";
 import { soloSuccessor } from "./solo-successor";
 import type {
   SoloCardProps,
@@ -500,6 +504,8 @@ function useDestinationFocus(
 ) {
   const focused = useRef(false);
   const neighbors = useRef<string[]>([]);
+  const departure =
+    useRef<ReturnType<typeof captureSidebarDeparture>>(undefined);
   const rememberNeighbors = useCallback(() => {
     const region = root.current?.closest("[data-sidebar-section]");
     if (region)
@@ -510,7 +516,18 @@ function useDestinationFocus(
   const attach = useCallback(
     (node: HTMLDivElement | null) => {
       // The source can reorder siblings without rendering this destination.
-      if (!node && focused.current) rememberNeighbors();
+      if (!node && focused.current && root.current) {
+        rememberNeighbors();
+        // A roster change can detach the row before its effect cleans up.
+        const active = root.current.ownerDocument.activeElement;
+        departure.current = captureSidebarDeparture(
+          active instanceof HTMLElement && root.current.contains(active)
+            ? active
+            : root.current,
+        );
+      } else if (node) {
+        departure.current = undefined;
+      }
       root.current = node;
     },
     [rememberNeighbors, root],
@@ -520,11 +537,13 @@ function useDestinationFocus(
     const node = root.current;
     const region = node?.closest("[data-sidebar-section]");
     return () => {
-      const owner = document.activeElement?.closest(
-        "[data-solo-destination-root]",
-      );
+      const active = document.activeElement;
+      const owner = active?.closest("[data-solo-destination-root]");
       if (!node || (owner ? owner !== node : !focused.current)) return;
-      queueMicrotask(() => {
+      const departing =
+        owner === node && active instanceof HTMLElement ? active : node;
+      const position = departure.current ?? captureSidebarDeparture(departing);
+      const candidates = () => {
         if (document.activeElement !== document.body) return;
         // The ref can capture the final order after this effect cleans up.
         const rows = neighbors.current;
@@ -537,13 +556,13 @@ function useDestinationFocus(
         const section = document.querySelector(
           `[data-sidebar-section="${CSS.escape(region?.getAttribute("data-sidebar-section") ?? "")}"]`,
         );
-        const candidates = [
-          ...ids.map(
-            (id) =>
-              id &&
-              document.querySelector<HTMLElement>(
-                `[data-solo-destination-id="${CSS.escape(id)}"]`,
-              ),
+        return [
+          ...ids.map((id) =>
+            id
+              ? document.querySelector<HTMLElement>(
+                  `[data-solo-destination-id="${CSS.escape(id)}"]`,
+                )
+              : null,
           ),
           ...(section?.querySelectorAll<HTMLElement>(
             "[data-solo-destination-id]",
@@ -554,12 +573,8 @@ function useDestinationFocus(
             '[data-sidebar-section^="solo-region:"] summary',
           ),
         ];
-        for (const candidate of candidates) {
-          if (!candidate || candidate.closest("[hidden], [inert]")) continue;
-          candidate.focus();
-          if (document.activeElement === candidate) break;
-        }
-      });
+      };
+      recoverSidebarFocus(position, candidates, { preferVisibleRows: true });
     };
   }, [root, channelId, visible]);
   return {

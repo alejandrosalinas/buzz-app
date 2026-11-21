@@ -94,7 +94,6 @@ import {
   ChatCircleIcon,
   FolderSimpleIcon,
   MinusIcon,
-  PencilSimpleIcon,
   PlusIcon,
   XIcon,
 } from "../../shared/design-system/icons";
@@ -699,7 +698,7 @@ export function ChannelInventory({
           aria-description="Unsent draft"
           selected={selected}
           aria-current={selected ? "page" : undefined}
-          icon={<PencilSimpleIcon size={16} />}
+          icon={<PlusIcon size={16} />}
           onClick={() => {
             if (selected) soloDraftInput()?.focus();
             else void navigator.open(destination);

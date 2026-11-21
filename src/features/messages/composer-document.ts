@@ -180,7 +180,7 @@ export const composerSchema = new Schema<
   },
   marks: {
     recipient: {
-      attrs: { pubkey: {}, name: {} },
+      attrs: { pubkey: {}, name: {}, explicit: { default: null } },
       inclusive: false,
       toDOM: () => ["span", { spellcheck: "false" }, 0],
     },
@@ -533,12 +533,17 @@ function project(doc: EditorNode) {
     const identity = composerSchema.marks.recipient.isInSet(node.marks);
     if (identity) {
       const previous = recipients.at(-1);
-      if (previous?.end === start && previous.pubkey === identity.attrs.pubkey)
+      if (
+        previous?.end === start &&
+        previous.pubkey === identity.attrs.pubkey &&
+        !!previous.explicit === (identity.attrs.explicit === true)
+      )
         recipients[recipients.length - 1] = { ...previous, end: text.length };
       else
         recipients.push({
           pubkey: identity.attrs.pubkey,
           name: identity.attrs.name,
+          ...(identity.attrs.explicit === true ? { explicit: true } : {}),
           start,
           end: text.length,
         });

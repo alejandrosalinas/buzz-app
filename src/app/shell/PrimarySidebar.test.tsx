@@ -11,6 +11,9 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
+import { useState } from "react";
+import type { SoloRegionProps } from "../../features/channel-navigation/solo-navigation-contract";
+import type { SidebarRows } from "../../features/channel-navigation/sidebar-rows-service";
 import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
 import { readView, writeView } from "../../shared/view-state";
 import {
@@ -871,6 +874,189 @@ it("omits a contributed create action whose menu fails", async () => {
     expect(
       screen.queryByRole("button", { name: "Create" }),
     ).not.toBeInTheDocument();
+  } finally {
+    view.unmount();
+    await h.dispose();
+  }
+});
+
+it("shows a region channel group with its Team row", async () => {
+  const h = createSoloRegionFixture(viewer);
+  h.session.channelWrites = { ...h.session.channelWrites, available: true };
+  h.roster(
+    [
+      ...h.session.channels.list().channels,
+      {
+        id: "source",
+        name: "Source",
+        channelType: "stream",
+        members: [viewer],
+      },
+    ],
+    "ready",
+  );
+  const create = vi.fn();
+  let move: (() => void) | undefined;
+  function Body({ ui }: SoloRegionProps) {
+    const [expanded, setExpanded] = useState(true);
+    const [inline, setInline] = useState(true);
+    move = () => setInline((value) => !value);
+    const Group = ui.ChannelGroup;
+    if (!Group) return null;
+    return (
+      <>
+        <button type="button" onClick={() => setInline(!inline)}>
+          Move tasks
+        </button>
+        <Group
+          channelId="source"
+          onSelect={() => {}}
+          expanded={expanded}
+          controls="source-tasks"
+          disclosureLabel="Toggle Source tasks"
+          onToggle={() => setExpanded(!expanded)}
+          onNewTask={create}
+          headerLeading={{
+            icon: <span>Lead</span>,
+            label: "Open Lead",
+            onActivate() {},
+          }}
+          {...(inline ? { placement: "team-row" as const } : {})}
+        >
+          <input aria-label="Task draft" />
+        </Group>
+      </>
+    );
+  }
+  const source = await h.register({ title: "Nexus", component: Body });
+  expect(source.handle.teamRowChannelGroups).toBe(true);
+  let rows: ReturnType<SidebarRows["snapshot"]> = [];
+  const rowListeners = new Set<() => void>();
+  const hide = (hidden: boolean) => {
+    rows = hidden
+      ? [
+          {
+            version: 1,
+            id: "hide-source",
+            key: "example/hide-source",
+            pluginId: "example",
+            revision: "1",
+            render: (item, Default) => (item.id === "source" ? null : Default),
+          },
+        ]
+      : [];
+    for (const listener of rowListeners) listener();
+  };
+  const view = render(
+    <ToastProvider>
+      <PrimarySidebar
+        relay={h.relay}
+        navigator={h.navigator}
+        target={conversationTarget(h.scope, "chat")}
+        sidebarRows={{
+          version: 1,
+          snapshot: () => rows,
+          subscribe(listener) {
+            rowListeners.add(listener);
+            return () => rowListeners.delete(listener);
+          },
+          register() {},
+        }}
+      >
+        {null}
+      </PrimarySidebar>
+    </ToastProvider>,
+  );
+  const user = userEvent.setup();
+  try {
+    const group = () =>
+      view.container.querySelector('[data-team-row-channel-group="source"]');
+    const row = () =>
+      view.container.querySelector('button[data-channel-id="source"]');
+    const draft = await screen.findByRole(
+      "textbox",
+      { name: "Task draft" },
+      { timeout: SIDEBAR_REVEAL_BUDGET_MS * 2 },
+    );
+    // The Team row stays the only heading; the region shows no second one.
+    expect(group()).toContainElement(row() as HTMLElement);
+    expect(group()).toContainElement(draft);
+    expect(
+      view.container.querySelectorAll("[data-solo-channel-group]"),
+    ).toHaveLength(0);
+    expect(screen.getAllByText("Source")).toHaveLength(1);
+    // The row keeps a plain caret: the region's leading action stays there.
+    expect(
+      screen.queryByRole("button", { name: "Open Lead" }),
+    ).not.toBeInTheDocument();
+    const disclosure = screen.getByRole("button", {
+      name: "Toggle Source tasks",
+    });
+    await user.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(draft).toBeInTheDocument();
+    expect(draft).not.toBeVisible();
+    await user.click(disclosure);
+    await user.click(
+      screen.getByRole("button", { name: "New task in Source" }),
+    );
+    expect(create).toHaveBeenCalledOnce();
+
+    // Without the placement the group returns to the region and the row to its plain form.
+    await user.click(screen.getByRole("button", { name: "Move tasks" }));
+    expect(group()).toBeNull();
+    expect(row()).toBeInTheDocument();
+    expect(
+      view.container.querySelector('[data-solo-channel-group="source"]'),
+    ).toContainElement(screen.getByRole("textbox", { name: "Task draft" }));
+    expect(
+      screen.getByRole("button", { name: "Open Lead" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Move tasks" }));
+    expect(group()).toContainElement(
+      screen.getByRole("textbox", { name: "Task draft" }),
+    );
+
+    // Focus in the group's controls returns to the row when they leave it.
+    for (const name of ["Toggle Source tasks", "New task in Source"]) {
+      screen.getByRole("button", { name }).focus();
+      await act(() => move?.());
+      await waitFor(() => expect(row()).toHaveFocus());
+      await act(() => move?.());
+      expect(group()).toContainElement(row() as HTMLElement);
+    }
+
+    // The wrapped row is still the channel's own row.
+    await user.click(row() as HTMLElement);
+    await waitFor(() =>
+      expect(h.navigator.snapshot().entry.target).toEqual(
+        conversationTarget(h.scope, "source"),
+      ),
+    );
+
+    // A contribution that hides the row hides its group with it, in both places.
+    await act(() => hide(true));
+    expect(row()).toBeNull();
+    expect(group()).toBeNull();
+    expect(
+      screen.queryByRole("textbox", { name: "Task draft" }),
+    ).not.toBeInTheDocument();
+    await act(() => hide(false));
+    expect(group()).toContainElement(
+      screen.getByRole("textbox", { name: "Task draft" }),
+    );
+
+    // Focus in a control the hidden row takes with it moves to a surviving heading.
+    const section = row()?.closest("[data-sidebar-section]");
+    const heading = section?.querySelector("summary");
+    expect(heading).toBeInstanceOf(HTMLElement);
+    for (const name of ["Toggle Source tasks", "New task in Source"]) {
+      screen.getByRole("button", { name }).focus();
+      await act(() => hide(true));
+      await waitFor(() => expect(heading).toHaveFocus());
+      await act(() => hide(false));
+      expect(group()).toContainElement(row() as HTMLElement);
+    }
   } finally {
     view.unmount();
     await h.dispose();

@@ -65,6 +65,7 @@ import {
 } from "../../features/agents/conversation-folders";
 import { sessionPrompts } from "../../features/agents/session-prompts";
 import { standaloneSessions } from "../../features/agents/standalone-sessions";
+import { withWakes } from "../../features/agents/session-usage";
 import { localStore, type AgentStore } from "../../features/agents/store";
 import { type AgentReads, workflowMarked } from "../../features/agents/reads";
 import type {
@@ -259,6 +260,9 @@ export class PiRuntime {
   private readonly listeners = new Set<() => void>();
   /** Each agent's working conversations, as last read, for a stable view. */
   private readonly views = new Map<AgentKey, readonly number[]>();
+  /** Whether the Usage plugin is on, asked as each one-off turn starts: only
+   * then is the turn's key kept with its conversation, for Usage. */
+  usageOn: () => boolean = () => false;
   /** The agents of this type that run here now. */
   private running = new Set<AgentKey>();
   /** Agents with a protection binding, which never use the shared host. */
@@ -549,15 +553,17 @@ export class PiRuntime {
     if (!this.running.has(agent)) return [];
     // A standalone turn's conversation is in no place: `runOnce` recorded
     // it, and it is read whenever it last answered.
-    const standalone = standaloneSessions(this.storage, "pi", agent)
-      .list()
-      .map(({ id }) => ({ conversation: Number(id) }));
-    return readUsage(
-      this.pi,
-      agent,
-      [...(await this.places(agent)), ...standalone],
-      since,
-      signal,
+    const starts = standaloneSessions(this.storage, "pi", agent).list();
+    const standalone = starts.map(({ id }) => ({ conversation: Number(id) }));
+    return withWakes(
+      await readUsage(
+        this.pi,
+        agent,
+        [...(await this.places(agent)), ...standalone],
+        since,
+        signal,
+      ),
+      starts,
     );
   }
   /** The conversations a Buzz request of the agent's is working in. */
@@ -1247,9 +1253,11 @@ export class PiRuntime {
         );
         this.notify();
       } else {
-        // Outside any conversation, so no place lists it for its usage.
+        // Outside any conversation, so no place lists it for its usage. Its
+        // key is kept only while Usage is on.
         void standaloneSessions(this.storage, "pi", agent.key).add(
           String(conversation),
+          this.usageOn() ? key : undefined,
         );
       }
       // A removed agent's storage is closed, and stays so.

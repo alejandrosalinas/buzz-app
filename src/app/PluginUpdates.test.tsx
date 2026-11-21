@@ -188,6 +188,7 @@ function managedFixture() {
     checkFolder: vi.fn(async () => ({ revision: "new" })),
     previewFolder: vi.fn(async () => null),
     folder: vi.fn(async () => null),
+    checkPath: vi.fn(async () => null),
     files: vi.fn(async () => null),
     url: vi.fn(async () => null),
     install: vi.fn(async () => configuration),

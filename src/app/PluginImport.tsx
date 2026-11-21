@@ -99,7 +99,7 @@ function gitSizeRecoveryHint(message: string) {
   }
 }
 
-function importLocation(
+export function importLocation(
   preview: Pick<ImportPreview, "source" | "commit">,
   path: string | undefined,
 ) {

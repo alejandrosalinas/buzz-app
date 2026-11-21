@@ -105,7 +105,6 @@ it("offers Default, Off and Custom for each section the owner can configure", as
     "Progress",
     "Etiquette",
     "Agent Memory",
-    "Engineering Discipline",
     "Commit identity",
     "Autonomy",
   ])

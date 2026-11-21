@@ -28,8 +28,9 @@ import {
 } from "../../features/relay/session";
 import type { RelayData } from "../../features/relay/service";
 import { matchesEvent } from "../../features/relay/projection";
-import type { RelayEvent } from "../../features/relay/events";
+import type { ReadFilter, RelayEvent } from "../../features/relay/events";
 import {
+  bounds,
   keypair,
   metadata,
   roster,
@@ -67,6 +68,28 @@ vi.mock("./ChannelBody", async (original) => {
 
 composerDOMFixture();
 
+/** The relay's answer: matching events, and each history page's bounds. */
+function relayQuery(
+  authority: ReturnType<typeof keypair>,
+  events: readonly RelayEvent[],
+  filters: readonly ReadFilter[],
+) {
+  return [
+    ...events.filter((event) =>
+      filters.some((filter) => matchesEvent(event, filter)),
+    ),
+    ...filters.flatMap((filter) =>
+      filter.top_level
+        ? (filter["#h"] ?? []).map((channel) =>
+            bounds(authority, channel, "head", {
+              has_more: false,
+              next_cursor: null,
+            }),
+          )
+        : [],
+    ),
+  ];
+}
 const owners: ReturnType<typeof createRelaySession>[] = [];
 const visitSnapshot = { entry: { id: "visit" }, attempt: {} };
 const threadVisitSnapshot = { entry: { id: "thread-visit" }, attempt: {} };
@@ -129,10 +152,7 @@ async function page(
       viewer: viewer.pubkey,
       relayAuthor: authority.pubkey,
       media: () => undefined,
-      query: async (filters) =>
-        events.filter((event) =>
-          filters.some((filter) => matchesEvent(event, filter)),
-        ),
+      query: async (filters) => relayQuery(authority, events, filters),
       writer: {
         sign: async (template) => signed(viewer, template),
         publish: async () => {},
@@ -475,10 +495,7 @@ function workspace(
       viewer: viewer.pubkey,
       relayAuthor: authority.pubkey,
       media: () => undefined,
-      query: async (filters) =>
-        events.filter((event) =>
-          filters.some((filter) => matchesEvent(event, filter)),
-        ),
+      query: async (filters) => relayQuery(authority, events, filters),
       writer: {
         sign: async (template) => signed(viewer, template),
         publish: async () => {},

@@ -58,6 +58,13 @@ export class PluginRuntime {
       settled: () =>
         !configuring() &&
         Object.values(this.states).every(({ status }) => status !== "starting"),
+      bundledSettled: () =>
+        !configuring() &&
+        [...this.entries].every(
+          ([id, { plugin }]) =>
+            plugin.source !== "bundled" ||
+            this.states[id]?.status !== "starting",
+        ),
     });
     this.timeoutMs = timeoutMs;
   }

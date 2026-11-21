@@ -33,6 +33,10 @@ export type HostCompletionSuggestion = Omit<CompletionSuggestion, "edit"> &
 export type HostCompletionResult = Omit<CompletionResult, "items"> &
   Readonly<{ items: readonly HostCompletionSuggestion[] }>;
 
+export type CompletionMatch = Readonly<{
+  provider: Contribution<ComposerCompletion>;
+  query: CompletionQuery;
+}>;
 export function matchCompletion(
   providers: readonly Contribution<ComposerCompletion>[],
   observation: ComposerObservation,
@@ -41,9 +45,7 @@ export function matchCompletion(
 ) {
   const order = (value: ComposerCompletion) =>
     Number.isFinite(value.order) ? (value.order ?? 0) : 0;
-  let winner:
-    | { provider: Contribution<ComposerCompletion>; query: CompletionQuery }
-    | undefined;
+  const matches: CompletionMatch[] = [];
   for (const provider of [...providers].sort(
     (a, b) => order(a) - order(b) || a.key.localeCompare(b.key),
   )) {
@@ -56,22 +58,35 @@ export function matchCompletion(
         validQuery(query, observation) &&
         !resolved.some(
           (span) => span.start <= query.start && query.start < span.end,
-        ) &&
-        (!winner || query.start > winner.query.start)
+        )
       )
-        winner = {
+        matches.push({
           provider,
           query: Object.freeze({
             start: query.start,
             end: query.end,
             query: query.query,
           }),
-        };
+        });
     } catch {
       /* A broken optional matcher cannot break editing. */
     }
   }
-  return winner;
+  const owners = matches.filter(({ provider }) => provider.supplement !== true);
+  const start = Math.max(...owners.map(({ query }) => query.start));
+  const winner = owners.find(({ query }) => query.start === start);
+  const sources = matches.filter(
+    (match) =>
+      match === winner ||
+      (match.provider.supplement === true && match.query.start === start),
+  );
+  return (
+    winner && {
+      ...winner,
+      sources,
+      supplements: sources.filter((match) => match !== winner),
+    }
+  );
 }
 function validQuery(
   query: CompletionQuery | null,
@@ -96,6 +111,7 @@ export function completionResult(
 ): HostCompletionResult {
   const ids = new Set<string>();
   const items: HostCompletionSuggestion[] = [];
+  const supplement = provider?.supplement === true;
   for (const item of (Array.isArray(result?.items) ? result.items : []).slice(
     0,
     50,
@@ -153,9 +169,10 @@ export function completionResult(
         label: item.label,
         ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
         preview: item.preview,
-        ...(item.agent === true ? { agent: true } : {}),
+        ...(item.agent === true && !supplement ? { agent: true } : {}),
         ...(typeof item.group === "string" &&
         item.group &&
+        !supplement &&
         provider &&
         isBundledContribution(provider)
           ? { group: item.group }
@@ -193,6 +210,9 @@ export function completionResult(
     items: Object.freeze(items),
     ...(typeof result.spaceId === "string" && ids.has(result.spaceId)
       ? { spaceId: result.spaceId }
+      : {}),
+    ...(supplement && result.holdAutoSelect === true
+      ? { holdAutoSelect: true }
       : {}),
     ...(result.spacePending &&
     typeof result.spacePending.name === "string" &&

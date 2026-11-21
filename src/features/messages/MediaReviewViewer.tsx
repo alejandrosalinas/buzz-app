@@ -1,3 +1,4 @@
+import { hostComposerProvenance } from "./mention-draft";
 import { TypingIndicator } from "./TypingIndicator";
 import { workflowLabel } from "../relay/workflow-attribution";
 import { MessageEditScope } from "./MessageEditScope";
@@ -524,6 +525,7 @@ function ReviewShell({
                   }}
                 >
                   <MessageComposer
+                    evidenceOwner={hostComposerProvenance}
                     shown={commentsOpen}
                     extensions={extensions}
                     session={session}

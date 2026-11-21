@@ -111,6 +111,10 @@ it("registers only where the desktop app can run codex and base64", () => {
 it("adopts an agent's instructions and compatible workspace without its model", () => {
   const type = applied();
   const saved = type?.defaults().config;
+  expect(type?.skillFolders).toEqual([
+    "$CODEX_HOME/skills",
+    "~/.agents/skills",
+  ]);
   expect(
     type?.adopt?.({ instructions: "Triage.", model: "gpt" } as never, saved),
   ).toEqual({ ...(saved as object), instructions: "Triage." });

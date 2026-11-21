@@ -104,6 +104,7 @@ import type {
   SessionPlace,
   SessionControlAction,
   SessionState,
+  SessionUsage,
 } from "../../features/agents/service";
 import {
   CONTEXT_LIMIT,
@@ -138,6 +139,7 @@ import {
 } from "./transcript";
 import { sessionPrompts } from "../../features/agents/session-prompts";
 import { standaloneSessions } from "../../features/agents/standalone-sessions";
+import { withWakes } from "../../features/agents/session-usage";
 
 /** The effort levels Claude lists, which a session can switch to between
  * turns. Claude runs `max` as `xhigh` in a stream-json session, so it is not
@@ -373,6 +375,9 @@ export class ClaudeRuntime {
   /** A failed turn's error as its report says it, such as where to fix
    * Claude's credentials. */
   explain: (error: string) => string = (error) => error;
+  /** Whether the Usage plugin is on, asked as each one-off turn starts: only
+   * then is the turn's key kept with its session, for Usage. */
+  usageOn: () => boolean = () => false;
 
   private executionKey(agent: AgentKey, conversation: string) {
     const scope = this.reads(agent)?.scope;
@@ -930,6 +935,14 @@ export class ClaudeRuntime {
       this.notices.get(conversation.agent) ?? new Map(),
     );
   }
+  /** `sessions` with, for each a standalone turn started, the key it ran
+   * under. */
+  withWakes(agent: AgentKey, sessions: readonly SessionUsage[]) {
+    return withWakes(
+      sessions,
+      standaloneSessions(this.storage, "claude-code", agent).list(),
+    );
+  }
   /** What each of the agent's sessions started with. */
   private prompts(agent: AgentKey) {
     return sessionPrompts(this.storage, "claude-code", agent);
@@ -1398,6 +1411,9 @@ export class ClaudeRuntime {
         const admitted = await admission(deferred);
         session = admitted?.session ?? session;
         sessionContext = admitted?.context ?? sessionContext;
+        const turnContext = [sessionContext, route?.turnContext]
+          .filter(Boolean)
+          .join("\n\n");
         // `fresh` is for a session that has been shown nothing yet.
         let acceptProject: (() => void) | undefined;
         const prompt = async (fresh: boolean) => {
@@ -1455,7 +1471,7 @@ export class ClaudeRuntime {
             : replyRoot;
         const notes = agent.notes?.(channel, noteRoot) ?? [];
         const text = [
-          sessionContext,
+          turnContext,
           this.review(entry, prepared, notes, channel, noteRoot, key),
         ]
           .filter(Boolean)
@@ -1489,14 +1505,14 @@ export class ClaudeRuntime {
                     noteRoot,
                     key,
                   );
-                  return [sessionContext, text].filter(Boolean).join("\n\n");
+                  return [turnContext, text].filter(Boolean).join("\n\n");
                 },
               }
             : {}),
           steer: steerPrompt(text),
           fresh: async () =>
             [
-              sessionContext,
+              turnContext,
               this.review(
                 entry,
                 (await prompt(true)).text,
@@ -2261,9 +2277,11 @@ export class ClaudeRuntime {
         );
         // Its transcript names no conversation, so only this says it is the
         // agent's, for its usage; the saved prompts drop old sessions.
+        // Its key is kept only while Usage is on.
         if (once)
           void standaloneSessions(this.storage, "claude-code", agent).add(
             session,
+            this.usageOn() ? once : undefined,
           );
       },
       // The saved prompt shows the base sections again when a session

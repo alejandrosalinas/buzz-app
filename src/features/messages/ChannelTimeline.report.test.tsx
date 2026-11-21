@@ -21,6 +21,8 @@ import {
   keypair,
   message,
   roster,
+  completeHeads,
+  flush,
   scriptedTransport,
   signed,
 } from "../relay/testing";
@@ -100,7 +102,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function mount(
+async function mount(
   publish: (event: RelayEvent) => Promise<void>,
   targetEvent = target,
   initial = [targetEvent, neighbor],
@@ -111,9 +113,10 @@ function mount(
   } = {},
 ) {
   let live: LiveCallbacks | undefined;
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   const owner = createRelaySession(
     {
-      ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+      ...wire.transport,
       ...(threadRoot ? { query: async () => initial } : {}),
       ...(options.media ? { media: options.media } : {}),
       writer: { sign: async (template) => signed(viewer, template), publish },
@@ -127,6 +130,8 @@ function mount(
   owners.push(owner);
   owner.session.channels.ensure("c");
   live?.receive([roster(relay, "c", [viewer.pubkey], 1), ...initial]);
+  completeHeads(wire, relay, initial);
+  await flush();
   const tree = () => (
     <StrictMode>
       <ToastProvider>
@@ -203,7 +208,7 @@ it("keeps the reporting row mounted through a held submission and its notice, th
   const publish = vi.fn(
     () => new Promise<void>((resolve) => (settle = resolve)),
   );
-  const h = mount(publish);
+  const h = await mount(publish);
   const row = h.row();
   if (!row) throw new Error("Missing target row");
   const { user } = await openReport(row);
@@ -233,7 +238,7 @@ it("keeps the reporting row mounted through a held submission and its notice, th
 
 it("releases on cancel, pins again on reopen, and unmounts cleanly while open", async () => {
   const error = vi.spyOn(console, "error");
-  const h = mount(async () => {});
+  const h = await mount(async () => {});
   const row = h.row();
   if (!row) throw new Error("Missing target row");
   const { user, trigger } = await openReport(row);
@@ -265,7 +270,7 @@ it("releases on cancel, pins again on reopen, and unmounts cleanly while open", 
 
 it("keeps an image row mounted while its fullscreen viewer is open, then releases it after restoring focus", async () => {
   const user = userEvent.setup();
-  const h = mount(async () => {});
+  const h = await mount(async () => {});
   const row = h.row();
   if (!row) throw new Error("Missing target row");
   const thumbnail = within(row).getByRole("link", {
@@ -297,7 +302,7 @@ it("a report notice expiring behind the image viewer keeps the row pinned for th
   const publish = vi.fn(
     () => new Promise<void>((resolve) => (settle = resolve)),
   );
-  const h = mount(publish);
+  const h = await mount(publish);
   const row = h.row();
   if (!row) throw new Error("Missing target row");
   const { user } = await openReport(row);
@@ -341,7 +346,7 @@ it("a report notice expiring behind the image viewer keeps the row pinned for th
 });
 
 it("closing the image viewer before the report notice ends keeps the row pinned for the notice", async () => {
-  const h = mount(async () => {});
+  const h = await mount(async () => {});
   const row = h.row();
   if (!row) throw new Error("Missing target row");
   const { user } = await openReport(row);
@@ -408,10 +413,16 @@ it.each([
     const playing = message(other, "c", "Listen", 1, [
       ["imeta", `url https://relay.test/media/${file}`, `m ${mime}`],
     ]);
-    const h = mount(async () => {}, playing, [playing, neighbor], undefined, {
-      media: proxied,
-      extensions: voiceNotes,
-    });
+    const h = await mount(
+      async () => {},
+      playing,
+      [playing, neighbor],
+      undefined,
+      {
+        media: proxied,
+        extensions: voiceNotes,
+      },
+    );
     const row = h.row();
     const player = row?.querySelector<HTMLMediaElement>("audio, video");
     if (!row || !player) throw new Error("Missing media row");
@@ -437,7 +448,7 @@ it("keeps a row mounted while another of its players still plays", async () => {
     ["imeta", "url https://relay.test/media/a.mp3", "m audio/mpeg"],
     ["imeta", "url https://relay.test/media/a.mp4", "m video/mp4"],
   ]);
-  const h = mount(async () => {}, both, [both, neighbor], undefined, {
+  const h = await mount(async () => {}, both, [both, neighbor], undefined, {
     media: proxied,
   });
   const row = h.row();
@@ -466,10 +477,16 @@ it("lets a playing row go when its voice note fails", async () => {
   const failing = message(other, "c", "Listen", 1, [
     ["imeta", "url https://relay.test/media/voice.m4a", "m audio/mp4"],
   ]);
-  const h = mount(async () => {}, failing, [failing, neighbor], undefined, {
-    media: proxied,
-    extensions: voiceNotes,
-  });
+  const h = await mount(
+    async () => {},
+    failing,
+    [failing, neighbor],
+    undefined,
+    {
+      media: proxied,
+      extensions: voiceNotes,
+    },
+  );
   const row = h.row();
   const audio = row?.querySelector("audio");
   if (!row || !audio) throw new Error("Missing media row");
@@ -520,10 +537,16 @@ it.each([
     const playing = message(other, "c", "Listen", 1, [
       ["imeta", "url https://relay.test/media/a.mp3", "m audio/mpeg"],
     ]);
-    const h = mount(async () => {}, playing, [playing, neighbor], undefined, {
-      media: proxied,
-      extensions: cards,
-    });
+    const h = await mount(
+      async () => {},
+      playing,
+      [playing, neighbor],
+      undefined,
+      {
+        media: proxied,
+        extensions: cards,
+      },
+    );
     const row = h.row();
     const audio = row?.querySelector("audio");
     if (!row || !audio) throw new Error("Missing media row");
@@ -556,9 +579,15 @@ it("lets a playing agents row go when it collapses", async () => {
     ["audience", "agents"],
     ["imeta", "url https://relay.test/media/a.mp3", "m audio/mpeg"],
   ]);
-  const h = mount(async () => {}, step, [root, neighbor, step], undefined, {
-    media: proxied,
-  });
+  const h = await mount(
+    async () => {},
+    step,
+    [root, neighbor, step],
+    undefined,
+    {
+      media: proxied,
+    },
+  );
   fireEvent.click(
     await screen.findByRole("button", { name: /Show activity history/ }),
   );
@@ -613,7 +642,7 @@ it.each([
       ["audience", "agents"],
       ...tags,
     ]);
-    const h = mount(
+    const h = await mount(
       publish,
       step,
       [root, step],

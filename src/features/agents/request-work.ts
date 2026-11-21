@@ -1,7 +1,11 @@
 import type { WorkStep } from "./local-activity";
 import type { LocalWorkState } from "./local-activity";
 import type { RelaySession } from "../relay/session";
-import { requestActivity, requestActivityState } from "./request-activity";
+import {
+  requestActivity,
+  requestActivityState,
+  triggeredAgents,
+} from "./request-activity";
 
 type Snapshot = ReturnType<RelaySession["agentActivity"]["snapshot"]>;
 export type RequestWork = {
@@ -65,13 +69,9 @@ export function requestWork(
   const agents = new Set([
     ...channelAgents(records, channelId),
     ...requests.map((request) => request.agent),
-    ...snapshot.turns
-      .filter(
-        (turn) =>
-          turn.channelId === channelId &&
-          turn.triggeringEventIds?.some((id) => ids.has(id)),
-      )
-      .map((turn) => turn.agent),
+    ...[...ids].flatMap((id) => [
+      ...(triggeredAgents(snapshot.turns).get(`${channelId}\n${id}`) ?? []),
+    ]),
   ]);
   return [...agents].sort().flatMap<RequestWork>((agent) => {
     const local = requests.filter((entry) => entry.agent === agent);

@@ -33,6 +33,7 @@ import {
 } from "./contract";
 import {
   type EligibleRoute,
+  excludesHarness,
   type GatewayRoute,
   invalidateRoute,
   routeFor,
@@ -59,6 +60,8 @@ export type ForwardRoutes = Readonly<{
   subscribeRoute(key: AgentKey, listener: () => void): () => void;
   /** Drops `revision`'s access, as a gateway 401 or 403 says it ended. */
   invalidateRoute?(key: AgentKey, revision?: number): void;
+  /** Whether this launch's plugin list leaves `harness` out. */
+  excludes?(harness: string): boolean;
 }>;
 /** The waits before each further try at an open that couldn't reach native
  * or its local proxy: bounded, so a turn still fails visibly soon. */
@@ -113,7 +116,12 @@ const NATIVE: ForwardNative = {
   seal: sealForward,
   close: closeForward,
 };
-const ROUTES: ForwardRoutes = { routeFor, subscribeRoute, invalidateRoute };
+const ROUTES: ForwardRoutes = {
+  routeFor,
+  subscribeRoute,
+  invalidateRoute,
+  excludes: excludesHarness,
+};
 const RETRY: ForwardRetry = { delays: [250, 1_000, 2_500] };
 /** Native route keys, short and opaque, for the page's life: a key is never
  * given to another agent, even by a later instance after a re-enable. */
@@ -196,14 +204,19 @@ export class GatewayForwarding {
    * by, read now without waiting: undefined where the runner wouldn't send
    * the agent's turns to the gateway, so it runs on the harness's own
    * configuration; else the eligible route that enables the harness, or the
-   * blocked one its turns would fall back from. */
+   * blocked one its turns would fall back from. A control acts on a saved
+   * session a forwarded turn left, so one this launch's plugin list leaves
+   * out (`excludes`) still goes by the eligible route: the session keeps the
+   * gateway it ran through, whose own check still decides. */
   control(
     agent: AgentKey,
   ): EligibleRoute | Extract<GatewayRoute, { kind: "blocked" }> | undefined {
     const route = this.routes.routeFor(agent);
     if (route.kind === "blocked") return route;
+    const { upstream } = this.harness;
     return route.kind === "eligible" &&
-      route.harnesses.includes(this.harness.upstream)
+      (route.harnesses.includes(upstream) ||
+        this.routes.excludes?.(upstream) === true)
       ? route
       : undefined;
   }

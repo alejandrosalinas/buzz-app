@@ -3,8 +3,11 @@ import { createRoot } from "react-dom/client";
 import { useSidebarView } from "../../src/bundled/channels/useSidebarView";
 import { ChannelSidebarRow } from "../../src/bundled/channels/ChannelSidebarRow";
 import { SidebarSection } from "../../src/bundled/channels/SidebarSection";
+import { SidebarUnread } from "../../src/bundled/channels/SidebarUnread";
 import { SidebarContributionSection } from "../../src/features/channel-navigation/SidebarContributionSection";
+import { SidebarList } from "../../src/features/channel-navigation/SidebarList";
 import { ChannelSidebarDnd } from "../../src/features/channel-navigation/ChannelSidebarDnd";
+import { ChannelSidebarRows } from "../../src/features/channel-navigation/ChannelSidebarRows";
 import type { Navigation } from "../../src/features/navigation/controller";
 import type { OpenTarget } from "../../src/features/navigation/targets";
 import type {
@@ -21,6 +24,8 @@ type State = {
   at: string;
   rows: number[];
   relocated?: boolean;
+  anchored?: boolean | undefined;
+  animated?: boolean | undefined;
 };
 const rows = (count: number) => Array.from({ length: count }, (_, i) => i);
 const contributionTarget: OpenTarget = {
@@ -72,28 +77,30 @@ declare global {
   }
 }
 
-function Sidebar({ at, rows }: Omit<State, "mounted">) {
+function Sidebar({ at, rows, anchored, animated }: Omit<State, "mounted">) {
   const view = useSidebarView("fixture", true, at);
   const target =
     at === "conversation:late"
       ? contributionTarget
       : ({ version: 1, kind: "home" } satisfies OpenTarget);
-  return (
-    <nav
-      aria-label="Sidebar"
-      ref={view.list}
-      style={{ height: 200, overflowY: "auto", width: 200 }}
+  const entries = rows.map((id) => (
+    <div
+      key={id}
+      data-row={id}
+      data-variant="row"
+      aria-current={at === `row:${id}` ? "page" : undefined}
+      style={{ height: 40 }}
     >
-      {rows.map((id) => (
-        <div
-          key={id}
-          data-row={id}
-          aria-current={at === `row:${id}` ? "page" : undefined}
-          style={{ height: 40 }}
-        >
-          Row {id}
-        </div>
-      ))}
+      Row {id}
+    </div>
+  ));
+  const content = (
+    <>
+      {animated ? (
+        <ChannelSidebarRows open>{entries}</ChannelSidebarRows>
+      ) : (
+        entries
+      )}
       <ChannelSidebarDnd
         writable={false}
         onMove={() => {}}
@@ -113,6 +120,34 @@ function Sidebar({ at, rows }: Omit<State, "mounted">) {
           onRowsCommitted={view.retryReveal}
         />
       </ChannelSidebarDnd>
+    </>
+  );
+  if (anchored)
+    return (
+      <div
+        style={{
+          height: 200,
+          width: 200,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <SidebarUnread
+          listRef={view.list}
+          adjustScrollAnchor={view.adjustScrollAnchor}
+          captureScrollAnchor={view.captureScrollAnchor}
+        >
+          {content}
+        </SidebarUnread>
+      </div>
+    );
+  return (
+    <nav
+      aria-label="Sidebar"
+      ref={view.list}
+      style={{ height: 200, overflowY: "auto", width: 200 }}
+    >
+      {content}
     </nav>
   );
 }
@@ -133,7 +168,7 @@ function Harness() {
   };
   if (state.relocated !== undefined)
     return (
-      <nav aria-label="Sidebar">
+      <SidebarList navigation={{ label: "Sidebar" }}>
         {["channels", "starred"].map((section) => (
           <SidebarSection
             key={section}
@@ -161,9 +196,16 @@ function Harness() {
             ))}
           </SidebarSection>
         ))}
-      </nav>
+      </SidebarList>
     );
-  return state.mounted ? <Sidebar at={state.at} rows={state.rows} /> : null;
+  return state.mounted ? (
+    <Sidebar
+      at={state.at}
+      rows={state.rows}
+      anchored={state.anchored}
+      animated={state.animated}
+    />
+  ) : null;
 }
 
 const root = document.getElementById("root");

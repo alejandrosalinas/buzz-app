@@ -193,6 +193,7 @@ type Request = {
   team: string;
   session?: Delivery["session"];
   sessionContext?: string;
+  invocationContext?: string;
   /** The Solo chat's workspace Canvas section, if it has one. */
   project?: string;
   /** `project` for a turn that works where `worksElsewhere` says. */
@@ -504,6 +505,7 @@ function noteOf(request: Request) {
     ) ?? [];
   const notes = [
     request.sessionContext,
+    request.invocationContext,
     request.resumed ? RESUMED_PROMPT : undefined,
     ...request.notes,
     turnNote(
@@ -1776,8 +1778,9 @@ export class CodexRuntime {
     // memory versions and search; v14 splits canvas into canvas_get and
     // canvas_set; v15 removes message keywords; v16 splits channel and
     // channels into the channel_* tools; v17 split members into the
-    // member_* tools; v18 adds search and removes read's q.
-    return `buzz.codex.sessions.v18:${scope}:${agent}${sessionKey ? `:session:${sessionKey}` : ""}`;
+    // member_* tools; v18 adds search and removes read's q; v19 replaces
+    // solo_workspace_list with workspace_list and adds channel_move.
+    return `buzz.codex.sessions.v19:${scope}:${agent}${sessionKey ? `:session:${sessionKey}` : ""}`;
   }
   private save(request: Request, entry: Entry, key: string, saved: Saved) {
     // Reinserted so the bounded set keeps the most recently used bindings.
@@ -2433,6 +2436,7 @@ export class CodexRuntime {
       event,
       ...(!topLevel ? { replyRoot: route?.parent ?? rootOf(event) } : {}),
       ...(route ? { sourceRoot: route.root } : {}),
+      ...(route?.turnContext ? { invocationContext: route.turnContext } : {}),
       ...(wake ? { wake } : {}),
       ...(delivery.wakeText ? { wakeText: delivery.wakeText } : {}),
       agent,

@@ -1,4 +1,4 @@
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { createRelaySession } from "./session";
 import {
   CapturedReadWouldWidenError,
@@ -636,6 +636,446 @@ it("the channel snapshot names the oldest unread message its timeline shows", as
   await h.session.unread.markThrough(h.target, second.id);
   expect(h.snapshot()).toMatchObject({ observedCount: 0 });
   expect(h.snapshot().oldestUnreadId).toBeUndefined();
+});
+
+function unreadMessages(
+  unread: Pick<UnreadCapability, "messages">,
+  channelId: string,
+  limit?: number,
+) {
+  if (!unread.messages) throw new Error("Unread messages are unavailable");
+  return unread.messages(channelId, limit);
+}
+
+it("unread messages list exactly what observedCount counts, newest first", async () => {
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => stored.set(key, value),
+  });
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const h = setup();
+  h.grant("room");
+  const ownRoot = message(h.viewer, "room", "own root", 10);
+  const beforeRead = message(h.alice, "room", "before the read", 11);
+  const readThrough = message(h.alice, "room", "read through", 12);
+  h.emit([ownRoot, beforeRead, readThrough]);
+  await h.session.unread.markThrough(h.target, readThrough.id);
+  await h.session.unread.markUnreadLocal({
+    kind: "message",
+    channelId: "room",
+    messageId: beforeRead.id,
+  });
+  const ownReply = message(h.alice, "room", "in the viewer's thread", 13, [
+    ["e", ownRoot.id, "", "reply"],
+  ]);
+  const other = message(h.alice, "room", "someone else's root", 14);
+  const otherReply = message(h.alice, "room", "outside the viewer", 15, [
+    ["e", other.id, "", "reply"],
+  ]);
+  const mutedRoot = message(h.viewer, "room", "unfollowed root", 16);
+  const mutedReply = message(h.alice, "room", "unfollowed reply", 17, [
+    ["e", mutedRoot.id, "", "reply"],
+  ]);
+  const quiet = message(h.alice, "room", "agent coordination", 18, [
+    ["audience", "agents"],
+  ]);
+  const own = message(h.viewer, "room", "own later", 19);
+  const latest = message(h.alice, "room", "latest", 20);
+  h.emit([latest, own, quiet, mutedReply, mutedRoot, otherReply, other]);
+  h.emit([ownReply]);
+  h.session.unread.follow("room", mutedRoot.id, false);
+
+  const listed = unreadMessages(h.session.unread, "room");
+  expect(h.snapshot().observedCount).toBe(4);
+  expect(listed).toEqual({
+    channelId: "room",
+    items: [
+      { id: latest.id, createdAt: 20, authorId: h.alice.pubkey },
+      { id: other.id, createdAt: 14, authorId: h.alice.pubkey },
+      {
+        id: ownReply.id,
+        createdAt: 13,
+        authorId: h.alice.pubkey,
+        rootId: ownRoot.id,
+      },
+      { id: beforeRead.id, createdAt: 11, authorId: h.alice.pubkey },
+    ],
+    incomplete: true,
+  });
+  expect(Object.isFrozen(listed.items)).toBe(true);
+
+  await h.session.unread.markMessageRead("room", other.id);
+  expect(h.snapshot().observedCount).toBe(3);
+  expect(
+    unreadMessages(h.session.unread, "room").items?.map((item) => item.id),
+  ).toEqual([latest.id, ownReply.id, beforeRead.id]);
+});
+
+it("unread messages stop at the limit and say so", async () => {
+  const h = setup();
+  h.grant("room");
+  const rows = Array.from({ length: 5 }, (_, i) =>
+    message(h.alice, "room", `row ${i}`, 11 + i),
+  );
+  h.emit([rows[2], rows[0], rows[4], rows[1], rows[3]].filter((row) => !!row));
+  const ids = (limit?: number) =>
+    unreadMessages(h.session.unread, "room", limit).items?.map(
+      (item) => item.id,
+    );
+  expect(ids()).toEqual(rows.map((row) => row.id).reverse());
+  expect(ids(2)).toEqual([rows[4]?.id, rows[3]?.id]);
+  expect(unreadMessages(h.session.unread, "room", 2).truncated).toBe(true);
+  expect(unreadMessages(h.session.unread, "room", 5).truncated).toBeUndefined();
+  expect(unreadMessages(h.session.unread, "room").truncated).toBeUndefined();
+  expect(ids(1.5)).toEqual([rows[4]?.id]);
+  for (const limit of [0, -1, Number.NaN])
+    expect(unreadMessages(h.session.unread, "room", limit)).toEqual({
+      channelId: "room",
+      items: [],
+      truncated: true,
+      incomplete: true,
+    });
+
+  const many = Array.from({ length: 501 }, (_, i) =>
+    message(h.alice, "room", `many ${i}`, 100 + i),
+  );
+  h.emit(many);
+  const capped = unreadMessages(h.session.unread, "room", 10_000);
+  expect(capped.items).toHaveLength(500);
+  expect(capped.truncated).toBe(true);
+  expect(capped.items?.[0]?.id).toBe(many.at(-1)?.id);
+  expect(unreadMessages(h.session.unread, "room").items).toHaveLength(200);
+});
+
+it("unread messages are null without evidence and empty when nothing is unread", async () => {
+  const h = setup();
+  expect(unreadMessages(h.session.unread, "room")).toEqual({
+    channelId: "room",
+    items: null,
+  });
+  h.grant("room");
+  expect(h.snapshot().observedCount).toBeNull();
+  expect(unreadMessages(h.session.unread, "room").items).toBeNull();
+  const row = message(h.alice, "room", "row", 11);
+  h.emit([row, message(h.viewer, "room", "own", 12)]);
+  await h.session.unread.markMessageRead("room", row.id);
+  expect(h.snapshot().observedCount).toBe(0);
+  expect(unreadMessages(h.session.unread, "room").items).toEqual([]);
+  h.emit([roster(h.relay, "room", [], 20)]);
+  expect(unreadMessages(h.session.unread, "room").items).toBeNull();
+});
+
+it("unread messages say when evidence is known to stop short of history", async () => {
+  const h = setup();
+  h.grant("room");
+  h.grant("other");
+  const room = message(h.alice, "room", "room", 11);
+  const other = message(h.alice, "other", "other", 12);
+  let repair: RelayEvent[] = [room, other];
+  h.query.mockImplementation(async (filters) =>
+    filters[0]?.limit === 500 ? repair : [],
+  );
+  h.emit([room]);
+  // Only live traffic so far: no repair has sampled history.
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBe(true);
+  await h.session.unread.ensure();
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBeUndefined();
+
+  // A batch that returns its whole limit may have cut off older rows.
+  repair = Array.from({ length: 500 }, (_, i) =>
+    message(h.alice, "room", `busy ${i}`, 100 + i),
+  );
+  await h.session.unread.refresh();
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBe(true);
+  expect(unreadMessages(h.session.unread, "other").incomplete).toBe(true);
+  repair = [room, other];
+  await h.session.unread.refresh();
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBeUndefined();
+
+  // Capacity narrows the busiest channel; the quiet one keeps its history.
+  h.emit(
+    Array.from({ length: 19 }, (_, i) =>
+      message(h.alice, "room", "x".repeat(450000), 1000 + i),
+    ),
+  );
+  expect(h.snapshot().freshness).toBe("observed");
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBe(true);
+  expect(unreadMessages(h.session.unread, "other").items).toHaveLength(1);
+  expect(unreadMessages(h.session.unread, "other").incomplete).toBeUndefined();
+
+  // Losing access forgets the channel's evidence, narrowing included.
+  h.emit([roster(h.relay, "room", [], 30)]);
+  expect(unreadMessages(h.session.unread, "room").items).toBeNull();
+  h.grant("room", 31);
+  await h.session.unread.refresh();
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBeUndefined();
+  h.emit(
+    Array.from({ length: 19 }, (_, i) =>
+      message(h.alice, "room", "x".repeat(450000), 2000 + i),
+    ),
+  );
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBe(true);
+
+  // A failed repair leaves evidence stale.
+  h.query.mockImplementation(async (filters) => {
+    if (filters[0]?.limit === 500) throw new Error("offline");
+    return [];
+  });
+  await h.session.unread.refresh();
+  expect(h.snapshot().freshness).toBe("stale");
+  expect(unreadMessages(h.session.unread, "other").incomplete).toBe(true);
+  h.query.mockImplementation(async (filters) =>
+    filters[0]?.limit === 500 ? repair : [],
+  );
+
+  // A cleared cache forgets both, and is unsampled until its repair returns.
+  await h.clearCache();
+  await vi.waitFor(() => expect(h.snapshot().sampled).toBe(true));
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBeUndefined();
+});
+
+it("a subscriber sees a full repair batch mark the list incomplete", async () => {
+  const h = setup();
+  h.grant("room");
+  let repair = [message(h.alice, "room", "first", 11)];
+  h.query.mockImplementation(async (filters) =>
+    filters[0]?.limit === 500 ? repair : [],
+  );
+  await h.session.unread.ensure();
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBeUndefined();
+  const seen: (true | undefined)[] = [];
+  const stop = h.session.unread.subscribe(h.target, () =>
+    seen.push(unreadMessages(h.session.unread, "room").incomplete),
+  );
+  repair = Array.from({ length: 500 }, (_, i) =>
+    message(h.alice, "room", `busy ${i}`, 100 + i),
+  );
+  await h.session.unread.refresh();
+  stop();
+  expect(seen.length).toBeGreaterThan(0);
+  expect(seen.every((incomplete) => incomplete === true)).toBe(true);
+});
+
+/** A quiet channel read through 200, then sampled by a full batch whose
+ * oldest row is 100, beside a busy channel that filled it. */
+async function quietBesideBusy() {
+  const h = setup();
+  h.grant("room");
+  h.grant("quiet");
+  const old = message(h.alice, "quiet", "old", 50);
+  let repair: RelayEvent[] = [old];
+  h.query.mockImplementation(async (filters) =>
+    filters[0]?.limit === 500 ? repair : [],
+  );
+  await h.session.unread.ensure();
+  const time = clock(200);
+  await h.session.unread.markChannelRead("quiet");
+  time.mockRestore();
+  const fresh = message(h.alice, "quiet", "fresh", 650);
+  repair = [
+    ...Array.from({ length: 499 }, (_, i) =>
+      message(h.alice, "room", `busy ${i}`, 100 + i),
+    ),
+    fresh,
+  ];
+  await h.session.unread.refresh();
+  return { h, old, fresh };
+}
+
+it("a full repair batch leaves a channel complete when its read reaches the batch's oldest row", async () => {
+  const { h, old, fresh } = await quietBesideBusy();
+  expect(unreadMessages(h.session.unread, "quiet")).toEqual({
+    channelId: "quiet",
+    items: [{ id: fresh.id, createdAt: 650, authorId: h.alice.pubkey }],
+  });
+  expect(unreadMessages(h.session.unread, "room").incomplete).toBe(true);
+
+  await h.session.unread.markUnreadLocal({
+    kind: "message",
+    channelId: "quiet",
+    messageId: old.id,
+  });
+  expect(unreadMessages(h.session.unread, "quiet")).toEqual({
+    channelId: "quiet",
+    items: [
+      { id: fresh.id, createdAt: 650, authorId: h.alice.pubkey },
+      { id: old.id, createdAt: 50, authorId: h.alice.pubkey },
+    ],
+  });
+  // The cleared evidence comes back without the marked message, which the
+  // full batch left out: its mark can keep it unread.
+  await h.clearCache();
+  await vi.waitFor(() =>
+    expect(
+      h.session.unread.snapshot({ kind: "channel", channelId: "quiet" })
+        .sampled,
+    ).toBe(true),
+  );
+  expect(unreadMessages(h.session.unread, "quiet")).toMatchObject({
+    items: [{ id: fresh.id }],
+    incomplete: true,
+  });
+});
+
+it("a full repair batch leaves a channel incomplete while a synced channel mark unread is active", async () => {
+  const { h } = await quietBesideBusy();
+  expect(unreadMessages(h.session.unread, "quiet").incomplete).toBeUndefined();
+  const createdAt = Math.floor(Date.now() / 1000);
+  h.emit([
+    await signReadState(
+      {
+        slot: "a".repeat(32),
+        createdAt,
+        blob: {
+          v: 2,
+          client_id: "peer",
+          contexts: {
+            quiet: 0,
+            "ov_s:quiet": createdAt,
+            "ov_c:quiet": 0,
+            "ov_b:quiet": 1000,
+          },
+        },
+      },
+      h.viewer.secret,
+      createdAt,
+    ),
+  ]);
+  await vi.waitFor(() =>
+    expect(
+      h.session.unread.snapshot({ kind: "channel", channelId: "quiet" }),
+    ).toMatchObject({ manual: "remote" }),
+  );
+  expect(unreadMessages(h.session.unread, "quiet").incomplete).toBe(true);
+});
+
+it("unread messages list a DM's replies as its count does", () => {
+  const h = setup();
+  h.grant("room");
+  h.grant("dm");
+  h.emit([metadata(h.relay, "dm", "DM", 11, [["t", "dm"]])]);
+  const posts = (channelId: string) => {
+    const root = message(h.alice, channelId, "root", 12);
+    const reply = message(h.alice, channelId, "reply", 13, [
+      ["e", root.id, "", "reply"],
+    ]);
+    h.emit([root, reply]);
+    return { root, reply };
+  };
+  const dm = posts("dm");
+  const room = posts("room");
+  // In a DM every reply counts; elsewhere only the viewer's conversations do.
+  expect(
+    h.session.unread.snapshot({ kind: "channel", channelId: "dm" })
+      .observedCount,
+  ).toBe(2);
+  expect(unreadMessages(h.session.unread, "dm").items).toEqual([
+    {
+      id: dm.reply.id,
+      createdAt: 13,
+      authorId: h.alice.pubkey,
+      rootId: dm.root.id,
+    },
+    { id: dm.root.id, createdAt: 12, authorId: h.alice.pubkey },
+  ]);
+  expect(h.snapshot().observedCount).toBe(1);
+  expect(
+    unreadMessages(h.session.unread, "room").items?.map((item) => item.id),
+  ).toEqual([room.root.id]);
+});
+
+it("unread messages agree with observedCount over random channels", async () => {
+  for (let seed = 1; seed <= 25; seed++) {
+    let state = seed;
+    const random = () => {
+      state = (state * 1103515245 + 12345) % 2 ** 31;
+      return state / 2 ** 31;
+    };
+    const h = setup();
+    h.grant("room");
+    const rows: RelayEvent[] = [];
+    for (let i = 0; i < 12; i++) {
+      const author = random() < 0.3 ? h.viewer : h.alice;
+      const parent =
+        rows.length && random() < 0.4
+          ? rows[Math.floor(random() * rows.length)]
+          : undefined;
+      const tags: string[][] = [];
+      if (parent) tags.push(["e", parent.id, "", "reply"]);
+      if (parent && random() < 0.2) tags.push(["broadcast", "1"]);
+      if (random() < 0.15) tags.push(["p", h.viewer.pubkey]);
+      if (random() < 0.1) tags.push(["audience", "agents"]);
+      rows.push(
+        message(
+          author,
+          "room",
+          `row ${i}`,
+          11 + Math.floor(random() * 20),
+          tags,
+        ),
+      );
+    }
+    h.emit(rows);
+    const theirs = rows.filter(
+      (row) =>
+        row.pubkey === h.alice.pubkey &&
+        !row.tags.some(([name]) => name === "audience"),
+    );
+    const tops = theirs.filter(
+      (row) => !row.tags.some(([name]) => name === "e"),
+    );
+    const through = tops[Math.floor(random() * tops.length)];
+    if (through && random() < 0.5)
+      await h.session.unread.markThrough(h.target, through.id);
+    for (const row of theirs) {
+      const roll = random();
+      if (roll < 0.2) await h.session.unread.markMessageRead("room", row.id);
+      else if (roll < 0.3)
+        await h.session.unread.markUnreadLocal({
+          kind: "message",
+          channelId: "room",
+          messageId: row.id,
+        });
+    }
+    const listed = unreadMessages(h.session.unread, "room");
+    expect(listed.truncated, `seed ${seed}`).toBeUndefined();
+    expect(listed.items?.length, `seed ${seed}`).toBe(
+      h.snapshot().observedCount,
+    );
+    for (const item of listed.items ?? [])
+      expect(
+        h.session.unread.attention("room", item.id).unread,
+        `seed ${seed}`,
+      ).toBe(true);
+    h.dispose();
+  }
+});
+
+it("unread messages read no relay and open no window", async () => {
+  const h = setup();
+  h.grant("room");
+  const top = message(h.alice, "room", "top", 11);
+  // Its parent is unknown, so a snapshot asks the relay whose conversation it is.
+  const undecided = message(h.alice, "room", "reply", 12, [
+    ["e", "f".repeat(64), "", "reply"],
+  ]);
+  h.emit([top, undecided]);
+  await flush();
+  const reads = h.query.mock.calls.length;
+  expect(
+    unreadMessages(h.session.unread, "room").items?.map((item) => item.id),
+  ).toEqual([top.id]);
+  await flush();
+  expect(h.query.mock.calls.length).toBe(reads);
+  expect(h.session.channels.window("room").rows).toHaveLength(0);
+  const before = h.query.mock.calls.length;
+  expect(h.snapshot().observedCount).toBe(1);
+  await vi.waitFor(() =>
+    expect(h.query.mock.calls.length).toBeGreaterThan(before),
+  );
 });
 
 it("the channel snapshot says sampled once a repair finishes, keeps it through later repairs and regains it after a cache clear; sampling until then", async () => {

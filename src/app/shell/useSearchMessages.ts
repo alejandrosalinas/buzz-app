@@ -48,6 +48,10 @@ export type SearchMessage = Readonly<{
   channelId: string;
   authorId: string;
   workflowOwnerId?: string | undefined;
+  /** The hit mentions the viewer, as unread mentions count it. */
+  mentionsViewer?: true;
+  /** Kind 40002: self-declared agent output, as message rows read it. */
+  agentEnvelope?: true;
   createdAt: number;
   preview: string;
   /** The searchable text, whitespace kept, for snippets and previews. */
@@ -167,12 +171,24 @@ async function readPage(
     // Search returns original indexed events, not an auxiliary edit fold.
     // Exact navigation owns current content/deletion checks when opened.
     const text = searchText(event);
+    const owner = workflowOwner(event, session.workflowAuthority);
+    const tagged = (name: string) =>
+      event.tags.some(
+        ([key, value]) => key === name && value === session.viewer,
+      );
     return [
       {
         id: event.id,
         channelId: hitChannelId,
         authorId: event.pubkey,
-        workflowOwnerId: workflowOwner(event, session.workflowAuthority),
+        workflowOwnerId: owner,
+        // As unread counts mentions: the relay also tags a workflow's owner,
+        // whose own workflow mentions them only through its explicit targets.
+        ...(tagged("p") &&
+        (owner !== session.viewer || tagged("buzz:workflow-mention"))
+          ? { mentionsViewer: true as const }
+          : {}),
+        ...(event.kind === 40002 ? { agentEnvelope: true as const } : {}),
         createdAt: event.created_at,
         preview: text.replace(/\s+/g, " ").trim().slice(0, 240) || "Attachment",
         text,

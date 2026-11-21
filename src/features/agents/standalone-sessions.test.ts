@@ -117,7 +117,7 @@ it("keeps every session in the window, however often turns run", async () => {
     expect(storage.get(key)?.length ?? 0).toBeLessThan(200_000);
 });
 
-it("keeps entries with more fields than it reads", async () => {
+it("keeps a saved turn key when another session joins its day", async () => {
   const storage = memory();
   let now = 5 * DAY;
   const key = `${STANDALONE_PREFIX}pi:${AGENT}:5`;
@@ -129,7 +129,7 @@ it("keeps entries with more fields than it reads", async () => {
   now += 1;
   await sessions.add("s2");
   expect(sessions.list()).toEqual([
-    { id: "s1", at: 5 * DAY },
+    { id: "s1", at: 5 * DAY, wake: "timer/daily" },
     { id: "s2", at: now },
   ]);
   expect(JSON.parse(storage.get(key) ?? "").sessions[0]).toEqual([
@@ -201,4 +201,45 @@ it("removes a membership's sessions of every agent type, and only its", async ()
       .list()
       .map(({ id }) => id),
   ).toEqual(["o"]);
+});
+
+it("keeps the key of the turn that started a session, alongside ones without", async () => {
+  const storage = memory();
+  let now = 1_000;
+  const sessions = standaloneSessions(storage, "goose", AGENT, () => now);
+  await sessions.add("s1", "timer/daily");
+  now = 2_000;
+  await sessions.add("s2");
+  expect(sessions.list()).toEqual([
+    { id: "s1", at: 1_000, wake: "timer/daily" },
+    { id: "s2", at: 2_000 },
+  ]);
+});
+
+it("keeps a session whose saved turn key is damaged, without its key", async () => {
+  const storage = memory();
+  // Midday UTC, so every entry and the later add share one day's value.
+  const at = Date.UTC(2026, 0, 15, 12);
+  const key = `${STANDALONE_PREFIX}goose:${AGENT}:${Math.floor(at / DAY)}`;
+  const saved = [
+    ["good", at, "watch/pr"],
+    ["number", at + 1, 7],
+    ["long", at + 2, "x".repeat(300)],
+    ["extra", at + 3, "timer/a", "more"],
+  ];
+  await storage.set(key, JSON.stringify({ version: 1, sessions: saved }));
+  const sessions = standaloneSessions(storage, "goose", AGENT, () => at + 4);
+  // Each still counts; a key that is not a short string reads as none.
+  expect(sessions.list()).toEqual([
+    { id: "good", at, wake: "watch/pr" },
+    { id: "number", at: at + 1 },
+    { id: "long", at: at + 2 },
+    { id: "extra", at: at + 3, wake: "timer/a" },
+  ]);
+  // A later turn rewrites the day with every entry as it was saved.
+  await sessions.add("next");
+  expect(JSON.parse(storage.get(key) ?? "").sessions).toEqual([
+    ...saved,
+    ["next", at + 4],
+  ]);
 });

@@ -10,7 +10,6 @@ import audience from "./audience.md?raw";
 import autonomy from "./autonomy.md?raw";
 import callbacks from "./callbacks.md?raw";
 import commitIdentity from "./commit-identity.md?raw";
-import engineering from "./engineering.md?raw";
 import etiquette from "./etiquette.md?raw";
 import intro from "./intro.md?raw";
 import memory from "./memory.md?raw";
@@ -116,12 +115,6 @@ export const SECTIONS: readonly Section[] = [
         : workspaceLayout,
   },
   { id: "memory", title: "Agent Memory", owner: true, text: memory },
-  {
-    id: "engineering",
-    title: "Engineering Discipline",
-    owner: true,
-    text: engineering,
-  },
   {
     id: "repo-conventions",
     title: "Working in the Repo",

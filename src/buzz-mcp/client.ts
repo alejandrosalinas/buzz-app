@@ -5,7 +5,10 @@ import type { ProtectionAction } from "../features/agent-protection/service";
 import type { GitAuth } from "../features/agents/native";
 import type {
   AgentAttention,
-  SoloPlacement,
+  WorkspaceAudience,
+  WorkspaceChat,
+  WorkspaceDefaults,
+  WorkspacePlacement,
   AgentReadout,
   AgentUpdateInput,
   TeamReadout,
@@ -193,14 +196,21 @@ export interface BuzzClient {
   /** Writes entry `slug`, newer than the one it replaces (`after`, or 0);
    * a `null` body deletes it. */
   remember(slug: string, body: string | null, after: number): Promise<void>;
-  /** Local run-only discovery and one-use placement of a newly published Solo. */
-  soloWorkspaces?: Readonly<{
+  /** The owner's sidebar workspaces, in a local run: their list, defaults,
+   * one-use placement of a newly published conversation, and moves. */
+  workspaces?: Readonly<{
     list(): Promise<readonly Readonly<{ id: string; name: string }>[]>;
+    defaults(
+      workspace: string,
+      chat: WorkspaceChat,
+    ): Promise<WorkspaceDefaults>;
     prepare(
       workspace: string,
-      members: readonly string[],
+      audience: WorkspaceAudience,
       channelId: string,
-    ): Promise<(id: string) => Promise<SoloPlacement>>;
+    ): Promise<(id: string) => Promise<WorkspacePlacement>>;
+    /** Files conversation `id` in `workspace`, or unfiles it without one. */
+    move(id: string, workspace?: string): Promise<WorkspacePlacement>;
   }>;
   /** The owner's channel templates, where the host has them. */
   templates?(): Promise<readonly ChannelTemplate[]>;

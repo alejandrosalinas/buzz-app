@@ -21,7 +21,13 @@ const message = (id: string) =>
   }) as SearchMessage;
 const ids = (count: number) =>
   Array.from({ length: count }, (_, index) => `m${index}`);
-const facts = () => ({ where: "#c", author: "A", mine: false });
+const facts = () => ({
+  where: "#c",
+  author: "A",
+  mine: false,
+  agent: false,
+  member: false,
+});
 /** Answers each question with the probability `score` gives its candidate,
  * leaving out candidates it gives none. */
 const answered = (
@@ -89,6 +95,49 @@ it("orders by the provider's probability, keeping relay order on ties and gaps",
     "a",
     "c",
     "d",
+  ]);
+});
+
+it("sends each candidate's searcher and agent facts only when they hold", async () => {
+  vi.useFakeTimers();
+  const decide = vi.fn(async (request: DecisionRequest) =>
+    answered(request, () => 0.5),
+  );
+  const decisions = decisionsOf(decide);
+  renderHook(() =>
+    useMessageRerank({
+      decisions,
+      community: undefined,
+      query: "q",
+      messages: [message("plain"), { ...message("all"), mentionsViewer: true }],
+      enabled: true,
+      facts: ({ id }) => ({
+        ...facts(),
+        mine: id === "all",
+        agent: id === "all",
+        member: id === "all",
+      }),
+      held: false,
+    }),
+  );
+  await act(async () => {
+    vi.advanceTimersByTime(500);
+  });
+  const [request] = decide.mock.calls[0] ?? [];
+  const { candidates } = JSON.parse(request?.state ?? "{}");
+  expect(candidates).toEqual([
+    { n: 1, where: "#c", author: "A", date: "1970-01-01", text: "plain" },
+    {
+      n: 2,
+      where: "#c",
+      author: "A",
+      written_by_searcher: true,
+      from_agent: true,
+      mentions_searcher: true,
+      searcher_in_conversation: true,
+      date: "1970-01-01",
+      text: "all",
+    },
   ]);
 });
 

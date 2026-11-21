@@ -6,7 +6,7 @@ import {
   getPublicKey,
   type EventTemplate,
 } from "nostr-tools";
-import type { ReadFilter, RelayEvent } from "./events";
+import { hasTag, type ReadFilter, type RelayEvent } from "./events";
 import { PublishRejected } from "./outbox";
 import { authTagOwner } from "../agents/owner-attestation";
 import type { ReadTransport, Signer } from "./transport";
@@ -227,6 +227,26 @@ export function scriptedTransport(
       return entry;
     },
   };
+}
+/** Answer the pending channel head reads as the channel's whole history:
+ * `history`'s rows in that channel, or none, so that only the rows the live
+ * stream delivered show. */
+export function completeHeads(
+  wire: { pending: Scripted[] },
+  relay: Key,
+  history: readonly RelayEvent[] = [],
+) {
+  for (const entry of [...wire.pending]) {
+    const [filter] = entry.filters;
+    const channelId = filter?.["#h"]?.[0];
+    if (!filter?.top_level || !channelId || filter.until !== undefined)
+      continue;
+    wire.pending.splice(wire.pending.indexOf(entry), 1);
+    entry.respond([
+      ...history.filter((event) => hasTag(event, "h", channelId)),
+      bounds(relay, channelId, "head", { has_more: false, next_cursor: null }),
+    ]);
+  }
 }
 export const flush = () =>
   new Promise<void>((resolve) => setTimeout(resolve, 0));

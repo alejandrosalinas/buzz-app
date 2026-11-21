@@ -1,4 +1,5 @@
 import { repositoriesContext } from "../../features/communities/repositories";
+import { usageOn } from "../../features/agents/standalone-sessions";
 // goose agents: an agent type whose agents are goose on this computer, all in
 // one `goose-acp` process. Each conversation an agent is in is one ACP session
 // in it; goose answers with the in-process Buzz tools, served to it over
@@ -31,7 +32,7 @@ import { readUsage } from "./usage";
 export const TYPE_ID = "goose";
 /** The harness goose declares to the gateway, its descriptor upstream key. */
 export const HARNESS = "goose";
-export const inject = ["agents", "host", "agentProtection"];
+export const inject = ["agents", "host", "agentProtection", "settingsCards"];
 export const apply: PluginModule["apply"] = (ctx) => {
   // Only the desktop app can start `goose-acp`; no unusable type elsewhere.
   if (!isTauri()) return;
@@ -65,8 +66,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
         )
       : undefined,
     // Read at a forwarded turn, after `setup` exists.
-    async () => (await setup.providers()).defaults.provider,
+    () => setup.defaultProvider(),
   );
+  runtime.usageOn = usageOn(ctx.settingsCards);
   const desktop =
     host.spawn && host.resolveDirectory
       ? {
@@ -239,14 +241,17 @@ export const apply: PluginModule["apply"] = (ctx) => {
       subscribe: (listener) => runtime.subscribe(listener),
     },
     ...(desktop && {
-      usage: (agent, { since, signal }) =>
-        readUsage(
-          history,
+      usage: async (agent, { since, signal }) =>
+        runtime.withWakes(
           agent.key,
-          config(agent.config).workspace,
-          since,
-          signal,
-          [...new Set(runtime.folders(agent.key).values())],
+          await readUsage(
+            history,
+            agent.key,
+            config(agent.config).workspace,
+            since,
+            signal,
+            [...new Set(runtime.folders(agent.key).values())],
+          ),
         ),
     }),
     tabs: [

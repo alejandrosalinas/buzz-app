@@ -38,7 +38,12 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect, useLayoutEffect } from "react";
+import {
+  type ComponentType,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from "react";
 import { createRecovery } from "../relay/recovery";
 import type { Contribution } from "../../plugins/contributions";
 import type {
@@ -75,6 +80,7 @@ import { AgentsContext } from "../agents/react";
 import type { Agents, Models } from "../agents/service";
 import { MessageComposer, type MessageComposerProps } from "./MessageComposer";
 import { ThreadPanel } from "./ThreadPanel";
+import { publishOutgoing, type OutgoingMessage } from "./outgoing-message";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { InlineChip } from "../../shared/design-system/ui/InlineChip";
 import { MessageEditScope, useMessageEditScope } from "./MessageEditScope";
@@ -217,6 +223,16 @@ async function choicesLoaded() {
         .querySelector('.buzz-loading-region[aria-busy="true"]'),
     ).toBeNull(),
   );
+}
+
+function fillComposer(field: ComposerInputElement, text: string) {
+  act(() => {
+    field.focus();
+    field.value = text;
+    field.setSelectionRange(text.length, text.length);
+  });
+  fireEvent.input(field);
+  fireEvent(document, new Event("selectionchange"));
 }
 
 function mount(
@@ -625,18 +641,7 @@ function mount(
         for (const listener of emojiListeners) listener();
       });
     },
-    fill(text: string) {
-      const field = input();
-      act(() => {
-        field.focus();
-        field.value = text;
-        field.setSelectionRange(text.length, text.length);
-      });
-      fireEvent.input(field);
-      // Browsers queue selectionchange after the editor restores its native
-      // selection. Deliver that boundary explicitly in this synchronous fixture.
-      fireEvent(document, new Event("selectionchange"));
-    },
+    fill: (text: string) => fillComposer(input(), text),
     submit() {
       fireEvent.submit(within(view.container).getByRole("form"));
     },
@@ -2117,7 +2122,8 @@ async function mountUploadComposer(
     reactStrictMode: true,
     wrapper: ToastProvider,
   });
-  const input = () => within(view.container).getByRole("textbox");
+  const input = () =>
+    within(view.container).getByRole<ComposerInputElement>("textbox");
   const form = () => within(view.container).getByRole("form");
   const send = () =>
     within(view.container).getByRole("button", { name: "Send message" });
@@ -2126,6 +2132,7 @@ async function mountUploadComposer(
     ...view,
     owner,
     input,
+    fill: (text: string) => fillComposer(input(), text),
     form,
     send,
     scope,
@@ -2141,6 +2148,25 @@ async function mountUploadComposer(
       view.rerender(composer(presented, shown)),
   };
 }
+
+const firstMentionTools: readonly Contribution<ComposerTool>[] = [
+  {
+    id: "fixture",
+    key: "test/fixture",
+    pluginId: "test",
+    revision: "1",
+    title: "Fixture tools",
+    component: (props: ComposerToolProps) => (
+      <button type="button" onClick={() => props.insertMention(first)}>
+        First Honey
+      </button>
+    ),
+  },
+];
+const firstMentionTool = {
+  snapshot: () => firstMentionTools,
+  subscribe: () => () => {},
+};
 
 function pickAttachments(container: HTMLElement, files: readonly File[]) {
   const picker =
@@ -2493,22 +2519,8 @@ it.each(["never", "before the failure", "after the failure"])(
       snapshot: () => snapshot,
       types: () => types,
     } as unknown as Agents;
-    const tools: readonly Contribution<ComposerTool>[] = [
-      {
-        id: "fixture",
-        key: "test/fixture",
-        pluginId: "test",
-        revision: "1",
-        title: "Fixture tools",
-        component: (props: ComposerToolProps) => (
-          <button type="button" onClick={() => props.insertMention(first)}>
-            First Honey
-          </button>
-        ),
-      },
-    ];
     const extensions = {
-      tools: { snapshot: () => tools, subscribe: () => () => {} },
+      tools: firstMentionTool,
       inline: { snapshot: () => [], subscribe: () => () => {} },
     };
     const h = await mountUploadComposer({
@@ -15892,7 +15904,7 @@ it("guards automatic recipient changes using the current draft prose", () => {
   act(() => expect(replace?.([second])).toBe(true));
 });
 
-it("inserts a bundled provider's chip as one atom and signs it into the sent message", async () => {
+function folderChips() {
   const publishes: ComposerCompletionProps["publish"][] = [];
   function Completion({ publish }: ComposerCompletionProps) {
     useLayoutEffect(() => {
@@ -15911,24 +15923,31 @@ it("inserts a bundled provider's chip as one atom and signs it into the sent mes
   };
   bundledContribution(provider);
   const providers = [provider];
+  const folder = { kind: "folder", id: "/notes", label: "@notes" };
+  return {
+    folder,
+    completions: { snapshot: () => providers, subscribe: () => () => {} },
+    type(h: Pick<ReturnType<typeof mount>, "fill" | "input">, text: string) {
+      h.fill(text);
+      act(() => {
+        publishes.at(-1)?.({
+          items: [{ id: "notes", label: "notes", edit: { token: folder } }],
+        } as unknown as CompletionResult);
+      });
+      fireEvent.keyDown(h.input(), { key: "Enter" });
+    },
+  };
+}
+it("inserts a bundled provider's chip as one atom and signs it into the sent message", async () => {
+  const chips = folderChips();
+  const { folder } = chips;
   const empty: [] = [];
   const none = { snapshot: () => empty, subscribe: () => () => {} };
   const h = mount();
   h.retarget({
-    extensions: {
-      tools: none,
-      inline: none,
-      completions: { snapshot: () => providers, subscribe: () => () => {} },
-    },
+    extensions: { tools: none, inline: none, completions: chips.completions },
   });
-  h.fill("Use @no");
-  const folder = { kind: "folder", id: "/notes", label: "@notes" };
-  act(() => {
-    publishes.at(-1)?.({
-      items: [{ id: "notes", label: "notes", edit: { token: folder } }],
-    } as unknown as CompletionResult);
-  });
-  fireEvent.keyDown(h.input(), { key: "Enter" });
+  chips.type(h, "Use @no");
   // The chip's text is the folder's path; the chip shows its label.
   expect(h.input()).toHaveValue("Use /notes ");
   expect(
@@ -17857,10 +17876,16 @@ it("shows an annotator's marks in the composer and retires them with the destina
 });
 
 it.each(["channel", "thread", "task"])(
-  "pastes a source locator, preserves the card while typing, and forwards into a %s",
+  "pastes a source locator, preserves the card while typing, and forwards into a %s, past a send gate",
   async (target) => {
     const root = "b".repeat(64);
     const invocation = "c".repeat(64);
+    const empty: [] = [];
+    const none = { snapshot: () => empty, subscribe: () => () => {} };
+    const gate = { id: "g", key: "t/g", pluginId: "t", revision: "1" };
+    const hold = vi.fn(() => true);
+    const kept = [{ ...gate, hold }];
+    const gates = { ...none, snapshot: () => kept };
     const h = await mountUploadComposer({
       sourceMessages: true,
       ...(target === "thread" ? { threadRootId: root } : {}),
@@ -17871,6 +17896,12 @@ it.each(["channel", "thread", "task"])(
             replyParentId: invocation,
           }
         : {}),
+      extensions: {
+        tools: none,
+        inline: none,
+        completions: none,
+        sendGates: gates,
+      },
     });
     const id = h.owner.session.messages.send("channel", "Original **message**");
     await waitFor(() => expect(h.publish).toHaveBeenCalledOnce());
@@ -17918,6 +17949,7 @@ it.each(["channel", "thread", "task"])(
         ["e", root, "", "root"],
         ["e", invocation, "", "reply"],
       ]);
+    expect(hold).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: "Remove forwarded message" }),
@@ -17925,6 +17957,112 @@ it.each(["channel", "thread", "task"])(
     );
   },
 );
+it("holds a reply typed in a task subthread under the thread's root and publishes it there", async () => {
+  const root = "b".repeat(64);
+  const invocation = "c".repeat(64);
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const held = deferred<{ message: OutgoingMessage; session: RelaySession }>();
+  const published = deferred<RelayEvent>();
+  const gate = {
+    id: "g",
+    key: "t/g",
+    pluginId: "t",
+    revision: "1",
+    hold: (message: OutgoingMessage, session: RelaySession) => {
+      held.resolve({ message, session });
+      return true;
+    },
+  };
+  const h = await mountUploadComposer({
+    threadRootId: invocation,
+    sourceRootId: root,
+    replyParentId: invocation,
+    publish: async (event) => published.resolve(event),
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: none,
+      sendGates: { ...none, snapshot: () => [gate] },
+    },
+  });
+  fireEvent.change(h.input(), { target: { value: "Held reply" } });
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  const { message, session } = await held.promise;
+  expect(message).toMatchObject({
+    channelId: "channel",
+    threadRootId: root,
+    parentId: invocation,
+    text: "Held reply",
+  });
+  expect(h.publish).not.toHaveBeenCalled();
+  await publishOutgoing(session, message);
+  const event = await published.promise;
+  expect(event.tags.filter(([name]) => name === "e")).toEqual([
+    ["e", root, "", "root"],
+    ["e", invocation, "", "reply"],
+  ]);
+});
+it("gives a later send gate the recipients and chips the composer prepared, whatever an earlier gate tried to change", async () => {
+  const chips = folderChips();
+  const { folder } = chips;
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const held = deferred<{ message: OutgoingMessage; session: RelaySession }>();
+  const published = deferred<RelayEvent>();
+  const contribution = { pluginId: "t", revision: "1" };
+  const gates = [
+    {
+      ...contribution,
+      id: "b",
+      key: "t/b",
+      hold: (message: OutgoingMessage, session: RelaySession) => {
+        held.resolve({ message, session });
+        return true;
+      },
+    },
+    {
+      ...contribution,
+      id: "a",
+      key: "t/a",
+      hold: (message: OutgoingMessage) => {
+        Reflect.set(message.recipients, 1, second.pubkey);
+        Reflect.set(message.picks, first.pubkey, { effort: "high" });
+        Reflect.set(message.tokens?.[0] as object, "id", "/other");
+        return false;
+      },
+    },
+  ];
+  const h = await mountUploadComposer({
+    members: [first.pubkey, second.pubkey],
+    publish: async (event) => published.resolve(event),
+    extensions: {
+      tools: firstMentionTool,
+      inline: none,
+      completions: chips.completions,
+      sendGates: { ...none, snapshot: () => gates },
+    },
+  });
+  chips.type(h, "Hold @no");
+  fireEvent.click(screen.getByRole("button", { name: "First Honey" }));
+  await waitFor(() => expect(h.send()).toBeEnabled());
+  fireEvent.click(h.send());
+  const { message, session } = await held.promise;
+  expect(message).toMatchObject({
+    recipients: [first.pubkey],
+    tokens: [folder],
+  });
+  expect(message.picks).toEqual({});
+  await publishOutgoing(session, message);
+  const event = await published.promise;
+  expect(event.tags.filter(([name]) => name === "p")).toEqual([
+    ["p", first.pubkey],
+  ]);
+  expect(event.tags.filter(([name]) => name === MESSAGE_TOKENS_TAG)).toEqual([
+    [MESSAGE_TOKENS_TAG, JSON.stringify([folder])],
+  ]);
+});
 it("keeps the note and disables Send for an inaccessible pasted forward until removed", async () => {
   const h = await mountUploadComposer();
   fireEvent.change(h.input(), { target: { value: "Keep this note" } });
@@ -18186,4 +18324,139 @@ it("pastes a copied forward literally inside a code block", async () => {
   expect(
     screen.queryByRole("button", { name: "Remove forwarded message" }),
   ).not.toBeInTheDocument();
+});
+
+it("lets a send gate keep or refuse a message the composer would publish, and publishes when a gate throws", async () => {
+  const kept: OutgoingMessage[] = [];
+  let session: RelaySession | undefined;
+  let hold: (message: OutgoingMessage) => boolean | { refuse: string } = (
+    message,
+  ) => {
+    kept.push(message);
+    return true;
+  };
+  const gate = {
+    id: "gate",
+    key: "test/gate",
+    pluginId: "test",
+    revision: "1",
+    hold: (message: OutgoingMessage, from: RelaySession) => {
+      session = from;
+      return hold(message);
+    },
+  };
+  const later: string[] = [];
+  const gates = [
+    {
+      ...gate,
+      id: "later",
+      key: "test/later",
+      hold: (message: OutgoingMessage) => later.push(message.text) < 0,
+    },
+    gate,
+  ];
+  const chips = folderChips();
+  const { folder } = chips;
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const h = mount();
+  h.retarget({
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: chips.completions,
+      sendGates: { snapshot: () => gates, subscribe: () => () => {} },
+    },
+  });
+  chips.type(h, "Hold @no");
+  h.submit();
+  await waitFor(() => expect(h.input()).toHaveValue(""));
+  expect(h.messages.send).not.toHaveBeenCalled();
+  expect(later).toEqual([]);
+  expect(kept).toEqual([
+    {
+      channelId: "channel",
+      text: "Hold /notes ",
+      recipients: [],
+      references: [],
+      attachments: [],
+      picks: {},
+      tokens: [folder],
+    },
+  ]);
+
+  hold = () => ({ refuse: "The queue is full." });
+  h.fill("Refuse me");
+  h.submit();
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "The queue is full.",
+  );
+  expect(h.input()).toHaveValue("Refuse me");
+  expect(h.messages.send).not.toHaveBeenCalled();
+
+  hold = () => {
+    throw new Error("Gate failed");
+  };
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  h.fill("Send me");
+  h.submit();
+  await waitFor(() => expect(h.messages.send).toHaveBeenCalledOnce());
+  expect(h.messages.send).toHaveBeenCalledWith("channel", "Send me", [], []);
+  expect(later).toEqual(["Send me"]);
+
+  let signed: string[][] = [];
+  h.messages.send.mockImplementation(() => {
+    signed = signedMessageTokenTags();
+    return "channel-id";
+  });
+  await expect(
+    publishOutgoing(session as RelaySession, kept[0] as OutgoingMessage),
+  ).resolves.toBe("channel-id");
+  expect(h.messages.send.mock.calls[1]?.[1]).toBe("Hold /notes ");
+  expect(signed).toEqual([[MESSAGE_TOKENS_TAG, JSON.stringify([folder])]]);
+});
+
+function mountAccessory(component: ComponentType<ComposerAccessoryProps>) {
+  const empty: [] = [];
+  const none = { snapshot: () => empty, subscribe: () => () => {} };
+  const accessories: readonly Contribution<ComposerAccessory>[] = [
+    {
+      id: "fixture",
+      key: "test/fixture",
+      pluginId: "test",
+      revision: "1",
+      title: "Fixture",
+      component,
+    },
+  ];
+  const h = mount();
+  h.retarget({
+    extensions: {
+      tools: none,
+      inline: none,
+      completions: none,
+      accessories: { snapshot: () => accessories, subscribe: () => () => {} },
+    },
+  });
+  return h;
+}
+
+it("returns focus to the composer when a focused accessory control goes away", () => {
+  function Accessory({ onFocusedRemoval }: ComposerAccessoryProps) {
+    const [shown, setShown] = useState(true);
+    useLayoutEffect(() => {
+      if (!shown) onFocusedRemoval?.();
+    }, [shown, onFocusedRemoval]);
+    return shown ? (
+      <button type="button" onClick={() => setShown(false)}>
+        Dismiss
+      </button>
+    ) : null;
+  }
+  const h = mountAccessory(Accessory);
+  const dismiss = screen.getByRole("button", { name: "Dismiss" });
+  act(() => dismiss.focus());
+  fireEvent.click(dismiss);
+  expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  expect(h.input()).toHaveFocus();
 });

@@ -1,4 +1,5 @@
 import { piHookOutput } from "../hook-output";
+import { usageOn } from "../../features/agents/standalone-sessions";
 // Pi agents: an agent type whose agents run on Pi durable on this computer,
 // with any provider Pi supports. One Pi host runs them all, each with its own
 // storage; each conversation the agent is in is one continuing, durable Pi
@@ -20,7 +21,7 @@ export const TYPE_ID = "pi";
  * which includes the first install of Pi's packages. */
 const HANDOVER_MS = 2 * 60_000;
 
-export const inject = ["agents", "host", "agentProtection"];
+export const inject = ["agents", "host", "agentProtection", "settingsCards"];
 export const apply: PluginModule["apply"] = (ctx) => {
   // Only the desktop app can start the Pi host; no unusable type elsewhere.
   if (!isTauri()) return;
@@ -58,6 +59,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
       readyOwnerReads(agents.relay(agent.key), agent, signal, channelId, what),
     (key) => agents.relay(key)?.snapshot().scope,
   );
+  runtime.usageOn = usageOn(ctx.settingsCards);
   ctx.agentProtection.registerModels({
     label: "Pi",
     models: async () => {

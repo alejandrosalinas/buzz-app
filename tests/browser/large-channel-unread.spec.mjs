@@ -76,7 +76,7 @@ for (const entry of ["sidebar", "search"]) {
       }
       await expect.poll(() => requested).toBe(true);
       await expect(
-        page.getByText("Loading messages…", { exact: true }),
+        page.getByRole("status").filter({ hasText: "Loading messages…" }),
       ).toBeVisible();
     } finally {
       release();

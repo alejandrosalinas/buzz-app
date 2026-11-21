@@ -327,6 +327,172 @@ appTest.describe("workspace composition", () => {
   );
 });
 
+appTest.describe("sidebar refresh", () => {
+  const soloChannels = Array.from(
+    { length: 16 },
+    (_, i) => `60000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+  );
+  appTest.use({
+    productionBroker: true,
+    channelIds: soloChannels,
+    soloChannels,
+    ownSoloChannels: soloChannels,
+    viewport: { width: 1100, height: 375 },
+  });
+
+  // A repaint can change visible rows while scrollTop stays the same.
+  appTest(
+    "keeps visible Solo rows in place when a task moves above them",
+    async ({ page, app }) => {
+      await page.goto(`${app.origin}/?solo-region-fixture`);
+      await openPage(page, "Messages");
+      const viewport = page.getByRole("navigation", {
+        name: "Subscribed channels",
+      });
+      const lastSoloRow = viewport.locator(
+        `[data-solo-destination-id="${soloChannels.at(-1)}"]`,
+      );
+      const showMore = viewport.getByRole("button", {
+        name: "Show more in Solo",
+      });
+      // The roster can be ready while the Solo section lists only its first rows.
+      await expect(lastSoloRow.or(showMore).first()).toBeVisible();
+      if (await showMore.isVisible()) await showMore.click();
+      await expect(lastSoloRow).toBeVisible();
+      await page.evaluate(async (ids) => {
+        for (const id of ids) await window.fixtureSoloRegion.classify(id);
+      }, soloChannels);
+      const rowSelector =
+        '[data-sidebar-section^="solo-region:"] [data-solo-destination-id]';
+      const rows = viewport.locator(rowSelector);
+      await expect(rows).toHaveCount(soloChannels.length);
+      // Finish moving the original Solo rows before measuring the anchor.
+      await expect(
+        viewport.locator(
+          '[data-sidebar-section="solo"] [data-solo-destination-id]',
+        ),
+      ).toHaveCount(0);
+      // A contributed task can have a compact link inside its full-width row.
+      await rows.evaluateAll((links) => {
+        for (const link of links)
+          link.style.clipPath = "inset(0 calc(100% - 72px) 0 0)";
+      });
+      const anchor = rows.nth(6);
+      const anchorId = await anchor.getAttribute("data-solo-destination-id");
+      const promotedId = await rows
+        .nth(12)
+        .getAttribute("data-solo-destination-id");
+      const position = (id = anchorId) =>
+        rows
+          .and(page.locator(`[data-solo-destination-id="${id}"]`))
+          .evaluate((row) => {
+            const port = row.closest('nav[aria-label="Subscribed channels"]');
+            return (
+              row.getBoundingClientRect().top - port.getBoundingClientRect().top
+            );
+          });
+      await viewport.evaluate(
+        async (port, offset) => {
+          port.scrollTop += offset - 12;
+          // Let the scroll event record this position before publishing rows.
+          await new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          );
+        },
+        await position(),
+      );
+      const before = await position();
+      expect(before).toBeGreaterThanOrEqual(0);
+      expect(before).toBeLessThan(
+        await viewport.evaluate((port) => port.clientHeight),
+      );
+
+      const order = await rows.evaluateAll((elements) =>
+        elements.map((element) => element.dataset.soloDestinationId),
+      );
+      const index = order.indexOf(anchorId);
+      const neighbor = order[index + 1];
+      const removed = order[index + 2];
+      const neighborBefore = await position(neighbor);
+      const afterFirst = await viewport.evaluate(
+        (port, { rowSelector, promotedId, removed, anchorId }) =>
+          new Promise((resolve) => {
+            const observer = new MutationObserver(() => {
+              const rows = port.querySelectorAll(rowSelector);
+              if (rows[0]?.dataset.soloDestinationId !== promotedId) return;
+              observer.disconnect();
+              const anchor = [...rows].find(
+                (row) => row.dataset.soloDestinationId === anchorId,
+              );
+              resolve(
+                anchor.getBoundingClientRect().top -
+                  port.getBoundingClientRect().top,
+              );
+              // Publish again before the browser dispatches the scroll event
+              // for the first correction. Keep the surviving neighbor in place.
+              window.fixtureSoloRegion.present([removed], [], anchorId);
+            });
+            observer.observe(port, { childList: true, subtree: true });
+            window.fixtureSoloRegion.present([], [], promotedId);
+          }),
+        { rowSelector, promotedId, removed, anchorId },
+      );
+      expect(afterFirst).toBe(before);
+      await expect(rows.first()).toHaveAttribute(
+        "data-solo-destination-id",
+        anchorId,
+      );
+      await expect(rows).toHaveCount(soloChannels.length - 1);
+      await expect.poll(() => position(neighbor)).toBe(neighborBefore);
+
+      const focusOrder = await rows.evaluateAll((elements) =>
+        elements.map((element) => element.dataset.soloDestinationId),
+      );
+      const focusedId = focusOrder[3];
+      const next = focusOrder[4];
+      await viewport.evaluate(
+        async (port, offset) => {
+          port.scrollTop += offset;
+          await new Promise((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve)),
+          );
+        },
+        await position(focusOrder[0]),
+      );
+      const focused = rows.and(
+        page.locator(`[data-solo-destination-id="${focusedId}"]`),
+      );
+      await focused.evaluate((row) => row.focus({ preventScroll: true }));
+      await expect(focused).toBeFocused();
+      await page.evaluate(
+        ({ removed, focusedId, next }) =>
+          window.fixtureSoloRegion.present([removed, focusedId], [], next),
+        { removed, focusedId, next },
+      );
+      await expect(rows.first()).toHaveAttribute(
+        "data-solo-destination-id",
+        next,
+      );
+      await expect(focused).toHaveCount(0);
+      await expect
+        .poll(() =>
+          viewport.evaluate((port) => {
+            const focus = document.activeElement;
+            if (
+              !port.contains(focus) ||
+              !focus.hasAttribute("data-solo-destination-id")
+            )
+              return false;
+            const frame = port.getBoundingClientRect();
+            const box = focus.getBoundingClientRect();
+            return box.top >= frame.top && box.bottom <= frame.bottom;
+          }),
+        )
+        .toBe(true);
+    },
+  );
+});
+
 appTest.describe("Solo header accessories", () => {
   appTest.use({
     productionBroker: true,

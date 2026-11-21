@@ -1,9 +1,10 @@
-.group {
+.group,
+.teamRow {
   container: solo-channel-group / inline-size;
 }
 
 @container solo-channel-group (max-width: 9rem) {
-  .group
+  :is(.group, .teamRow)
     [data-solo-channel-new-task]:not(
       [data-has-metadata] *,
       [data-reserve-space] *:focus
@@ -36,4 +37,101 @@
   width: auto;
   min-width: 0;
   padding-inline-end: var(--space-half);
+}
+
+/* A Team row heads its group: the row, its disclosure and task action share a
+   line, with the group's content beneath. */
+.teamRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+}
+
+.teamRowSlot {
+  display: contents;
+}
+
+.teamRowBody {
+  grid-column: 1 / -1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* The row keeps the full width: its disclosure and task action sit on it. */
+  .teamRow {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .teamRowSlot > [data-solo-channel-new-task] {
+    position: absolute;
+    z-index: 2;
+    inset-block-start: calc(-1 * var(--space-half));
+    inset-inline-end: var(--space-2);
+    color: var(--text-subtle);
+    opacity: 0;
+  }
+
+  /* On the row's pill the action darkens instead of gaining its own fill. */
+  .teamRow
+    > .teamRowSlot
+    > [data-solo-channel-new-task]:is(:hover, :active):not([data-disabled]) {
+    background: transparent;
+    color: var(--text-navigation);
+  }
+
+  /* The row stays highlighted while the pointer is on its controls. */
+  .teamRow:has(> .teamRowSlot > :not(.teamRowBody):hover)
+  > :first-child:not([data-selected])::before {
+    background: var(--affordance-panel-hover);
+  }
+
+  /* The disclosure takes the row icon's place while the row is pointed at
+     or holds keyboard focus. */
+  .teamRowSlot > [data-solo-disclosure] {
+    position: absolute;
+    z-index: 2;
+    inset-block-start: var(--space-half);
+    inset-inline-start: var(--space-2);
+    width: 1.25rem;
+    height: var(--space-6);
+    min-height: 0;
+    padding: 0;
+    opacity: 0;
+  }
+
+  .teamRow:has(
+    > :first-child:hover,
+    > .teamRowSlot > :not(.teamRowBody):hover,
+    :focus-visible
+  ) {
+    & [data-solo-channel-new-task],
+    & > .teamRowSlot > [data-solo-disclosure] {
+      opacity: 1;
+    }
+
+    /* The task action takes the place of the row's badges, where it shows. */
+    @container solo-channel-group (width > 9rem) {
+      &:has(> .teamRowSlot > [data-solo-channel-new-task])
+        > :first-child
+        [data-channel-id] {
+        padding-inline-end: calc(var(--size-control-sm) + var(--space-1));
+
+        /* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules global selector; a class selector, not [class~=], because Chromium treats [class~=] as a class-attribute feature and this :has() rule would restyle every classed element in the sidebar on unread changes. */
+        & :global(.navigation-item-trailing) {
+          display: none;
+        }
+      }
+    }
+  }
+
+  .teamRow:has(
+      > :first-child:hover,
+      > .teamRowSlot > :not(.teamRowBody):hover,
+      > :first-child :focus-visible,
+      > .teamRowSlot > :not(.teamRowBody):focus-visible
+    )
+    > :first-child
+    [data-channel-row-icon] {
+    visibility: hidden;
+  }
 }

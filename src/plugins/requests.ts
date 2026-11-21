@@ -35,13 +35,16 @@ export type PluginRequest = Readonly<{
   pluginId: string;
   pluginName: string;
   /** What install and update review: the commit the agent saw, so the code
-   * the owner confirms cannot change after the request. */
-  source?: Readonly<{
-    repository: string;
-    reference: string;
-    path: string;
-    commit: string;
-  }>;
+   * the owner confirms cannot change after the request; or a local folder,
+   * which the review reads again. */
+  source?:
+    | Readonly<{
+        repository: string;
+        reference: string;
+        path: string;
+        commit: string;
+      }>
+    | Readonly<{ folder: string; path: string }>;
   /** The agent's own words, shown to the owner as plain text. */
   reason: string;
 }>;
@@ -70,6 +73,8 @@ const BUZZ_HOSTED = /^\/git\/[0-9a-f]{64}\/[^/]+\/?$/i;
 /** Native code trims Unicode whitespace, U+0085 among it, which `new URL`
  * does not. A string this side cannot read as Buzz-hosted could be one there. */
 const UNTRIMMED = /[\s\p{Cc}]/u;
+/** An absolute local folder, which installs as Settings' Browse does. */
+const LOCAL_FOLDER = /^(?:[/~]|[a-z]:[\\/])/i;
 const buzzHosted = (repository: string) => {
   try {
     return BUZZ_HOSTED.test(new URL(repository).pathname);
@@ -179,15 +184,28 @@ export function createPluginRequests({
       throw new Error(`The repository is at ${commit}, not ${wanted}`);
     return { preview, commit };
   }
+  async function folder(path: string) {
+    if (path.startsWith("~"))
+      throw new Error("Enter an absolute folder path, without ~");
+    if (/\p{Cc}/u.test(path))
+      throw new Error("The folder path must not contain control characters");
+    const preview = await gitImports().checkPath(path);
+    if (!preview?.candidates.length)
+      throw new Error(
+        ["No built plugins found.", ...(preview?.warnings ?? [])].join(" "),
+      );
+    return preview;
+  }
   async function install(input: PluginRequestInput) {
-    if (!input.repository) throw new Error("repository is required to install");
+    const { repository } = input;
+    if (!repository) throw new Error("repository is required to install");
+    const local = LOCAL_FOLDER.test(repository);
+    if (local && (input.reference || input.commit))
+      throw new Error("reference and commit apply only to Git repositories");
     const reference = input.reference ?? "";
-    const { preview, commit } = await pinned(
-      input.repository,
-      reference,
-      input.commit,
-      input.path,
-    );
+    const { preview, commit } = local
+      ? { preview: await folder(repository), commit: "" }
+      : await pinned(repository, reference, input.commit, input.path);
     const paths = preview.candidates.map((item) => item.path).join(", ");
     const candidate = input.path
       ? preview.candidates.find((item) => item.path === input.path)
@@ -214,12 +232,10 @@ export function createPluginRequests({
     return {
       pluginId: id,
       pluginName: name,
-      source: {
-        repository: input.repository,
-        reference,
-        path: candidate.path,
-        commit,
-      },
+      // The folder as the native reader resolved it.
+      source: local
+        ? { folder: preview.source, path: candidate.path }
+        : { repository, reference, path: candidate.path, commit },
     };
   }
   async function target(input: PluginRequestInput) {
@@ -238,8 +254,20 @@ export function createPluginRequests({
     if (bundled) throw new Error("Bundled plugins update with Buzz");
     unmanaged(id);
     const recorded = plugin.updateSource;
+    // A folder install updates from its saved folder, as Settings' Update does.
+    if (recorded && "root" in recorded) {
+      if (input.reference || input.commit)
+        throw new Error("reference and commit apply only to Git repositories");
+      if (samePluginRelease(await gitImports().checkFolder(id), plugin))
+        throw new Error(`${id} is already at its folder's version`);
+      return {
+        pluginId: id,
+        pluginName: name,
+        source: { folder: recorded.root, path: recorded.path },
+      };
+    }
     if (!recorded || !("repository" in recorded))
-      throw new Error(`${id} was not installed from Git`);
+      throw new Error(`${id} was not installed from Git or a folder`);
     const reference = input.reference ?? recorded.reference;
     const { preview, commit } = await pinned(
       recorded.repository,

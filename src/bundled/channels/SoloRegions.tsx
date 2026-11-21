@@ -35,7 +35,6 @@ import { Button } from "../../shared/design-system/ui/Button";
 import {
   SlidersHorizontalIcon,
   DotsThreeIcon,
-  PencilSimpleIcon,
   PlusIcon,
 } from "../../shared/design-system/icons";
 import {
@@ -327,7 +326,7 @@ function RegionFrame({
   );
   const composing = !!source?.composeWorkspaces && !!composeOrdinary;
   // The region's own create action trails its other actions. Composed
-  // workspaces show a direct create as a pencil and a create menu as actions.
+  // workspaces show a create menu as actions.
   const create = actions.find((action) => action.icon === "plus");
   const headerActions = (
     <>
@@ -339,14 +338,10 @@ function RegionFrame({
       {create && (
         <RegionAction
           action={
-            composing
+            composing && create.menu
               ? {
                   ...create,
-                  icon: create.menu ? (
-                    <DotsThreeIcon size={15} strokeWidth={2.5} />
-                  ) : (
-                    <PencilSimpleIcon size={15} />
-                  ),
+                  icon: <DotsThreeIcon size={15} strokeWidth={2.5} />,
                 }
               : create
           }

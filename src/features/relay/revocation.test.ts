@@ -9,6 +9,7 @@ import { USER_STATUS_KIND } from "./user-status-policy";
 import {
   type Key,
   bounds,
+  completeHeads,
   flush,
   keypair,
   message,
@@ -838,7 +839,7 @@ it("roster completeness does not overwrite a newer live grant while metadata is 
   ]);
 });
 
-it("channel-window purge subscriber cannot read another denied channel window", () => {
+it("channel-window purge subscriber cannot read another denied channel window", async () => {
   const h = setup();
   h.emit([
     roster(relay, "a", [viewer.pubkey], 10),
@@ -850,6 +851,8 @@ it("channel-window purge subscriber cannot read another denied channel window", 
     message(alice, "a", "secret-a", 11),
     message(alice, "b", "secret-b", 11),
   ]);
+  completeHeads(h, relay);
+  await flush();
   expect(h.session.channels.window("a").rows.map((e) => e.content)).toEqual([
     "secret-a",
   ]);

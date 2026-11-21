@@ -36,10 +36,10 @@ export function messageTokenTags(tokens: readonly ComposerToken[]): string[][] {
 }
 
 let signing: readonly ComposerToken[] = [];
-/** Host composers only: the first message `send` or `reply` that `publish`
- * makes synchronously carries these chips. A send made while it is queued,
- * such as by an outbox subscriber, does not. The public message API cannot
- * add them. */
+/** Host composers and `ctx.conversation.publish` only: the first message
+ * `send` or `reply` that `publish` makes synchronously carries these chips. A
+ * send made while it is queued, such as by an outbox subscriber, does not.
+ * The public message API cannot add them. */
 export function signMessageTokens<T>(
   tokens: readonly ComposerToken[],
   publish: () => T,
